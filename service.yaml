@@ -1,0 +1,52 @@
+# 设计清单，TBD 待实现联调确认；服务部署唯一准绳是 fertile/deploy。
+version: 2
+system: fertile
+component: web
+status: design
+deployment_source: "viramoon/fertile:deploy/service.yaml"
+profile: TBD # FERTILE_PROFILE 选择 cloudbox 或 stable，不决定交易账户
+environment:
+  FERTILE_PROFILE: TBD
+  FERTILE_DATA_ROOT: /home/box/fertile/data
+  WEB_STATIC_ROOT: TBD # 选定 fertile tag 对应的 frontend 产物目录
+  FINANCE_BASE_URL: TBD
+  DATABASE_URL_SECRET_REF: TBD
+paths:
+  root: /home/box/fertile # 配置默认，禁止在代码硬编码
+  postgres: /home/box/fertile/data/postgres
+  logs: /home/box/fertile/logs/web
+  static_root: TBD
+  backups: /home/box/fertile/backups/web
+dependencies:
+  finance_http: TBD # 地址、认证与数据年龄门限
+  postgres:
+    address: TBD
+    schemas: [app, blog]
+  frontend_artifact:
+    source: "viramoon/frontend:docs/build.md"
+    fertile_tag: TBD
+    digest: TBD
+processes:
+  - name: web
+    command: TBD # 待入口实现
+    port: TBD
+    dependencies: [finance_http, postgres, frontend_artifact]
+    health:
+      path: /healthz
+      live: 进程存活
+      ready: 数据库、finance 关键依赖与数据新鲜度、静态产物均通过检查
+    restart_policy: TBD
+static:
+  hosted_by: web
+  path_from: config.paths.static_root
+  cache_policy: TBD
+  spa_fallback: TBD # 不能覆盖 API、health 或缺失资产
+tunnel:
+  protocol: quic # 云电脑设计；以实际验证和 fertile 配置为准
+  public_origin: TBD
+  external_check: TBD
+database:
+  migration_command: TBD
+  backup_policy: TBD
+  rollback_plan: TBD
+runbook: RUNBOOK.md
