@@ -1,0 +1,109 @@
+name: 文档检查
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: 文档检查
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 获取文档
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 准备 YAML 解析器
+        run: python -m pip install --disable-pip-version-check PyYAML==6.0.3
+      - name: 检查文档与 PR 描述
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+
+          import yaml
+
+          root = Path.cwd()
+          required = [
+              ".agents/skills/README.md",
+              ".github/ISSUE_TEMPLATE/config.yml",
+              ".github/ISSUE_TEMPLATE/feature.md",
+              ".github/ISSUE_TEMPLATE/production-bug.md",
+              ".github/pull_request_template.md",
+              ".github/workflows/docs-check.yml",
+              "AGENTS.md",
+              "README.md",
+              "RUNBOOK.md",
+              "config/README.md",
+              "docs/README.md",
+              "docs/adr/ADR-0001-tech-stack.md",
+              "docs/adr/TEMPLATE.md",
+              "docs/api.md",
+              "docs/architecture.md",
+              "docs/database.md",
+              "migrations/README.md",
+              "service.yaml",
+              "src/README.md",
+              "src/auth/README.md",
+              "src/blog/README.md",
+              "src/domain/README.md",
+              "src/finance_client/README.md",
+              "src/idempotency/README.md",
+              "src/openapi/README.md",
+              "src/routes/README.md",
+              "src/startup/README.md",
+              "src/static/README.md",
+              "src/telemetry/README.md",
+              "tests/api/README.md"
+          ]
+          for name in required:
+              path = root / name
+              assert path.is_file() and path.read_text(encoding="utf-8").strip(), f"缺少或为空: {name}"
+
+          tracked = subprocess.check_output(["git", "ls-files", "-z"], text=True).split("\0")
+          staged = subprocess.check_output(["git", "ls-files", "--stage", "-z"], text=True).split("\0")
+          gitlinks = {row.split("\t", 1)[1] for row in staged if row.startswith("160000 ")}
+          for name in filter(None, tracked):
+              if name in gitlinks:
+                  continue
+              path = root / name
+              if path.suffix in {".yaml", ".yml"}:
+                  yaml.safe_load(path.read_text(encoding="utf-8"))
+              if path.suffix == ".md":
+                  content = path.read_text(encoding="utf-8")
+                  assert content.strip(), f"空文档: {name}"
+                  if content.startswith("---\n"):
+                      yaml.safe_load(content.split("---", 2)[1])
+                  for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", content):
+                      target = target.strip().strip("<>")
+                      if urlsplit(target).scheme or target.startswith("#"):
+                          continue
+                      relative = unquote(target.split("#", 1)[0])
+                      if relative:
+                          destination = (path.parent / relative).resolve()
+                          assert destination.is_relative_to(root.resolve()), f"链接越界: {name}: {target}"
+                          assert destination.exists(), f"链接不存在: {name}: {target}"
+              if os.environ.get("HEAD_REF") == "issue-1-init":
+                  allowed = set()
+                  assert path.suffix in {".md", ".yaml", ".yml"} or name in allowed, f"初始化范围外文件: {name}"
+
+          body = os.environ.get("PR_BODY", "")
+          assert re.search(r"\bCloses\s+#\d+\b", body, re.IGNORECASE), "PR 描述缺少 Closes #<号>"
+          assert "测试结果" in body, "PR 描述缺少测试结果"
+          print(f"通过：{len(required)} 个必需文件，文档非空、相对链接、YAML、初始化范围与 PR 描述")
+          PY
