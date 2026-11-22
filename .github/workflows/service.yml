@@ -1,0 +1,75 @@
+name: Web service
+on:
+  pull_request:
+  push:
+    branches: [ha-runthrough]
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17.12
+        env:
+          POSTGRES_DB: web_ci
+          POSTGRES_PASSWORD: local-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgresql://postgres:local-ci-only@127.0.0.1:5432/web_ci
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: clippy,rustfmt
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/sqlx
+            ~/.cargo/bin/cargo-sqlx
+            target
+          key: web-pg17-sqlx0.8.6-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Prepare PostgreSQL and SQLx
+        run: |
+          if ! command -v pg_config || ! test -x "$(pg_config --bindir)/initdb"; then
+            sudo apt-get -o Acquire::Retries=3 update
+            sudo apt-get -o Acquire::Retries=3 install -y postgresql libpq-dev
+          fi
+          pg_config --bindir >> "$GITHUB_PATH"
+          if ! sqlx --version 2>/dev/null | grep -Fqx 'sqlx-cli 0.8.6'; then
+            cargo install sqlx-cli --locked --version 0.8.6 --no-default-features --features postgres,rustls
+          fi
+          cargo sqlx migrate run
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo sqlx prepare --check -- --all-targets
+      - name: Boot the HTTP service and verify shutdown
+        run: |
+          cargo build --locked --bin web
+          WEB_BIN="$PWD/target/debug/web" python3 tests/api/core_http.py
+      - name: Export and compare OpenAPI
+        run: |
+          target/debug/web export-openapi > "$RUNNER_TEMP/web.openapi.json"
+          target/debug/web export-openapi > "$RUNNER_TEMP/web.second.json"
+          cmp "$RUNNER_TEMP/web.openapi.json" "$RUNNER_TEMP/web.second.json"
+          git diff --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-openapi
+          path: ${{ runner.temp }}/web.openapi.json
