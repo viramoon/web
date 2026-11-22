@@ -13,5 +13,11 @@ finance:
   base_url: http://127.0.0.1:8081
   ready_timeout_ms: 2000
   required_for_ready: false
+  connect_timeout_ms: 3000
+  request_timeout_ms: 3000
+  max_retries: 2
+  backoff_ms: 150
+  circuit_failure_threshold: 3
+  circuit_open_ms: 10000
 paths:
   static_root: /home/box/fertile/static/current

@@ -41,3 +41,15 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 | 本地接口正常、公网失败 | 核对现有 Tunnel 与外部访问。候选公网域名 www.viramoon.com、www.viramoonstar.com，待所有者确认，复现时用已确认的域名 |
 
 按照请求的 X-Request-Id 查找标准错误的 JSON 日志，可看到状态、方法、路径与耗时。发行与回滚由 fertile 管理。
+
+## finance 转发及恢复
+
+用同一示例数据目录启动 finance API 与 web 后，对比两个端点的 JSON。金额与数量保持各自契约类型。
+
+    curl -fsS http://127.0.0.1:8081/api/v1/backtests/sample | jq -S . > /tmp/finance-sample.json
+    curl -fsS http://127.0.0.1:8080/api/v1/backtests/sample | jq -S . > /tmp/web-sample.json
+    diff -u /tmp/finance-sample.json /tmp/web-sample.json
+
+网页出现 502、503、504 时，先查 /api/v1/system/status 中的 finance.ok、latency_ms、circuit，再查 finance 的监听和 ready。熔断打开后等待对应 profile 的 circuit_open_ms，下一次访问会试探，成功后自动恢复。若请求为写操作，超时后先查作业状态，重交时沿用同一幂等键。
+
+finance 的接口变动须使用同一锁定提交重新生成客户端；脚本与输入说明见[生成客户端说明](src/finance_client/README.md)。

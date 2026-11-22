@@ -13,3 +13,5 @@
 | WEB_REQUIRE_FINANCE | finance.required_for_ready | false |
 
 YAML 还配置请求时限 server.request_timeout_ms（默认 15000）、请求体上限 server.max_body_bytes（1 MiB）、退出宽限 server.shutdown_timeout_ms（20000）。数据库连接与连接池获取时限均为 2000ms；finance 就绪探测时限 2000ms。可在 profile 文件仅写需要覆盖的键。
+
+finance 下的连接与单次请求时限分别为 connect_timeout_ms、request_timeout_ms；cloudbox 均为 3000ms，stable 分别为 1000ms、2000ms。max_retries 为 0 到 2（默认 2），仅幂等读取重试；backoff_ms 为第一轮退避上限，默认 cloudbox 150ms、stable 100ms。circuit_failure_threshold 控制连续失败次数（cloudbox 3、stable 5），circuit_open_ms 为冷却时间（10000ms、5000ms）。

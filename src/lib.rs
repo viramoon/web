@@ -1,3 +1,4 @@
+mod circuit;
 pub mod config;
 pub mod database;
 pub mod finance;
@@ -149,6 +150,19 @@ async fn status(State(s): State<AppState>) -> Json<SystemStatus> {
     })
 }
 
+#[utoipa::path(get, path = "/api/v1/backtests/sample",
+    responses((status = 200, body = ref("#/components/schemas/BacktestSummary")),
+        (status = 404, body = ErrorBody), (status = 502, body = ErrorBody),
+        (status = 503, body = ErrorBody), (status = 504, body = ErrorBody)))]
+async fn sample(
+    State(s): State<AppState>,
+) -> Result<Json<finance_client::models::BacktestSummary>, finance::Fault> {
+    s.finance
+        .read(|cfg| async move { finance_client::apis::default_api::sample(&cfg).await })
+        .await
+        .map(Json)
+}
+
 async fn request_controls(State(s): State<AppState>, mut req: Request, next: Next) -> Response {
     let id = req
         .headers()
@@ -194,6 +208,7 @@ pub fn router(s: AppState) -> Router {
         .route("/healthz/live", get(live))
         .route("/healthz/ready", get(ready))
         .route("/api/v1/system/status", get(status))
+        .route("/api/v1/backtests/sample", get(sample))
         .fallback(spa::serve);
     with_controls(routes, s)
 }
@@ -214,7 +229,7 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(live, ready, status),
+    paths(live, ready, status, sample),
     components(schemas(
         ErrorBody,
         ErrorDetail,
@@ -239,6 +254,17 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     {
         spec.info.license = None;
     }
+    // Response models from the generated client have the same wire schema as finance.
+    let upstream: utoipa::openapi::OpenApi =
+        serde_json::from_str(include_str!("../openapi/finance.openapi.json"))
+            .expect("checked-in finance OpenAPI is valid");
+    let schemas = upstream
+        .components
+        .expect("finance declares model schemas")
+        .schemas;
+    let target = &mut spec.components.get_or_insert_with(Default::default).schemas;
+    let name = "BacktestSummary";
+    target.insert(name.into(), schemas[name].clone());
     spec
 }
 

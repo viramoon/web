@@ -12,6 +12,12 @@ environment:
   FINANCE_BASE_URL: http://127.0.0.1:8081
   WEB_REQUIRE_FINANCE: false
   DATABASE_URL: 由部署环境传入，仅引用受控配置
+finance_http:
+  config_section: finance
+  cloudbox: {connect_timeout_ms: 3000, request_timeout_ms: 3000, backoff_ms: 150, circuit_failure_threshold: 3, circuit_open_ms: 10000}
+  stable: {connect_timeout_ms: 1000, request_timeout_ms: 2000, backoff_ms: 100, circuit_failure_threshold: 5, circuit_open_ms: 5000}
+  max_read_retries: 2
+  write_retries: 0
 processes:
   - name: web
     command: web serve

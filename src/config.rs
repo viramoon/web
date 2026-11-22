@@ -42,6 +42,12 @@ pub struct FinanceConfig {
     pub base_url: String,
     pub ready_timeout_ms: u64,
     pub required_for_ready: bool,
+    pub connect_timeout_ms: u64,
+    pub request_timeout_ms: u64,
+    pub max_retries: u32,
+    pub backoff_ms: u64,
+    pub circuit_failure_threshold: u32,
+    pub circuit_open_ms: u64,
 }
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,10 +114,19 @@ impl Settings {
             self.database.connect_timeout_ms,
             self.database.acquire_timeout_ms,
             self.finance.ready_timeout_ms,
+            self.finance.connect_timeout_ms,
+            self.finance.request_timeout_ms,
+            self.finance.backoff_ms,
+            self.finance.circuit_open_ms,
         ] {
             if !(1..=300_000).contains(&ms) {
                 return Err("timeouts must be between 1 ms and 5 minutes".into());
             }
+        }
+        if self.finance.max_retries > 2 || self.finance.circuit_failure_threshold == 0 {
+            return Err(
+                "finance max_retries must be 0..2 and circuit threshold must be positive".into(),
+            );
         }
         let url = Url::parse(&self.finance.base_url)?;
         if !matches!(url.scheme(), "http" | "https")
