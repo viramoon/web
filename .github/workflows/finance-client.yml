@@ -1,0 +1,28 @@
+name: Finance client generation
+on:
+  pull_request:
+  push:
+    branches: [main, ha-runthrough]
+permissions:
+  contents: read
+jobs:
+  regenerate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Regenerate from the recorded finance contract
+        run: |
+          scripts/gen-finance-client.sh from-snapshot
+          git diff --exit-code -- openapi/ crates/finance-client/
+          test -z "$(git ls-files --others --exclude-standard -- crates/finance-client/)"
