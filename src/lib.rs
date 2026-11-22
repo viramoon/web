@@ -156,9 +156,9 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         .and_then(|h| h.to_str().ok())
         .and_then(|id| Uuid::parse_str(id).ok())
         .unwrap_or_else(Uuid::new_v4);
+    let span = tracing::info_span!("http", request_id = %id, method = %req.method(), path = %req.uri().path());
     let id = HeaderValue::from_str(&id.to_string()).expect("UUID is valid ASCII");
     req.headers_mut().insert("x-request-id", id.clone());
-    let span = tracing::info_span!("http", request_id = ?id, method = %req.method(), path = %req.uri().path());
     async move {
         let start = Instant::now();
         let timeout = Duration::from_millis(s.config.server.request_timeout_ms);
@@ -179,7 +179,7 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         }
         tracing::info!(
             status = response.status().as_u16(),
-            latency_ms = start.elapsed().as_millis(),
+            latency_ms = start.elapsed().as_millis() as u64,
             "request complete"
         );
         response.headers_mut().insert("x-request-id", id);
