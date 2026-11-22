@@ -9,13 +9,13 @@ web 是 fertile 的后端网关，负责网络入口、frontend 静态托管、�
            └─ blog / 业务持久化 → PostgreSQL（app / blog）
 ```
 
-routes 按 trading / backtest / dashboard / blog / health 资源划分，startup 负责组装，telemetry 负责观测。领域层保持精确数值；生成 finance_client 不混入手写业务代码。目录入口见 [src](../src/README.md)。
+main.rs 组装进程，lib.rs 管理路由、请求边界与健康检查。backtests.rs 转发回测请求，market.rs 转发行情并汇总新鲜度。认证层从本地 0600 文件载入管理员 token，写请求先鉴权和按 token 限流，再检查 Idempotency-Key 并向 finance 发送一次。finance 保存幂等结果。读取接口公开。生成的 finance-client crate 独立于手写适配层，金融数值按契约保留精度。目录入口见 [src](../src/README.md)。
 
-web 故障不影响 finance 交易核心，finance 不依赖 Tunnel。Webhook 落盘与幂等去重，写操作先查后试；web 的超时不能被理解为订单未执行。
+web 故障不影响 finance 交易核心，finance 不依赖 Tunnel。规划中的 Webhook 需先落盘再幂等处理。回测写请求超时后的查询与重试见 [运行手册](../RUNBOOK.md)。
 
 frontend 不独立运行，由配置指定的静态目录提供资源，按 fertile tag 验证来源、切换与回滚；缓存和 SPA 回退见 [static](../src/static/README.md)。所有路径配置化并默认 /home/box 下，配置层分 profile，运行模式与 profile 独立。
 
-契约从代码导出，见 [api.md](api.md)；数据库 schema 与迁移见 [database.md](database.md)。部署与发版唯一入口是 fertile deploy/ 和 docs/release.md，web service.yaml 仅提供组件设计字段。
+契约从代码导出，见 [api.md](api.md)；数据库 schema 与迁移见 [database.md](database.md)。部署与发版唯一入口是 fertile deploy/ 和 docs/release.md，web service.yaml 记录组件接口与配置。
 
 ## finance HTTP 调用
 

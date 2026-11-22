@@ -18,6 +18,7 @@ pub struct Settings {
     pub database: DatabaseConfig,
     pub finance: FinanceConfig,
     pub paths: Paths,
+    pub security: SecurityConfig,
 }
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,6 +54,14 @@ pub struct FinanceConfig {
 #[serde(deny_unknown_fields)]
 pub struct Paths {
     pub static_root: PathBuf,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityConfig {
+    pub admin_token_file: PathBuf,
+    pub max_requests: u32,
+    pub window_ms: u64,
 }
 
 fn overlay(base: &mut Value, layer: Value) {
@@ -99,6 +108,9 @@ impl Settings {
         if let Some(s) = get("WEB_REQUIRE_FINANCE") {
             cfg.finance.required_for_ready = s.parse()?;
         }
+        if let Some(path) = get("WEB_ADMIN_TOKEN_FILE") {
+            cfg.security.admin_token_file = PathBuf::from(path);
+        }
         cfg.validate()?;
         Ok(cfg)
     }
@@ -107,6 +119,12 @@ impl Settings {
         let api = &self.server;
         if api.port == 0 || api.max_body_bytes == 0 || !self.paths.static_root.is_absolute() {
             return Err("port/body limit must be positive; static_root must be absolute".into());
+        }
+        if !self.security.admin_token_file.is_absolute()
+            || self.security.max_requests == 0
+            || !(1..=86_400_000).contains(&self.security.window_ms)
+        {
+            return Err("security requires an absolute secret path, a positive request limit and a window between 1ms and one day".into());
         }
         for ms in [
             api.request_timeout_ms,

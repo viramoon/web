@@ -1,7 +1,10 @@
+pub mod auth;
+mod backtests;
 mod circuit;
 pub mod config;
 pub mod database;
 pub mod finance;
+mod market;
 mod spa;
 
 use axum::{
@@ -31,6 +34,7 @@ pub struct AppState {
     pub config: Arc<Settings>,
     pub db: Database,
     pub finance: Finance,
+    pub write_access: auth::WriteAccess,
     pub started_at: DateTime<Utc>,
 }
 
@@ -83,6 +87,7 @@ pub struct SystemStatus {
     pub web: WebStatus,
     pub database: DbStatus,
     pub finance: FinanceStatus,
+    pub market: market::MarketSummary,
 }
 
 #[utoipa::path(get, path="/healthz/live", responses((status=200, body=Health)))]
@@ -99,7 +104,7 @@ async fn live() -> Json<Health> {
 
 #[utoipa::path(get, path="/healthz/ready", responses((status=200, body=Health),(status=503, body=Health)))]
 async fn ready(State(s): State<AppState>) -> (StatusCode, Json<Health>) {
-    let (finance, static_ok) = tokio::join!(
+    let ((finance, _), static_ok) = tokio::join!(
         s.finance.probe(),
         spa::available(&s.config.paths.static_root)
     );
@@ -139,6 +144,13 @@ async fn ready(State(s): State<AppState>) -> (StatusCode, Json<Health>) {
 
 #[utoipa::path(get, path="/api/v1/system/status", responses((status=200, body=SystemStatus)))]
 async fn status(State(s): State<AppState>) -> Json<SystemStatus> {
+    let (mut finance, reachable) = s.finance.probe().await;
+    let market = if reachable {
+        market::read(&s.finance).await.ok()
+    } else {
+        None
+    };
+    finance.circuit = s.finance.circuit_state().into();
     Json(SystemStatus {
         web: WebStatus {
             version: env!("CARGO_PKG_VERSION").into(),
@@ -146,7 +158,8 @@ async fn status(State(s): State<AppState>) -> Json<SystemStatus> {
             started_at: s.started_at,
         },
         database: s.db.status(),
-        finance: s.finance.probe().await,
+        finance,
+        market: market::MarketSummary::from_status(market),
     })
 }
 
@@ -163,6 +176,19 @@ async fn sample(
         .map(Json)
 }
 
+fn is_submission(req: &Request) -> bool {
+    req.method() == axum::http::Method::POST && req.uri().path() == "/api/v1/backtests"
+}
+
+async fn check_write_access(State(s): State<AppState>, req: Request, next: Next) -> Response {
+    if is_submission(&req)
+        && let Err(denied) = s.write_access.authorize(req.headers())
+    {
+        return denied.into_response();
+    }
+    next.run(req).await
+}
+
 async fn request_controls(State(s): State<AppState>, mut req: Request, next: Next) -> Response {
     let id = req
         .headers()
@@ -176,8 +202,14 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
     async move {
         let start = Instant::now();
         let timeout = Duration::from_millis(s.config.server.request_timeout_ms);
+        let submission = is_submission(&req);
         let mut response = match tokio::time::timeout(timeout, next.run(req)).await {
             Ok(r) => r,
+            Err(_) if submission => api_error(
+                StatusCode::GATEWAY_TIMEOUT,
+                "finance_timeout",
+                "Submission outcome unknown; query the job or retry with the same Idempotency-Key",
+            ),
             Err(_) => api_error(
                 StatusCode::GATEWAY_TIMEOUT,
                 "request_timeout",
@@ -209,6 +241,12 @@ pub fn router(s: AppState) -> Router {
         .route("/healthz/ready", get(ready))
         .route("/api/v1/system/status", get(status))
         .route("/api/v1/backtests/sample", get(sample))
+        .route(
+            "/api/v1/backtests",
+            get(backtests::list).post(backtests::submit),
+        )
+        .route("/api/v1/backtests/{id}", get(backtests::detail))
+        .route("/api/v1/market/status", get(market::status))
         .fallback(spa::serve);
     with_controls(routes, s)
 }
@@ -216,6 +254,10 @@ pub fn router(s: AppState) -> Router {
 fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
     routes
         .layer(RequestBodyLimitLayer::new(s.config.server.max_body_bytes))
+        .layer(middleware::from_fn_with_state(
+            s.clone(),
+            check_write_access,
+        ))
         .layer(CatchPanicLayer::custom(|_| {
             api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -229,7 +271,16 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(live, ready, status, sample),
+    paths(
+        live,
+        ready,
+        status,
+        sample,
+        backtests::submit,
+        backtests::detail,
+        backtests::list,
+        market::status
+    ),
     components(schemas(
         ErrorBody,
         ErrorDetail,
@@ -238,7 +289,8 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
         WebStatus,
         SystemStatus,
         DbStatus,
-        FinanceStatus
+        FinanceStatus,
+        market::MarketSummary
     ))
 )]
 pub struct WebApi;
@@ -262,9 +314,27 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         .components
         .expect("finance declares model schemas")
         .schemas;
-    let target = &mut spec.components.get_or_insert_with(Default::default).schemas;
-    let name = "BacktestSummary";
-    target.insert(name.into(), schemas[name].clone());
+    let components = spec.components.get_or_insert_with(Default::default);
+    for name in [
+        "BacktestSummary",
+        "Accepted",
+        "JobRequest",
+        "StrategyParams",
+        "Job",
+        "JobStatus",
+        "Page",
+        "MarketStatus",
+        "InstrumentStatus",
+    ] {
+        components
+            .schemas
+            .insert(name.into(), schemas[name].clone());
+    }
+    use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
+    components.add_security_scheme(
+        "adminBearer",
+        SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+    );
     spec
 }
 
@@ -286,6 +356,12 @@ mod tests {
         cfg.server.request_timeout_ms = 10;
         let state = AppState {
             finance: Finance::new(&cfg.finance).unwrap(),
+            write_access: auth::WriteAccess::load(
+                &std::env::temp_dir().join(Uuid::new_v4().to_string()),
+                10,
+                Duration::from_secs(1),
+            )
+            .unwrap(),
             db: Database::new(
                 &cfg.database.url,
                 Duration::from_secs(1),

@@ -2,7 +2,7 @@
 
 fertile 的后端网关与 submodule。使用 axum 提供浏览器 API、通过 HTTP 连接 finance、托管 frontend 静态文件，管理业务与博客的 PostgreSQL schema 及迁移。
 
-本仓库按 [issue #1 方案 v2](https://github.com/viramoon/web/issues/1#issuecomment-6834604360) 初始化。当前 axum 服务提供健康检查、系统状态、静态托管与 PostgreSQL 迁移，使用方法见 [运行手册](RUNBOOK.md)。开发从 [AGENTS.md](AGENTS.md) 开始。
+本仓库按 [issue #1 方案 v2](https://github.com/viramoon/web/issues/1#issuecomment-6834604360) 初始化。当前 axum 服务提供健康检查、带行情新鲜度的系统状态、静态托管与 PostgreSQL 迁移，并经 finance 客户端提供只读查询和管理员回测作业提交，使用方法见 [运行手册](RUNBOOK.md)。开发从 [AGENTS.md](AGENTS.md) 开始。
 
 ## 系统中的位置
 

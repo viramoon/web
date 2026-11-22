@@ -43,3 +43,10 @@ tunnel:
   public_origin: 待用户确认
   candidates: [www.viramoon.com, www.viramoonstar.com]
 runbook: RUNBOOK.md
+write_access:
+  secret_file_env: WEB_ADMIN_TOKEN_FILE
+  secret_file_default: /home/box/fertile/secrets/web.env
+  secret_key: WEB_ADMIN_TOKEN
+  mode: "0600"
+  missing_file: writes_disabled_403
+  rate_limit: {max_requests: 10, window_ms: 60000, identity: authenticated_token}

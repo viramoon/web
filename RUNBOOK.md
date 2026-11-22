@@ -53,3 +53,36 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 网页出现 502、503、504 时，先查 /api/v1/system/status 中的 finance.ok、latency_ms、circuit，再查 finance 的监听和 ready。熔断打开后等待对应 profile 的 circuit_open_ms，下一次访问会试探，成功后自动恢复。若请求为写操作，超时后先查作业状态，重交时沿用同一幂等键。
 
 finance 的接口变动须使用同一锁定提交重新生成客户端；脚本与输入说明见[生成客户端说明](src/finance_client/README.md)。
+
+## 管理员写权限
+
+web 启动时读取 WEB_ADMIN_TOKEN_FILE 指定的文件，默认 /home/box/fertile/secrets/web.env。缺少文件时，匿名读取照常可用，POST 返回 403。新建或轮换时，以运行 web 的账号在受控终端执行。生成的新值直接写入同目录临时文件，原子替换后按 fertile 的进程管理流程重启 web。
+
+```bash
+set -e
+umask 077
+secret=/home/box/fertile/secrets/web.env
+install -d -m 700 "$(dirname "$secret")"
+candidate=$(mktemp "$(dirname "$secret")/.web.env.XXXXXX")
+trap 'rm -f -- "$candidate"' EXIT
+{ printf 'WEB_ADMIN_TOKEN='; openssl rand -hex 32; } > "$candidate"
+chmod 600 "$candidate"
+mv -- "$candidate" "$secret"
+```
+
+文件只包含一个 WEB_ADMIN_TOKEN 赋值，需为普通文件且权限恰为 0600。接口鉴权在解析请求前执行。管理员可在盒子上从文件读取临时 curl 配置，避免把 token 放入命令行参数。用相同的 Idempotency-Key 处理同一次提交的后续重试，从返回体取 id 查询状态。
+
+```bash
+secret=${WEB_ADMIN_TOKEN_FILE:-/home/box/fertile/secrets/web.env}
+key=$(cat /proc/sys/kernel/random/uuid)
+submit() {
+  sed -n 's/^WEB_ADMIN_TOKEN=\(.*\)$/header = "Authorization: Bearer \1"/p' "$secret" |
+    curl -sS --config - -H "Idempotency-Key: $key" -H 'Content-Type: application/json' \
+      --data '{"strategy":"DemoStrategy","instrument":"6EH4.XCME","start":"2024-01-01T23:01:00Z","end":"2024-01-01T23:09:00Z","params":{}}' \
+      http://127.0.0.1:8080/api/v1/backtests
+}
+id=$(submit | jq -er .id)
+curl -fsS "http://127.0.0.1:8080/api/v1/backtests/$id"
+```
+
+已启用写权限时，无效或缺少 Bearer token 返回 401。请根据 429 响应的 Retry-After 等待窗口释放。相同 key、不同参数会被 finance 以 409 拒绝。超时返回 504，重新提交要保留 key 和原始请求。请求日志可按 X-Request-Id 关联，凭据只在读取 secret 和验证 Authorization 时使用。

@@ -21,3 +21,7 @@ finance:
   circuit_open_ms: 10000
 paths:
   static_root: /home/box/fertile/static/current
+security:
+  admin_token_file: /home/box/fertile/secrets/web.env
+  max_requests: 10
+  window_ms: 60000

@@ -46,6 +46,11 @@ async fn main() -> Result<(), ConfigError> {
         return Ok(());
     }
     let finance = Finance::new(&s.finance)?;
+    let write_access = web::auth::WriteAccess::load(
+        &s.security.admin_token_file,
+        s.security.max_requests,
+        Duration::from_millis(s.security.window_ms),
+    )?;
     let drain_timeout = s.drain_timeout();
     let listener = TcpListener::bind((s.server.bind_host, s.server.port)).await?;
     let mut term = signal(SignalKind::terminate())?;
@@ -56,6 +61,7 @@ async fn main() -> Result<(), ConfigError> {
         config: Arc::new(s),
         db: db.clone(),
         finance,
+        write_access,
         started_at: Utc::now(),
     };
     tracing::info!(address=%listener.local_addr()?, "listening");

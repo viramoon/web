@@ -205,21 +205,39 @@ impl Finance {
         }
     }
 
-    pub async fn probe(&self) -> FinanceStatus {
+    pub fn circuit_state(&self) -> &'static str {
+        self.circuit.label()
+    }
+
+    pub async fn probe(&self) -> (FinanceStatus, bool) {
         let start = Instant::now();
         // The health budget is independent of normal GET retries.
-        let ok = self
+        let response = self
             .execute(
-                |cfg| async move { default_api::ready(&cfg).await },
+                |cfg| async move {
+                    match default_api::ready(&cfg).await {
+                        Ok(_) => Ok(true),
+                        // A valid not-ready response still permits querying the cause, e.g. expired market data.
+                        Err(Error::ResponseError(r))
+                            if matches!(r.entity, Some(default_api::ReadyError::Status503(_))) =>
+                        {
+                            Ok(false)
+                        }
+                        Err(e) => Err(e),
+                    }
+                },
                 0,
                 self.policy.ready_timeout_ms,
             )
-            .await
-            .is_ok();
-        FinanceStatus {
-            ok,
-            latency_ms: start.elapsed().as_millis() as u64,
-            circuit: self.circuit.label().into(),
-        }
+            .await;
+        let reachable = response.is_ok();
+        (
+            FinanceStatus {
+                ok: response.unwrap_or(false),
+                latency_ms: start.elapsed().as_millis() as u64,
+                circuit: self.circuit_state().into(),
+            },
+            reachable,
+        )
     }
 }
