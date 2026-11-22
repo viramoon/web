@@ -20,6 +20,7 @@ from core_http import get, reserve_port
 SAMPLE = "/api/v1/backtests/sample"
 STATUS = "/api/v1/system/status"
 READY = "/healthz/ready"
+MARKET = "/api/v1/market/status"
 REQUEST_MS = 1500
 OPEN_MS = 1800
 FAILURES = 2
@@ -72,6 +73,10 @@ class FinanceHTTP(ThreadingHTTPServer):
             self.changed.notify_all()
             if path == READY:
                 return reply(200, {"status": "ready", "checks": []})
+            if path == MARKET:
+                return reply(200, {"state": "ready", "source": "replay", "instruments": [{
+                    "instrument": "SPY.ARCA", "age_seconds": 0, "stale": False,
+                }]})
             if path == SAMPLE:
                 return self.replies.popleft() if len(self.replies) > 1 else self.replies[0]
             return reply(404, {"error": {"code": "unexpected_path", "message": path}})
@@ -172,11 +177,12 @@ def exercise(port, mock):
         assert mock.count() - before == RETRIES + 1, "circuit opened at the wrong logical failure count"
     before = mock.count()
     probes = mock.count(READY)
+    market_reads = mock.count(MARKET)
     start = time.monotonic()
     error(sample(port), (503,), "finance_unavailable")
     assert time.monotonic() - start < REQUEST_MS / 1000, "open circuit waited for upstream"
     assert not finance_status(port, "open")["ok"]
-    assert (mock.count(), mock.count(READY)) == (before, probes), "open circuit reached finance"
+    assert (mock.count(), mock.count(READY), mock.count(MARKET)) == (before, probes, market_reads), "open circuit reached finance"
 
     # Hold one active half-open call while a burst of peers arrives. None of them
     # may start another upstream attempt, consume a retry, or wait for the probe.
@@ -192,7 +198,7 @@ def exercise(port, mock):
                 error(future.result(timeout=REQUEST_MS / 1000), (503,), "finance_unavailable")
             assert not finance_status(port, "half_open")["ok"]
             assert not first.done(), "other calls did not return while the probe was held"
-            assert (mock.count(), mock.count(READY)) == (before + 1, probes), (
+            assert (mock.count(), mock.count(READY), mock.count(MARKET)) == (before + 1, probes, market_reads), (
                 "concurrent requests amplified the half-open probe"
             )
         finally:
@@ -202,7 +208,7 @@ def exercise(port, mock):
     mock.plan(SUCCESS)
     assert sample(port) == (200, SUMMARY)
     assert mock.count() == before + 2
-    assert set(mock.paths) == {SAMPLE, READY}, mock.paths
+    assert set(mock.paths) == {SAMPLE, READY, MARKET}, mock.paths
     print("circuit open -> 503 without upstream I/O; half-open 1 probe, 8 rejections; recovered 200", flush=True)
 
 
