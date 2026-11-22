@@ -1,14 +1,17 @@
-# web API 与契约流程
+# Web HTTP API
 
-| 接口组 | 职责与占位 |
+默认地址为 http://127.0.0.1:8080。每个响应都有 X-Request-Id。调用者传入合法 UUID 时保留；否则服务生成新 UUID。tracing 的 JSON 日志记录请求 ID、HTTP 方法、路径、状态码与耗时。
+
+| GET | 状态与返回值 |
 | --- | --- |
-| 交易 | 策略 / 订单状态、受控操作；具体路径、权限、幂等与精确数值表示 TBD |
-| 回测 | 任务提交、状态和结果；异步语义与资源限制 TBD |
-| 看板 | 聚合行情与账户 / 业务展示，数据时间与陈旧标识；查询和刷新规则 TBD |
-| 博客 | 文章读取及受控写入；内容模型、发布权限和缓存 TBD |
+| /healthz/live | 200，进程可提供 HTTP，status 为 ok |
+| /healthz/ready | 检查 database、static_index 与 finance 并返回 checks（name、ok、required）。数据库不可用或静态目录缺 index.html 为 503 / not_ready；finance 不可达默认返回 200 / degraded，设置 WEB_REQUIRE_FINANCE=true 后返回 503。全部就绪为 200 / ready |
+| /api/v1/system/status | 200，含 web.version、web.commit、web.started_at、database.ok / latency_ms、finance.ok / latency_ms。下游不可用时仍能读取各依赖状态 |
 
-所有具体接口由后续 handler 代码确定，使用 utoipa / utoipa-axum 导出 OpenAPI，不能在本次手写契约。快照为 fertile `contracts/web.openapi.json`；finance 的输入快照为 `contracts/finance.openapi.json`，web 根据它生成 finance_client（工具 TBD，候选 progenitor）。
+OpenAPI 由 handler 注解和输出类型生成。执行下列命令可在不启动服务或数据库的情况下导出 JSON。
 
-变更流程：改代码并验证 → 从相同 commit 导出 → 向 fertile 提 PR 更新快照与子模块指针 → CI 比对差异 → 重生成消费者客户端 → 集成检查。破坏性变更先制定兼容窗口和迁移，生成产物禁止手改。规则见 [fertile contracts](https://github.com/viramoon/fertile/tree/main/contracts)。
+    cargo run --locked -q -- export-openapi > /tmp/web.openapi.json
 
-frontend 全局只有一个调用 web 的 API client，不直接连接 finance。实时 WebSocket / SSE 需单独定义消息与重连协议，不能依赖 OpenAPI 自动覆盖。健康 /healthz 提供 live / ready 语义，具体选择方式和响应格式 TBD。
+CI 对同一提交导出两次并逐字节比对。正式集成时将本提交的生成物交给 fertile/contracts/web.openapi.json，再由 frontend 使用 Hey API 生成客户端。生成物只能经生成器更新。
+
+未知 /api 路径返回 JSON 404，错误结构为 error.code、error.message，日志由 X-Request-Id 关联。页面 GET 的前端路由回落到 index.html；/healthz、/api、/assets 保留各自的错误语义。

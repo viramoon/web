@@ -1,5 +1,3 @@
-# 日志与指标
+# HTTP 日志
 
-统一请求关联 ID、错误分类、延迟、依赖状态与脱敏日志。记录 Tunnel 外部可达性、finance 数据年龄、数据库状态、幂等冲突与恢复耗时；进程存活与业务就绪分开观测。
-
-TBD：日志格式、指标导出、保留周期和告警阈值，与 fertile ops 设计对齐后实现。本目录不包含采集代码。
+标准错误输出结构化 JSON。请求完成日志的 span 包含 request_id、method、path，事件字段包含 status、latency_ms。客户端可从响应的 X-Request-Id 关联单次请求。默认日志级别 info，可用 RUST_LOG 调整。服务健康与依赖延迟见[接口说明](../../docs/api.md)，外部告警与日志保留策略由 fertile 运维管理。

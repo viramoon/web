@@ -2,7 +2,7 @@
 
 fertile 的后端网关与 submodule。使用 axum 提供浏览器 API、通过 HTTP 连接 finance、托管 frontend 静态文件，管理业务与博客的 PostgreSQL schema 及迁移。
 
-本仓库按 [issue #1 方案 v2](https://github.com/viramoon/web/issues/1#issuecomment-6834604360) 初始化。目前只有中文文档、组织结构与最小文档检查 CI，没有业务实现；TBD 项都需后续 issue 明确后再实施。开发从 [AGENTS.md](AGENTS.md) 开始。
+本仓库按 [issue #1 方案 v2](https://github.com/viramoon/web/issues/1#issuecomment-6834604360) 初始化。当前 axum 服务提供健康检查、系统状态、静态托管与 PostgreSQL 迁移，使用方法见 [运行手册](RUNBOOK.md)。开发从 [AGENTS.md](AGENTS.md) 开始。
 
 ## 系统中的位置
 
@@ -22,20 +22,20 @@ fertile 的后端网关与 submodule。使用 axum 提供浏览器 API、通过 
 web/
 ├── README.md / AGENTS.md / RUNBOOK.md / service.yaml
 ├── .agents/skills/          本仓库专属 skill 约定
-├── config/                 base / cloudbox / stable 字段设计
+├── config/                 base / cloudbox / stable 分层配置
 ├── migrations/             sqlx 时间戳迁移，只增不改
-├── src/                    仅 README 的模块规划
+├── src/                    web 进程、API 与模块说明
 │   ├── routes/             trading / backtest / dashboard / blog / health
 │   ├── domain/ / blog/ / auth/ / idempotency/
 │   ├── finance_client/     从 finance 快照生成
 │   ├── static/ / openapi/  静态托管与接口导出
 │   └── startup/ / telemetry/
-├── tests/api/              隔离验证设计
+├── tests/api/              独立 PostgreSQL、HTTP 和信号测试
 ├── docs/                   架构、数据库、接口与 ADR
-└── .github/                模板与文档检查
+└── .github/                PR 模板、文档与 Rust CI
 ```
 
-目录中的 README 说明职责和边界。未来源码目录只含 README，不创建源码、构建配置或伪造生成文件。
+从仓库根目录执行 cargo run --locked -- migrate 与 cargo run --locked -- serve。默认监听 127.0.0.1:8080，数据库和静态产物的前置准备见 RUNBOOK.md。cargo run --locked -- export-openapi 将契约写入标准输出。
 
 ## 文档索引
 
@@ -54,4 +54,4 @@ web/
 
 ## 协作与检查
 
-一个任务对应一个 issue，使用 issue-<号>-<简述> 分支和 PR，CI 通过后合并，禁止直接推送 main。PR 需含 Closes #<号>、测试结果和逐条验收自检；开发问题在原分支解决，文档随行为在同一 PR 更新。文档 CI 检查必需文件、非空内容、YAML、相对链接及 PR 描述，不编译业务代码；这不代表已经完成运行或真实交易验证。
+一个任务对应一个 issue，使用 issue-<号>-<简述> 分支和 PR，CI 通过后合并，禁止直接推送 main。PR 需含 Closes #<号>、测试结果和逐条验收自检；开发问题在原分支解决，文档随行为在同一 PR 更新。文档 CI 检查必需文件、非空内容、YAML、相对链接及 PR 描述。Rust CI 检查格式、clippy、集成测试、SQLx 离线元数据和 OpenAPI 导出。

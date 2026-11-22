@@ -1,0 +1,17 @@
+server:
+  bind_host: 127.0.0.1
+  port: 8080
+  request_timeout_ms: 15000
+  max_body_bytes: 1048576
+  shutdown_timeout_ms: 20000
+database:
+  url: postgres://localhost/web
+  connect_timeout_ms: 2000
+  acquire_timeout_ms: 2000
+  auto_migrate: true
+finance:
+  base_url: http://127.0.0.1:8081
+  ready_timeout_ms: 2000
+  required_for_ready: false
+paths:
+  static_root: /home/box/fertile/static/current

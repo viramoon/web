@@ -1,19 +1,43 @@
-# web 运行手册（设计）
+# web 运行手册
 
-本仓库无可运行服务。命令、端口、域名、迁移和恢复阈值为 TBD，在实现及演练后补齐。服务部署以 [fertile deploy/](https://github.com/viramoon/fertile/tree/main/deploy) 为唯一准绳，只按 fertile tag 部署 / 回滚。
+在 finance 与数据库所在的盒子准备好工具链、运行用户、已初始化的 PostgreSQL、可写的 web 数据库和 frontend 构建产物。数据库连接串由运维以受控文件或进程环境提供，勿将密码写入仓库或命令历史。
 
-## 部署与启停
+## 构建、迁移与启动
 
-获取 tag 对应的 web 与 frontend 指针，核对分层配置、受控凭据、/home/box 持久目录与备份。数据库迁移验证完成后启动 web，验证本地 live / ready，再从公网域名验证静态页面与 API；本地 200 不等于 Tunnel 正常。停止前停止接收新写入，确保 Webhook 已持久化并可恢复；具体启停命令 TBD。
+从 fertile 仓库根目录，以持有数据目录的普通用户启动 PostgreSQL。首次在独立开发实例上创建 web 数据库。托管环境沿用运维提供的数据库和 DATABASE_URL。
 
-## 故障与回滚
+    source /home/box/fertile/env.sh
+    scripts/postgres.sh init
+    scripts/postgres.sh start
+    export PGHOST="$FERTILE_ROOT/run/postgres" PGPORT="${FERTILE_POSTGRES_PORT:-5432}"
+    createdb web  # 仅在开发库首次创建时执行
+    export DATABASE_URL="postgresql://localhost/web?host=$PGHOST&port=$PGPORT"
 
-| 场景 | 处理设计 |
+从 web 仓库根目录构建和运行，静态目录须含 frontend/dist 的 index.html 与 assets。
+
+    source /home/box/fertile/env.sh
+    SQLX_OFFLINE=true cargo build --locked --release
+    export FERTILE_PROFILE=cloudbox
+    export WEB_STATIC_ROOT=/home/box/fertile/static/current
+    export FINANCE_BASE_URL=http://127.0.0.1:8081
+    target/release/web migrate
+    target/release/web serve
+
+migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使数据库暂时不可达也会先建立监听，后台重连；默认执行兼容迁移后才将数据库标为 ready。完成独立迁移后可设 WEB_AUTO_MIGRATE=false。向 web 进程发送 SIGTERM 或 SIGINT 时，进程停止接纳新连接并等待在途请求，默认宽限 20 秒。完整部署与守护定义见 [fertile/deploy](https://github.com/viramoon/fertile/tree/main/deploy)。
+
+    curl -fsS http://127.0.0.1:8080/healthz/live
+    curl -i http://127.0.0.1:8080/healthz/ready
+    curl -fsS http://127.0.0.1:8080/api/v1/system/status
+
+## 故障定位与回滚
+
+| 现象 | 诊断与恢复 |
 | --- | --- |
-| Tunnel 故障、公网 502 / 530 | 比较本地健康与公网端到端结果，检查 cloudflared 协议、守护与日志，按 fertile 运维恢复入口；不能据此重启健康交易核心 |
-| 数据库迁移失败 | 暂停写入、保存证据，核对已应用版本；按迁移 PR 的补偿或备份恢复方案处理，禁止改历史迁移 |
-| 回滚 | 选择已验证 fertile tag，确认数据库向后兼容或先恢复一致备份，再回滚 web 与静态资源；不按单个仓库分支部署 |
-| 静态文件更新失败 | 校验 frontend commit、产物摘要与完整性，保持旧目录；成功后切换到版本化路径并验证缓存和 SPA 路由 |
-| finance 不可用或数据陈旧 | ready 反映依赖失败，界面显示陈旧状态；禁止盲重试写请求，保留 finance 核心独立运行 |
+| 数据库检查失败、live 200 / ready 503 | 核对 PostgreSQL 状态、连接地址、凭据和迁移权限。数据库恢复后观察同一 web PID 的 ready 回到 200 |
+| 静态目录缺失 | 检查 WEB_STATIC_ROOT 和 index.html 的存在及权限，恢复完整版本目录，验证深链接与 /assets 缺失时的 404 |
+| finance 不可达 | system/status 仍提供退化信息。检查 FINANCE_BASE_URL 与 finance 自身 ready。默认 web ready 为 degraded，如配置必须依赖 finance，则返回 503 |
+| 数据库迁移失败 | 保存错误与迁移版本，核对备份；先修复失败原因再执行 migrate，不修改已应用脚本 |
+| 回滚 | 确认数据库向后兼容，按 fertile 指针组合恢复上一套 web 二进制、配置和静态目录。必要时先在独立库演练恢复 |
+| 本地接口正常、公网失败 | 核对现有 Tunnel 与外部访问。候选公网域名 www.viramoon.com、www.viramoonstar.com，待所有者确认，复现时用已确认的域名 |
 
-每次变更记录 fertile tag、配置 profile、数据库迁移版本、产物来源和验证结果。TBD：实际命令、缓存时长、恢复目标与授权入口，待实现 issue 确定。现网问题用生产 bug 模板关联原 issue，分支内问题原分支修复。
+按照请求的 X-Request-Id 查找标准错误的 JSON 日志，可看到状态、方法、路径与耗时。发行与回滚由 fertile 管理。
