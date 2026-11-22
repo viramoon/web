@@ -16,11 +16,18 @@ from urllib.request import urlopen
 
 class FinanceProbe(BaseHTTPRequestHandler):
     def do_GET(self):
-        assert self.path == "/healthz/ready", self.path
-        self.server.received.set()
-        self.server.release.wait(3)
-        status = self.server.probe_status
-        result = {"status": "ready" if status == 200 else "not_ready", "checks": []}
+        if self.path == "/healthz/ready":
+            self.server.received.set()
+            self.server.release.wait(3)
+            status = self.server.probe_status
+            result = {"status": "ready" if status == 200 else "not_ready", "checks": []}
+        elif self.path == "/api/v1/market/status":
+            status = 200
+            result = {"state": "ready", "source": "replay", "updated_at": "2024-01-01T00:00:00Z",
+                      "max_age_seconds": 180, "instruments": [{"instrument": "SPY.ARCA",
+                      "last_bar_at": "2024-01-01T00:00:00Z", "age_seconds": 0, "stale": False}]}
+        else:
+            raise AssertionError(f"unexpected upstream path {self.path}")
         data = json.dumps(result).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -96,6 +103,7 @@ def run(root, finance):
         code, _, body = get(port, "/api/v1/system/status")
         assert code == 200
         good = json.loads(body)
+        assert good["market"]["fresh"] and good["market"]["instrument_count"] == 1, good
         finance.probe_status = 503
         assert get(port, "/healthz/ready")[0] == 200
         code, _, body = get(port, "/api/v1/system/status")

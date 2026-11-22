@@ -64,6 +64,7 @@ jobs:
           cargo build --locked --bin web
           WEB_BIN="$PWD/target/debug/web" python3 tests/api/core_http.py
           WEB_BIN="$PWD/target/debug/web" python3 tests/api/finance_resilience.py
+          WEB_BIN="$PWD/target/debug/web" python3 tests/api/finance_writes.py
       - name: Export and compare OpenAPI
         run: |
           target/debug/web export-openapi > "$RUNNER_TEMP/web.openapi.json"
