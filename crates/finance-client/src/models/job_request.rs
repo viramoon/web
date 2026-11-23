@@ -18,7 +18,7 @@ pub struct JobRequest {
     #[serde(rename = "instrument")]
     pub instrument: String,
     #[serde(rename = "params")]
-    pub params: serde_json::Value,
+    pub params: Box<models::StrategyParams>,
     #[serde(rename = "start")]
     pub start: String,
     #[serde(rename = "strategy")]
@@ -29,14 +29,14 @@ impl JobRequest {
     pub fn new(
         end: String,
         instrument: String,
-        params: serde_json::Value,
+        params: models::StrategyParams,
         start: String,
         strategy: String,
     ) -> JobRequest {
         JobRequest {
             end,
             instrument,
-            params,
+            params: Box::new(params),
             start,
             strategy,
         }

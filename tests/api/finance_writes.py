@@ -96,6 +96,16 @@ class Finance(BaseHTTPRequestHandler):
             self.respond(200, {"status": "ready", "checks": []})
         elif url.path == MARKET:
             self.respond(200, self.server.market)
+        elif url.path == f"{JOBS}/datasets":
+            self.respond(200, {"items": []})
+        elif url.path == f"{JOBS}/by-key":
+            key = self.headers.get("Idempotency-Key")
+            with self.server.lock:
+                found = any(entry[1] == key for entry in self.server.submissions)
+            if found:
+                self.respond(200, {"id": JOB_ID})
+            else:
+                self.respond(404, {"error": {"code": "job_not_found", "message": "No job for this key"}})
         elif url.path == JOBS:
             self.server.pagination = parse_qs(url.query)
             self.respond(200, {"items": [JOB], "next_cursor": JOB_ID})
@@ -116,6 +126,7 @@ def error(result, expected):
 
 def read_routes(port, mock):
     assert request(port, SAMPLE)[2] == SUMMARY
+    assert request(port, f"{JOBS}/datasets")[::2] == (200, {"items": []})
     assert request(port, f"{JOBS}/{JOB_ID}")[2] == JOB
     code, _, page = request(port, JOBS + "?limit=7&cursor=19")
     assert code == 200 and page == {"items": [JOB], "next_cursor": JOB_ID}
@@ -190,8 +201,13 @@ def run(root, mock):
 
     with web(root, mock, file, 10) as port:
         key = secrets.token_hex(16)
+        lookup = f"{JOBS}/by-key"
+        auth = {"Authorization": f"Bearer {token}"}
         error(post(port, key=key), 401)
         error(post(port, mock.env_decoy, key), 401)
+        error(request(port, lookup, headers={"Idempotency-Key": key}), 401)
+        error(request(port, lookup, headers=auth), 422)
+        error(request(port, lookup, headers={**auth, "Idempotency-Key": key}), 404)
         assert not mock.submissions
         code, _, _ = post(port, token)
         assert code in (400, 422) and not mock.submissions, "missing idempotency key was not rejected locally"
@@ -205,10 +221,17 @@ def run(root, mock):
         message = error_result[2]["error"]["message"].lower()
         assert "key" in message and ("query" in message or "查询" in message)
         assert [r[1] for r in mock.submissions].count(mock.slow_key) == 1, "POST timeout automatically retried"
+        found = request(port, lookup, headers={**auth, "Idempotency-Key": mock.slow_key})
+        assert found[::2] == (200, {"id": JOB_ID}) and found[1]["Cache-Control"] == "no-store"
         mock.resume.set()
         assert post(port, token, mock.slow_key)[::2] == (202, {"id": JOB_ID})
         assert mock.submissions[-2:] == [(JOBS, mock.slow_key, INPUT)] * 2
-        print("unconfigured 403; empty/wrong bearer 401; key passed unchanged; timed-out POST sent once", flush=True)
+        historical = dict(INPUT, strategy="SmaCrossover", instrument="IBM.XNYS",
+                          params={"fast_period": 5, "slow_period": 20, "shares": 10})
+        research_key = secrets.token_hex(16)
+        assert post(port, token, research_key, payload=json.dumps(historical).encode())[0] == 202
+        assert mock.submissions[-1] == (JOBS, research_key, historical)
+        print("unconfigured 403; empty/wrong bearer 401; timed-out POST sent once; key lookup and research parameters verified", flush=True)
 
     with web(root, mock, file, 2) as port:
         old = len(mock.submissions)

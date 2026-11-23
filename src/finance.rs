@@ -99,7 +99,11 @@ impl Fault {
 
     pub fn write_error(self) -> Self {
         if self.status == StatusCode::GATEWAY_TIMEOUT {
-            return Self { message: "Submission outcome unknown; query the job or retry with the same Idempotency-Key".into(), ..self };
+            return Self {
+                message: "Submission outcome unknown; query by Idempotency-Key before retrying"
+                    .into(),
+                ..self
+            };
         }
         self
     }

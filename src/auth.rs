@@ -119,7 +119,7 @@ impl WriteAccess {
         })))
     }
 
-    pub fn authorize(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+    pub fn authenticate(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
         let policy = &self.0;
         let Some(expected) = &policy.digest else {
             return Err(WriteDenied::Disabled);
@@ -139,7 +139,12 @@ impl WriteAccess {
         {
             return Err(WriteDenied::Unauthorized);
         }
+        Ok(())
+    }
 
+    pub fn authorize(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+        self.authenticate(headers)?;
+        let policy = &self.0;
         // Only the provisioned credential owns this queue. Network addresses and
         // caller-controlled forwarding headers cannot create additional buckets.
         let mut accepted = policy.accepted.lock().unwrap_or_else(|e| e.into_inner());

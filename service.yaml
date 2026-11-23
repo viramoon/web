@@ -7,7 +7,7 @@ environment:
   FERTILE_PROFILE: cloudbox
   WEB_CONFIG_DIR: config
   WEB_BIND_HOST: 127.0.0.1
-  WEB_PORT: 8080
+  WEB_PORT: 8090
   WEB_STATIC_ROOT: /home/box/fertile/static/current
   FINANCE_BASE_URL: http://127.0.0.1:8081
   WEB_REQUIRE_FINANCE: false
@@ -21,7 +21,7 @@ finance_http:
 processes:
   - name: web
     command: web serve
-    port: 8080
+    port: 8090
     health:
       live: /healthz/live
       ready: /healthz/ready

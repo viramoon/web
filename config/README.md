@@ -5,7 +5,7 @@
 | 环境变量 | YAML 字段 | 默认值 |
 | --- | --- | --- |
 | WEB_BIND_HOST | server.bind_host | 127.0.0.1 |
-| WEB_PORT | server.port | 8080 |
+| WEB_PORT | server.port | 8090 |
 | WEB_STATIC_ROOT | paths.static_root | /home/box/fertile/static/current |
 | DATABASE_URL | database.url | postgres://localhost/web |
 | WEB_AUTO_MIGRATE | database.auto_migrate | true |

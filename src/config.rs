@@ -120,6 +120,9 @@ impl Settings {
         if api.port == 0 || api.max_body_bytes == 0 || !self.paths.static_root.is_absolute() {
             return Err("port/body limit must be positive; static_root must be absolute".into());
         }
+        if api.port == 8080 {
+            return Err("port 8080 is reserved for the existing Ruler-managed website".into());
+        }
         if !self.security.admin_token_file.is_absolute()
             || self.security.max_requests == 0
             || !(1..=86_400_000).contains(&self.security.window_ms)
@@ -192,6 +195,7 @@ mod tests {
         assert_eq!(settings.paths.static_root, Path::new("/alternate"));
         for (key, value) in [
             ("WEB_PORT", "0"),
+            ("WEB_PORT", "8080"),
             ("FINANCE_BASE_URL", "file:///config"),
             ("DATABASE_URL", "file:///data"),
             ("WEB_STATIC_ROOT", "relative"),

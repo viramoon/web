@@ -1,6 +1,6 @@
 # Web HTTP API
 
-默认地址为 http://127.0.0.1:8080。每个响应都有 X-Request-Id。调用者传入合法 UUID 时保留；否则服务生成新 UUID。tracing 的 JSON 日志记录请求 ID、HTTP 方法、路径、状态码与耗时。
+默认地址为 http://127.0.0.1:8090。每个响应都有 X-Request-Id。调用者传入合法 UUID 时保留；否则服务生成新 UUID。tracing 的 JSON 日志记录请求 ID、HTTP 方法、路径、状态码与耗时。
 
 | GET | 状态与返回值 |
 | --- | --- |
@@ -32,3 +32,7 @@ system/status 的 finance.circuit 为 closed、open 或 half_open。finance 不�
 POST 写入关闭返回 403，鉴权失败返回 401，超过 token 的滑动窗口限额返回 429 并提供 Retry-After。幂等键冲突保留 409，参数错误返回 422。504 的提交结果未知，同一请求可用原始键重交，已知 id 可直接查询。GET、POST 仅调用内部 finance，不将管理员 token 传给 finance。
 
 system/status 的 market 字段包含 state、fresh、source、updated_at、instrument_count 与 stale_count。仅在状态为 ready、存在合约且均未过期时 fresh 才为 true。finance 可回复但尚未 ready 时，web 仍可读取行情以展示过期原因。应用层不可达时，state 为 unavailable，fresh 为 false。
+
+## 历史回测
+
+GET /api/v1/backtests/datasets 返回标的日历、来源和首尾日期。SmaCrossover 参数和详情的 research 字段复用 finance 的生成契约。GET /api/v1/backtests/by-key 接收 Bearer 和原请求头 Idempotency-Key，返回已知 ID 或 404。它独立于写入限流，返回 Cache-Control: no-store。网页只有查不到原提交后才允许重试同一键与参数。finance 上游只收到幂等键。

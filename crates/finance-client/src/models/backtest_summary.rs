@@ -24,6 +24,13 @@ pub struct BacktestSummary {
     /// 精确十进制字符串，禁止 JSON number。
     #[serde(rename = "pnl")]
     pub pnl: String,
+    #[serde(
+        rename = "research",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub research: Option<Option<Box<models::ResearchReport>>>,
     #[serde(rename = "run_id")]
     pub run_id: String,
     #[serde(rename = "start")]
@@ -55,6 +62,7 @@ impl BacktestSummary {
             generated_at,
             instrument,
             pnl,
+            research: None,
             run_id,
             start,
             strategy,

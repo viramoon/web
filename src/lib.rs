@@ -180,10 +180,19 @@ fn is_submission(req: &Request) -> bool {
     req.method() == axum::http::Method::POST && req.uri().path() == "/api/v1/backtests"
 }
 
+fn is_key_lookup(req: &Request) -> bool {
+    req.method() == axum::http::Method::GET && req.uri().path() == "/api/v1/backtests/by-key"
+}
+
 async fn check_write_access(State(s): State<AppState>, req: Request, next: Next) -> Response {
-    if is_submission(&req)
-        && let Err(denied) = s.write_access.authorize(req.headers())
-    {
+    let access = if is_submission(&req) {
+        s.write_access.authorize(req.headers())
+    } else if is_key_lookup(&req) {
+        s.write_access.authenticate(req.headers())
+    } else {
+        Ok(())
+    };
+    if let Err(denied) = access {
         return denied.into_response();
     }
     next.run(req).await
@@ -203,12 +212,13 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         let start = Instant::now();
         let timeout = Duration::from_millis(s.config.server.request_timeout_ms);
         let submission = is_submission(&req);
+        let key_lookup = is_key_lookup(&req);
         let mut response = match tokio::time::timeout(timeout, next.run(req)).await {
             Ok(r) => r,
             Err(_) if submission => api_error(
                 StatusCode::GATEWAY_TIMEOUT,
                 "finance_timeout",
-                "Submission outcome unknown; query the job or retry with the same Idempotency-Key",
+                "Submission outcome unknown; query by Idempotency-Key before retrying",
             ),
             Err(_) => api_error(
                 StatusCode::GATEWAY_TIMEOUT,
@@ -229,6 +239,12 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
             "request complete"
         );
         response.headers_mut().insert("x-request-id", id);
+        if key_lookup {
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
+            );
+        }
         response
     }
     .instrument(span)
@@ -246,6 +262,8 @@ pub fn router(s: AppState) -> Router {
             get(backtests::list).post(backtests::submit),
         )
         .route("/api/v1/backtests/{id}", get(backtests::detail))
+        .route("/api/v1/backtests/by-key", get(backtests::by_key))
+        .route("/api/v1/backtests/datasets", get(backtests::datasets))
         .route("/api/v1/market/status", get(market::status))
         .fallback(spa::serve);
     with_controls(routes, s)
@@ -279,6 +297,8 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
         backtests::submit,
         backtests::detail,
         backtests::list,
+        backtests::by_key,
+        backtests::datasets,
         market::status
     ),
     components(schemas(
@@ -325,6 +345,15 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         "Page",
         "MarketStatus",
         "InstrumentStatus",
+        "Dataset",
+        "DatasetList",
+        "ResearchReport",
+        "Metrics",
+        "Window",
+        "Coverage",
+        "ExecutionAudit",
+        "Fill",
+        "BlockedOrder",
     ] {
         components
             .schemas

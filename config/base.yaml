@@ -1,6 +1,6 @@
 server:
   bind_host: 127.0.0.1
-  port: 8080
+  port: 8090
   request_timeout_ms: 15000
   max_body_bytes: 1048576
   shutdown_timeout_ms: 20000

@@ -148,6 +148,97 @@
         }
       }
     },
+    "/api/v1/backtests/by-key": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "by_key",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Exact key from the attempted submission",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backtests/datasets": {
+      "get": {
+        "tags": [
+          "research"
+        ],
+        "operationId": "datasets",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetList"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/backtests/sample": {
       "get": {
         "tags": [],
@@ -362,6 +453,16 @@
             "description": "精确十进制字符串，禁止 JSON number。",
             "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
           },
+          "research": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResearchReport"
+              }
+            ]
+          },
           "run_id": {
             "type": "string"
           },
@@ -385,6 +486,37 @@
         },
         "additionalProperties": false
       },
+      "BlockedOrder": {
+        "type": "object",
+        "required": [
+          "signal_session",
+          "execution_session",
+          "bar_volume",
+          "requested_shares",
+          "reason"
+        ],
+        "properties": {
+          "bar_volume": {
+            "type": "string"
+          },
+          "execution_session": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requested_shares": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "signal_session": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      },
       "Check": {
         "type": "object",
         "required": [
@@ -397,6 +529,82 @@
           },
           "ok": {
             "type": "boolean"
+          }
+        }
+      },
+      "Coverage": {
+        "type": "string",
+        "enum": [
+          "full",
+          "insufficient"
+        ]
+      },
+      "Dataset": {
+        "type": "object",
+        "required": [
+          "instrument",
+          "asset_type",
+          "source",
+          "source_sha256",
+          "data_kind",
+          "calendar",
+          "first_session",
+          "last_session",
+          "observations",
+          "price_basis",
+          "corporate_actions"
+        ],
+        "properties": {
+          "asset_type": {
+            "type": "string"
+          },
+          "calendar": {
+            "type": "string"
+          },
+          "corporate_actions": {
+            "type": "string"
+          },
+          "data_kind": {
+            "type": "string"
+          },
+          "first_session": {
+            "type": "string",
+            "format": "date"
+          },
+          "instrument": {
+            "type": "string"
+          },
+          "last_session": {
+            "type": "string",
+            "format": "date"
+          },
+          "observations": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "price_basis": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "DatasetList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Dataset"
+            }
           }
         }
       },
@@ -423,6 +631,101 @@
           },
           "message": {
             "type": "string"
+          }
+        }
+      },
+      "ExecutionAudit": {
+        "type": "object",
+        "required": [
+          "fills",
+          "zero_volume_bars",
+          "blocked_zero_volume",
+          "blocked_insufficient_volume",
+          "blocked_insufficient_cash",
+          "recent_fills",
+          "recent_blocked"
+        ],
+        "properties": {
+          "blocked_insufficient_cash": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "blocked_insufficient_volume": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "blocked_zero_volume": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "fills": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "recent_blocked": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockedOrder"
+            }
+          },
+          "recent_fills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Fill"
+            }
+          },
+          "zero_volume_bars": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "Fill": {
+        "type": "object",
+        "required": [
+          "order_id",
+          "signal_session",
+          "execution_session",
+          "executed_at",
+          "side",
+          "shares",
+          "price",
+          "commission"
+        ],
+        "properties": {
+          "commission": {
+            "type": "string"
+          },
+          "executed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "execution_session": {
+            "type": "string",
+            "format": "date"
+          },
+          "order_id": {
+            "type": "string"
+          },
+          "price": {
+            "type": "string"
+          },
+          "shares": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "side": {
+            "type": "string"
+          },
+          "signal_session": {
+            "type": "string",
+            "format": "date"
           }
         }
       },
@@ -600,6 +903,23 @@
           }
         }
       },
+      "Metrics": {
+        "type": "object",
+        "required": [
+          "return_pct",
+          "max_drawdown_pct"
+        ],
+        "properties": {
+          "max_drawdown_pct": {
+            "type": "string",
+            "description": "Positive peak-to-trough percent, exact decimal text."
+          },
+          "return_pct": {
+            "type": "string",
+            "description": "Percent, exact decimal text."
+          }
+        }
+      },
       "Page": {
         "type": "object",
         "required": [
@@ -621,9 +941,206 @@
           }
         }
       },
+      "ResearchReport": {
+        "type": "object",
+        "required": [
+          "dataset",
+          "requested_start",
+          "requested_end",
+          "actual_start",
+          "actual_end",
+          "observations",
+          "warmup_sessions",
+          "performance_start",
+          "initial_equity",
+          "ending_equity",
+          "commission_per_order",
+          "slippage_bps",
+          "risk_free_rate",
+          "execution",
+          "windows",
+          "audit"
+        ],
+        "properties": {
+          "actual_end": {
+            "type": "string",
+            "format": "date"
+          },
+          "actual_start": {
+            "type": "string",
+            "format": "date"
+          },
+          "audit": {
+            "$ref": "#/components/schemas/ExecutionAudit"
+          },
+          "commission_per_order": {
+            "type": "string"
+          },
+          "dataset": {
+            "$ref": "#/components/schemas/Dataset"
+          },
+          "ending_equity": {
+            "type": "string"
+          },
+          "execution": {
+            "type": "string"
+          },
+          "initial_equity": {
+            "type": "string"
+          },
+          "metrics": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Metrics"
+              }
+            ]
+          },
+          "observations": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "performance_start": {
+            "type": "string",
+            "format": "date"
+          },
+          "requested_end": {
+            "type": "string",
+            "format": "date"
+          },
+          "requested_start": {
+            "type": "string",
+            "format": "date"
+          },
+          "risk_free_rate": {
+            "type": "string"
+          },
+          "slippage_bps": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "warmup_sessions": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Window"
+            }
+          }
+        }
+      },
       "StrategyParams": {
         "type": "object",
+        "properties": {
+          "fast_period": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "shares": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "slow_period": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        },
         "additionalProperties": false
+      },
+      "Window": {
+        "type": "object",
+        "required": [
+          "requested_years",
+          "requested_start",
+          "calendar_start",
+          "expected_sessions",
+          "missing_sessions",
+          "coverage"
+        ],
+        "properties": {
+          "actual_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "actual_start": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "actual_years": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "calendar_start": {
+            "type": "string",
+            "format": "date",
+            "description": "First supported date counted in the calendar totals."
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          },
+          "expected_sessions": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "metrics": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Metrics"
+              }
+            ]
+          },
+          "missing_pct": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing_sessions": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "requested_start": {
+            "type": "string",
+            "format": "date"
+          },
+          "requested_years": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
       }
     }
   }

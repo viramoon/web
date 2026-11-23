@@ -25,9 +25,9 @@
 
 migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使数据库暂时不可达也会先建立监听，后台重连；默认执行兼容迁移后才将数据库标为 ready。完成独立迁移后可设 WEB_AUTO_MIGRATE=false。向 web 进程发送 SIGTERM 或 SIGINT 时，进程停止接纳新连接并等待在途请求，默认宽限 20 秒。完整部署与守护定义见 [fertile/deploy](https://github.com/viramoon/fertile/tree/main/deploy)。
 
-    curl -fsS http://127.0.0.1:8080/healthz/live
-    curl -i http://127.0.0.1:8080/healthz/ready
-    curl -fsS http://127.0.0.1:8080/api/v1/system/status
+    curl -fsS http://127.0.0.1:8090/healthz/live
+    curl -i http://127.0.0.1:8090/healthz/ready
+    curl -fsS http://127.0.0.1:8090/api/v1/system/status
 
 ## 故障定位与回滚
 
@@ -47,7 +47,7 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 用同一示例数据目录启动 finance API 与 web 后，对比两个端点的 JSON。金额与数量保持各自契约类型。
 
     curl -fsS http://127.0.0.1:8081/api/v1/backtests/sample | jq -S . > /tmp/finance-sample.json
-    curl -fsS http://127.0.0.1:8080/api/v1/backtests/sample | jq -S . > /tmp/web-sample.json
+    curl -fsS http://127.0.0.1:8090/api/v1/backtests/sample | jq -S . > /tmp/web-sample.json
     diff -u /tmp/finance-sample.json /tmp/web-sample.json
 
 网页出现 502、503、504 时，先查 /api/v1/system/status 中的 finance.ok、latency_ms、circuit，再查 finance 的监听和 ready。熔断打开后等待对应 profile 的 circuit_open_ms，下一次访问会试探，成功后自动恢复。若请求为写操作，超时后先查作业状态，重交时沿用同一幂等键。
@@ -79,10 +79,14 @@ submit() {
   sed -n 's/^WEB_ADMIN_TOKEN=\(.*\)$/header = "Authorization: Bearer \1"/p' "$secret" |
     curl -sS --config - -H "Idempotency-Key: $key" -H 'Content-Type: application/json' \
       --data '{"strategy":"DemoStrategy","instrument":"6EH4.XCME","start":"2024-01-01T23:01:00Z","end":"2024-01-01T23:09:00Z","params":{}}' \
-      http://127.0.0.1:8080/api/v1/backtests
+      http://127.0.0.1:8090/api/v1/backtests
 }
 id=$(submit | jq -er .id)
-curl -fsS "http://127.0.0.1:8080/api/v1/backtests/$id"
+curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 ```
 
 已启用写权限时，无效或缺少 Bearer token 返回 401。请根据 429 响应的 Retry-After 等待窗口释放。相同 key、不同参数会被 finance 以 409 拒绝。超时返回 504，重新提交要保留 key 和原始请求。请求日志可按 X-Request-Id 关联，凭据只在读取 secret 和验证 Authorization 时使用。
+
+## 历史回测与提交确认
+
+回测页从 /api/v1/backtests/datasets 读取已审核的历史标的。配置数据后提交 SmaCrossover，并在工作台查看作业状态和历史结果。POST 超时或连接中断后，使用原 bearer 与 Idempotency-Key 请求 GET /api/v1/backtests/by-key；若查到 ID，继续轮询该作业。只有明确返回 404 后才允许带原请求、原键重试。提交和确认时从页面临时输入令牌，日志中仅记录路径、状态和请求 ID。
