@@ -39,9 +39,9 @@ database:
   migration_command: web migrate
   auto_migrate_default: true
   backup_and_rollback: 见 fertile 的部署和备份恢复手册
-tunnel:
-  public_origin: 待用户确认
-  candidates: [www.viramoon.com, www.viramoonstar.com]
+ingress:
+  public_origin: https://fertile.viramoon.com
+  owner: Maas · Ruler
 runbook: RUNBOOK.md
 write_access:
   secret_file_env: WEB_ADMIN_TOKEN_FILE

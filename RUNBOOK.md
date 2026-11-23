@@ -38,7 +38,7 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 | finance 不可达 | system/status 仍提供退化信息。检查 FINANCE_BASE_URL 与 finance 自身 ready。默认 web ready 为 degraded，如配置必须依赖 finance，则返回 503 |
 | 数据库迁移失败 | 保存错误与迁移版本，核对备份；先修复失败原因再执行 migrate，不修改已应用脚本 |
 | 回滚 | 确认数据库向后兼容，按 fertile 指针组合恢复上一套 web 二进制、配置和静态目录。必要时先在独立库演练恢复 |
-| 本地接口正常、公网失败 | 核对现有 Tunnel 与外部访问。候选公网域名 www.viramoon.com、www.viramoonstar.com，待所有者确认，复现时用已确认的域名 |
+| 本地接口正常、公网失败 | 由 Ruler 核对 https://fertile.viramoon.com 的 DNS、Tunnel 路由与外部可达性。web 源站使用 127.0.0.1:8090 |
 
 按照请求的 X-Request-Id 查找标准错误的 JSON 日志，可看到状态、方法、路径与耗时。发行与回滚由 fertile 管理。
 
