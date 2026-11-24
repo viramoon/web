@@ -1,0 +1,61 @@
+--- a/Cargo.mustache
++++ b/Cargo.mustache
+@@ -16,4 +16 @@
+-{{^licenseInfo}}
+-# Override this license by providing a License Object in the OpenAPI.
+-license = "Unlicense"
+-{{/licenseInfo}}
++publish = false
+--- a/model.mustache
++++ b/model.mustache
+@@ -22 +22 @@
+-/// {{{description}}}
++{{#description}}/// {{{description}}}{{/description}}
+@@ -24 +24 @@
+-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize_repr, Deserialize_repr)]
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize_repr, Deserialize_repr)]
+@@ -27,0 +28 @@
++    {{#-first}}#[default]{{/-first}}
+@@ -48,2 +49,2 @@
+-/// {{{description}}}
+-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
++{{#description}}/// {{{description}}}{{/description}}
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+@@ -52,0 +54 @@
++    {{#-first}}#[default]{{/-first}}
+@@ -71,7 +72,0 @@
+-impl Default for {{{classname}}} {
+-    fn default() -> {{{classname}}} {
+-        {{#allowableValues}}
+-        Self::{{ enumVars.0.name }}
+-        {{/allowableValues}}
+-    }
+-}
+@@ -213 +208 @@
+-/// {{{description}}}
++{{#description}}/// {{{description}}}{{/description}}
+@@ -237 +232 @@
+-/// {{{description}}}
++{{#description}}/// {{{description}}}{{/description}}
+--- a/reqwest/api.mustache
++++ b/reqwest/api.mustache
+@@ -622 +622 @@
+-            ContentType::Text => return Ok(content),
++            ContentType::Text => Ok(content),
+@@ -625 +625 @@
+-            ContentType::Text => return Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `{{returnType}}`"))),
++            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `{{returnType}}`"))),
+@@ -627 +627 @@
+-            ContentType::Unsupported(unknown_type) => return Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `{{returnType}}`")))),
++            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `{{returnType}}`")))),
+--- a/reqwest/api_mod.mustache
++++ b/reqwest/api_mod.mustache
+@@ -166 +166 @@
+-            return Self::Json;
++            Self::Json
+@@ -168 +168 @@
+-            return Self::Text;
++            Self::Text
+@@ -170 +170 @@
+-            return Self::Unsupported(content_type.to_string());
++            Self::Unsupported(content_type.to_string())

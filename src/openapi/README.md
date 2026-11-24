@@ -1,5 +1,3 @@
 # OpenAPI 汇总与导出
 
-使用 utoipa / utoipa-axum 从 handler 声明汇总 web 接口，导出到 fertile `contracts/web.openapi.json`；先改实现再导出，不手写契约，不手改快照。
-
-TBD：导出命令、工具版本、schema 精确数值表达和差异检查门禁，待接口实现确定。CI 需比较导出与快照差异，破坏性变更需兼容与迁移计划。WebSocket / SSE 消息不由 OpenAPI 自动覆盖，另写协议。当前无 handler，故不创建空 JSON 快照。
+[路由及模型](../lib.rs) 使用 utoipa 声明接口。`cargo run --locked -- export-openapi` 输出 OpenAPI 3.1 JSON，独立于配置、数据库和网络。CI 重复导出并比较字节，集成快照由 fertile 生成到 contracts/web.openapi.json。破坏性变更需兼容与迁移计划。WebSocket / SSE 另写协议。生成和消费流程见[接口说明](../../docs/api.md)。

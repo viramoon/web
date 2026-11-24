@@ -1,5 +1,5 @@
-# 按资源组织路由
+# HTTP 路由
 
-规划 trading / backtest / dashboard / blog / health 五组资源，路由层只处理请求、认证、输入转换和错误映射，调用领域逻辑与 finance_client，不承担交易内核。交易、回测、看板、博客的具体路径与权限 TBD。
+健康检查在 /healthz/live 与 /healthz/ready，系统状态在 /api/v1/system/status。handler、返回类型与 utoipa 定义见 [lib.rs](../lib.rs)，HTTP 契约和状态码见[接口说明](../../docs/api.md)。业务路由调用领域逻辑和 finance 客户端，交易内核由 finance 提供。
 
-health 提供 /healthz，并区分 live / ready；判断数据库、finance 状态和静态产物新鲜度的细则见 [service.yaml](../../service.yaml)。所有接口由 handler 的 utoipa 声明导出；TBD 路由不手写成 OpenAPI 文件。
+回测作业的提交、详情和分页在 [backtests.rs](../backtests.rs)，市场状态和新鲜度摘要在 [market.rs](../market.rs)。

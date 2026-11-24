@@ -1,0 +1,6 @@
+finance:
+  connect_timeout_ms: 1000
+  request_timeout_ms: 2000
+  backoff_ms: 100
+  circuit_failure_threshold: 5
+  circuit_open_ms: 5000

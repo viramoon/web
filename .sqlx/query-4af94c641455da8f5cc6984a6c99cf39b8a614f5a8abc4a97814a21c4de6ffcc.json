@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (version = 1 AND to_regnamespace('blog') IS NOT NULL) AS \"ready!\"\n               FROM app.schema_info WHERE component = 'web'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ready!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4af94c641455da8f5cc6984a6c99cf39b8a614f5a8abc4a97814a21c4de6ffcc"
+}

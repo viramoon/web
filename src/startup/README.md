@@ -1,5 +1,3 @@
-# 启动组装
+# 启动与关闭
 
-负责加载分层配置、创建数据库池与 finance client、组装路由和静态服务、建立健康依赖与优雅关闭。业务逻辑不放在 startup，认证和 telemetry 使用独立边界。
-
-TBD：启动失败策略、就绪门禁、资源回收与命令行入口，待实现 issue 确认。本次只说明结构。
+[src/main.rs](../main.rs) 实现 `web serve`、`web migrate`、`web export-openapi`。配置无效时启动失败。serve 先监听，再在后台检查数据库；部署时可用 migrate 提前执行迁移。SIGTERM / SIGINT 触发停止接受新请求、等待在途响应以及释放连接池，共享配置的关闭时限。详细命令见[运行手册](../../RUNBOOK.md)。
