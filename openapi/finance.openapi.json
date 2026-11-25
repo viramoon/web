@@ -1069,11 +1069,6 @@
       "Window": {
         "type": "object",
         "required": [
-          "requested_years",
-          "requested_start",
-          "calendar_start",
-          "expected_sessions",
-          "missing_sessions",
           "coverage"
         ],
         "properties": {
@@ -1097,18 +1092,52 @@
               "null"
             ]
           },
+          "calendar_diagnostic": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Calendar name, attempted dates, and construction error when unavailable."
+          },
+          "calendar_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Upper date bound used for the calendar totals."
+          },
           "calendar_start": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date",
             "description": "First supported date counted in the calendar totals."
           },
           "coverage": {
             "$ref": "#/components/schemas/Coverage"
           },
+          "coverage_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reason reported when the calendar cannot cover the requested dates."
+          },
           "expected_sessions": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
             "minimum": 0
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "metrics": {
             "oneOf": [
@@ -1116,7 +1145,7 @@
                 "type": "null"
               },
               {
-                "$ref": "#/components/schemas/Metrics"
+                "$ref": "#/components/schemas/WindowMetrics"
               }
             ]
           },
@@ -1127,18 +1156,87 @@
             ]
           },
           "missing_sessions": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "observations": {
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
             "minimum": 0
           },
           "requested_start": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date"
           },
           "requested_years": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
             "minimum": 0
+          },
+          "rf_source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "window": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Window identifier (50y, 10y, 5y, longest_sample)."
+          }
+        }
+      },
+      "WindowMetrics": {
+        "type": "object",
+        "required": [
+          "return_pct",
+          "max_drawdown_pct"
+        ],
+        "properties": {
+          "cagr_pct": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_drawdown_pct": {
+            "type": "string"
+          },
+          "return_pct": {
+            "type": "string"
+          },
+          "sharpe": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turnover_pct": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "volatility_pct": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       }

@@ -42,3 +42,5 @@ pub mod strategy_params;
 pub use self::strategy_params::StrategyParams;
 pub mod window;
 pub use self::window::Window;
+pub mod window_metrics;
+pub use self::window_metrics::WindowMetrics;

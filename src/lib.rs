@@ -350,6 +350,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         "ResearchReport",
         "Metrics",
         "Window",
+        "WindowMetrics",
         "Coverage",
         "ExecutionAudit",
         "Fill",
