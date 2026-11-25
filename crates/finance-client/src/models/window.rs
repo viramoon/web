@@ -34,20 +34,61 @@ pub struct Window {
         skip_serializing_if = "Option::is_none"
     )]
     pub actual_years: Option<Option<String>>,
+    /// Calendar name, attempted dates, and construction error when unavailable.
+    #[serde(
+        rename = "calendar_diagnostic",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub calendar_diagnostic: Option<Option<String>>,
+    /// Upper date bound used for the calendar totals.
+    #[serde(
+        rename = "calendar_end",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub calendar_end: Option<Option<String>>,
     /// First supported date counted in the calendar totals.
-    #[serde(rename = "calendar_start")]
-    pub calendar_start: String,
+    #[serde(
+        rename = "calendar_start",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub calendar_start: Option<Option<String>>,
     #[serde(rename = "coverage")]
     pub coverage: models::Coverage,
-    #[serde(rename = "expected_sessions")]
-    pub expected_sessions: u32,
+    /// Reason reported when the calendar cannot cover the requested dates.
+    #[serde(
+        rename = "coverage_reason",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub coverage_reason: Option<Option<String>>,
+    #[serde(
+        rename = "expected_sessions",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expected_sessions: Option<Option<u32>>,
+    #[serde(
+        rename = "label",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub label: Option<Option<String>>,
     #[serde(
         rename = "metrics",
         default,
         with = "::serde_with::rust::double_option",
         skip_serializing_if = "Option::is_none"
     )]
-    pub metrics: Option<Option<Box<models::Metrics>>>,
+    pub metrics: Option<Option<Box<models::WindowMetrics>>>,
     #[serde(
         rename = "missing_pct",
         default,
@@ -55,35 +96,72 @@ pub struct Window {
         skip_serializing_if = "Option::is_none"
     )]
     pub missing_pct: Option<Option<String>>,
-    #[serde(rename = "missing_sessions")]
-    pub missing_sessions: u32,
-    #[serde(rename = "requested_start")]
-    pub requested_start: String,
-    #[serde(rename = "requested_years")]
-    pub requested_years: u32,
+    #[serde(
+        rename = "missing_sessions",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub missing_sessions: Option<Option<u32>>,
+    #[serde(
+        rename = "observations",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub observations: Option<Option<u32>>,
+    #[serde(
+        rename = "requested_start",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub requested_start: Option<Option<String>>,
+    #[serde(
+        rename = "requested_years",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub requested_years: Option<Option<u32>>,
+    #[serde(
+        rename = "rf_source",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rf_source: Option<Option<String>>,
+    /// Window identifier (50y, 10y, 5y, longest_sample).
+    #[serde(
+        rename = "window",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub window: Option<Option<String>>,
 }
 
 impl Window {
-    pub fn new(
-        calendar_start: String,
-        coverage: models::Coverage,
-        expected_sessions: u32,
-        missing_sessions: u32,
-        requested_start: String,
-        requested_years: u32,
-    ) -> Window {
+    pub fn new(coverage: models::Coverage) -> Window {
         Window {
             actual_end: None,
             actual_start: None,
             actual_years: None,
-            calendar_start,
+            calendar_diagnostic: None,
+            calendar_end: None,
+            calendar_start: None,
             coverage,
-            expected_sessions,
+            coverage_reason: None,
+            expected_sessions: None,
+            label: None,
             metrics: None,
             missing_pct: None,
-            missing_sessions,
-            requested_start,
-            requested_years,
+            missing_sessions: None,
+            observations: None,
+            requested_start: None,
+            requested_years: None,
+            rf_source: None,
+            window: None,
         }
     }
 }

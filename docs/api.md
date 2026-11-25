@@ -36,3 +36,7 @@ system/status 的 market 字段包含 state、fresh、source、updated_at、inst
 ## 历史回测
 
 GET /api/v1/backtests/datasets 返回标的日历、来源和首尾日期。SmaCrossover 参数和详情的 research 字段复用 finance 的生成契约。GET /api/v1/backtests/by-key 接收 Bearer 和原请求头 Idempotency-Key，返回已知 ID 或 404。它独立于写入限流，返回 Cache-Control: no-store。网页只有查不到原提交后才允许重试同一键与参数。finance 上游只收到幂等键。
+
+`research.windows` 透传 finance 的 `50y`、`10y`、`5y` 和 `longest_sample` 窗口。`Window` 仅要求 `coverage`。窗口标识、标签、日历边界和诊断、覆盖原因、请求年限及会话计数等字段可省略或为 `null`，web 保留上游写法。`coverage: insufficient` 时，上游缺少有效指标，响应中的 `metrics: null` 表示不可用。
+
+`Window.metrics` 引用 `WindowMetrics`。收益率和最大回撤是精确十进制字符串，年化收益率、夏普比率、波动率和换手率也使用十进制字符串，并允许省略或为 `null`。报告级 `research.metrics` 仍使用 `Metrics`。fertile 更新 web 契约快照后，frontend 应重新生成客户端，处理窗口和指标字段的省略及 `null`，并将不可用指标显示为「不可用」。
