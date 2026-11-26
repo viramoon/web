@@ -76,4 +76,25 @@ catalog 的公共来源覆盖 Binance Spot、Binance USDⓈ-M、Hyperliquid Perp
 
 凭据 token 必须为 16 至 4096 个 ASCII 字符。首字符是英文字母或数字，其余字符可另外使用 `-`、`.`、`_`、`~`、`+`，末尾可有最多两个 `=`。服务器路径、任意测试目标、`.env` 内容和 PEM 内容均不接受。密文存储未配置或存储失败时，凭据录入的 PUT 返回 503。凭据吊销的 DELETE 只需数据库可用并通过鉴权和请求校验。响应、日志和错误不含凭据原文，请求正文不写入日志。
 
-W1 的连接测试适配器会将合法候选标记为 `unavailable`，缺少必需凭据的候选标记为 `failed`。测试成功才在同一个数据库事务中退役原版本并提升候选，失败保留原活动版本。真实连接验证、数据流、自选列表与通知分别由后续 W2/F、U 和 W3 阶段接入。
+W1 的连接测试适配器会将合法候选标记为 `unavailable`，缺少必需凭据的候选标记为 `failed`。测试成功才在同一个数据库事务中退役原版本并提升候选，失败保留原活动版本。集成候选版本与 SMTP 的绑定由 W4 接入。
+
+## 告警规则与邮件通知
+
+这些接口要求管理员 `notifications` 产品权限，返回 `Cache-Control: no-store`。管理员的同源 Cookie 写请求需要匹配的 Origin 和 `X-CSRF-Token`。支持脚本携带管理 Bearer。写请求共享管理员限流。
+
+| 方法与路径 | 请求及响应 |
+| --- | --- |
+| `GET /api/v1/notification-rules` | 200，按 UUID 升序返回 `items`、`next_cursor`。接受 `limit`（默认 20，范围 1–100）与上一页的 UUID `cursor` |
+| `GET /api/v1/notification-rules/{id}` | 200，返回规则和当前 `ETag`。未知 UUID 返回 404 |
+| `PUT /api/v1/notification-rules/{id}` | 客户端分配 UUID，带 `If-Match: "0"` 创建返回 201。带当前引号包住的 revision 更新返回 200，成功时返回新 `ETag`。缺少前置条件返回 428，revision 冲突返回 409 |
+| `GET /api/v1/alerts` | 200，按序号降序返回 `items`、`next_cursor`。接受 `limit`（默认 20，范围 1–100）、十进制字符串 `cursor`、`unacknowledged=true`。后者只返回待确认的有效告警 |
+| `GET /api/v1/alerts/{id}` | 200，按 UUID 读取告警及投递审计。找不到告警返回 404 |
+| `POST /api/v1/alerts/{id}/ack` | 空请求，200 返回含 `acknowledged_at` 的告警，重复请求沿用第一次确认时间 |
+| `POST /api/v1/notification-channels/email/tests` | 空请求，`Idempotency-Key` 为客户端分配的 UUID。202 返回测试记录及 `Location`，同一个键始终引用同一次测试 |
+| `GET /api/v1/notification-channels/email/tests/{testId}` | 200，读取以原 `Idempotency-Key` 为 ID 的测试记录，包括状态与投递尝试。找不到测试返回 404 |
+
+规则字段包括 `condition`、`severity`（`informational`、`important` 或 `urgent`）、`enabled`、`email_enabled`、可空的 `cooldown_seconds` 和 `reminder_seconds`，以及 `min_occurrences`（默认 1，范围 1–100）。规则匹配类型化条件，`smtp_unavailable` 由 notifier 自行记录。当前私有事件入口是 Rust `record_signal`，由 web 生产者传入规则 UUID、类型化条件、阶段、观察时间、窗口起点和不透明主题 UUID。重复窗口在告警 `duplicate_count` 中可追踪，过时观察记为 `ignored`，尚未达到触发阈值的观察记为 `observed`。处于有效事故且已有邮件的紧急规则可在收到后续观察时按提醒间隔再通知。恢复记录独立于确认操作。
+
+告警投递包含 `pending`、`sending`、`accepted`、`failed`、`summarized` 或 `suppressed` 状态，以及尝试、静默/冷却/限流延迟、抑制原因和汇总投递引用。`accepted` 表示中继已接收。SMTP 配置由部署提供，测试请求无正文或查询参数，测试邮件发往配置中的本人邮箱。
+
+管理写入返回 504 时，按 `id` 读取规则 revision 或告警确认状态，或用原 `Idempotency-Key` 作为 `testId` 查询测试。查明结果后才使用原请求重试。`GET /api/v1/system/status` 增加聚合的 `notifications`，包含 `state`（`idle`、`healthy`、`degraded`、`unavailable`）、失败起始时间和最近尝试、接受时间及结果。SMTP 状态独立于 HTTP 就绪探测。

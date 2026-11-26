@@ -3,6 +3,7 @@ name = "web"
 version = "0.0.0"
 edition = "2024"
 publish = false
+default-run = "web"
 
 [dependencies]
 finance-client = { path = "crates/finance-client", default-features = false }

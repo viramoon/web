@@ -7,3 +7,5 @@
 数据库生命周期见 database.rs，finance 探测见 finance.rs。
 
 [integrations.rs](integrations.rs) 管理集成 catalog 和 HTTP 契约，[store.rs](integrations/store.rs) 负责版本、测试、启停与审计事务，[credentials.rs](credentials.rs) 封装和持久化密文。
+
+[notifications](notifications.rs) 管理告警规则、事件入库与审计。独立的 [web-notifier](bin/web-notifier.rs) 消费 PostgreSQL outbox 并调用邮件渠道。部署配置见[运行手册](../RUNBOOK.md#告警与邮件进程)。

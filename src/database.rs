@@ -74,9 +74,12 @@ impl Database {
             if initialized != Some(true) {
                 return Ok(false);
             }
-            sqlx::query_scalar("SELECT to_regclass('app.integration_configs') IS NOT NULL")
-                .fetch_one(&mut *connection)
-                .await
+            sqlx::query_scalar(
+                "SELECT to_regclass('app.integration_configs') IS NOT NULL
+                    AND to_regclass('app.notification_health') IS NOT NULL",
+            )
+            .fetch_one(&mut *connection)
+            .await
         })
         .await
         .map_err(|_| sqlx::Error::PoolTimedOut)?
@@ -101,7 +104,7 @@ impl Database {
                 }
                 match self.ready().await {
                     Ok(true) => Ok(()),
-                    Ok(false) => Err("required schemas or integration migration missing"),
+                    Ok(false) => Err("required schemas or migrations missing"),
                     Err(_) => Err("database or schema metadata unavailable"),
                 }
             };

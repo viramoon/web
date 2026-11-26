@@ -7,6 +7,7 @@ web 是 fertile 的后端网关，负责网络入口、frontend 静态托管、�
            ├─ static：frontend Vite 产物
            ├─ routes → auth / domain / idempotency → finance_client → HTTP → finance api
            └─ blog / 业务持久化 → PostgreSQL（app / blog）
+                                └─ 通知 outbox → web-notifier → SMTP
 ```
 
 main.rs 组装进程，lib.rs 管理路由、请求边界与健康检查。backtests.rs 转发回测请求，market.rs 转发行情并汇总新鲜度。认证层从本地 0600 文件载入管理员 Bearer，可建立短期同源会话。管理写请求先鉴权并应用共享滑动窗口限额，再读请求体。回测提交检查 Idempotency-Key，并向 finance 发送一次，由 finance 保存幂等结果。系统、回测和行情状态保留公开读取，按键查询和集成配置限管理员读取。生成的 finance-client crate 独立于手写适配层，金融数值按契约保留精度。目录入口见 [src](../src/README.md)。
@@ -26,7 +27,7 @@ frontend 不独立运行，由配置指定的静态目录提供资源，按 fert
 
 ## 集成控制面
 
-catalog 确定 connector、可用字段和标的，创建、修改和凭据轮换均形成草稿版本。连接测试只接收登记的 connector、候选版本与不透明凭据引用。成功结果在事务中提升候选并退役原活动版本。W1 使用显式不可用的连接适配器，实际工作由 W2/F 系列承接。集成事务记录单管理员审计，通知和投递将由 W3 管理。
+catalog 确定 connector、可用字段和标的，创建、修改和凭据轮换均形成草稿版本。连接测试只接收登记的 connector、候选版本与不透明凭据引用。成功结果在事务中提升候选并退役原活动版本。W1 使用显式不可用的连接适配器，实际工作由 W2/F 系列承接。集成事务记录单管理员审计。SMTP 的候选版本接入由 W4 实施。
 
 web 用部署接收方的公钥封装凭据，持久化后才提交 PostgreSQL 引用。将来由授权消费者依据活动配置或对应待定候选取得引用并在各自边界内解封。接收路径、权限、轮换和故障恢复见[运行手册](../RUNBOOK.md)。
 
@@ -35,3 +36,9 @@ web 用部署接收方的公钥封装凭据，持久化后才提交 PostgreSQL �
 生成客户端持有一个复用连接的 reqwest Client。web 的 Finance 适配层为 GET 和写请求提供独立的调用入口。对连接失败、超时、无效响应和 5xx，GET 按 profile 的次数进行有限重试；每次延迟在指数增长的上限的一半与上限之间随机选取。客户端关闭自动重定向和底层自动重试。业务 4xx 保留状态和统一错误结构。写请求只发送一次。
 
 所有路由共享熔断器。最终调用连续失败达到阈值后进入 open，即时拒绝请求。冷却后只放行一个 half_open 试探，其余请求立即返回 503。试探成功或收到有效业务 4xx 恢复 closed；失败或试探请求被取消则重新冷却。请求按进入时的状态代际登记，旧并发响应不能覆盖新的熔断状态。健康探测只用一次独立的短时限，系统状态上的 finance.circuit 与 JSON 日志都记录熔断状态。
+
+## 告警与 SMTP
+
+内部生产者通过 [record_signal](../src/notifications/store/ingest.rs) 写入条件、阶段、事件时间和不透明业务键。写入在同一个 PostgreSQL 事务中更新事故状态、保存事件并入队。当前由 notifier 生成 SMTP 健康事件。采集器、运维和行情异常的生产者在对应集成中接入此窄接口。
+
+`web-notifier` 以 PostgreSQL 会话锁协调单个发送者，在 SMTP I/O 前持久化发送尝试，并在 SMTP 返回后独立结算。静默、冷却、滚动额度和恢复汇总使用同一队列和审计。渠道边界提供 `validate`、`test`、`send`，v1 注册邮件。模板根据类型化条件生成固定说明和私有 `/alerts` 入口，汇总只含计数，付费行情正文和凭据没有进入模板或告警持久化的字段。
