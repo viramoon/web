@@ -1,6 +1,6 @@
 # Web HTTP API
 
-默认地址为 http://127.0.0.1:8090。每个响应都有 X-Request-Id。调用者传入合法 UUID 时保留；否则服务生成新 UUID。tracing 的 JSON 日志记录请求 ID、HTTP 方法、路径、状态码与耗时。
+默认地址为 http://127.0.0.1:8090。每个响应都有 X-Request-Id。调用者传入合法 UUID 时保留，否则服务生成新 UUID。tracing 的 JSON 日志记录请求 ID、HTTP 方法、匹配的路由模板、状态码与耗时。
 
 | GET | 状态与返回值 |
 | --- | --- |
@@ -10,9 +10,9 @@
 
 OpenAPI 由 handler 注解和输出类型生成。执行下列命令可在不启动服务或数据库的情况下导出 JSON。
 
-    cargo run --locked -q -- export-openapi > /tmp/web.openapi.json
+    cargo run --locked -q -- export-openapi > openapi/web.openapi.json
 
-CI 对同一提交导出两次并逐字节比对。正式集成时将本提交的生成物交给 fertile/contracts/web.openapi.json，再由 frontend 使用 Hey API 生成客户端。生成物只能经生成器更新。
+CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.openapi.json)逐字节比对。正式集成时将本提交的生成物交给 fertile/contracts/web.openapi.json，再由 frontend 使用 Hey API 生成客户端。生成物只能经导出流程更新。
 
 未知 /api 路径返回 JSON 404，错误结构为 error.code、error.message，日志由 X-Request-Id 关联。页面 GET 的前端路由回落到 index.html；/healthz、/api、/assets 保留各自的错误语义。
 
@@ -24,7 +24,7 @@ system/status 的 finance.circuit 为 closed、open 或 half_open。finance 不�
 
 | 方法与路径 | 请求及响应 |
 | --- | --- |
-| POST /api/v1/backtests | Bearer 管理员鉴权。Idempotency-Key 必填，1 至 128 个可见 ASCII 字符。JSON 请求遵循 finance 的 JobRequest。返回 202 与 id。每次最多向 finance 发送一次 |
+| POST /api/v1/backtests | 管理员 Bearer 或同源会话。Idempotency-Key 必填，1 至 128 个可见 ASCII 字符。JSON 请求遵循 finance 的 JobRequest。返回 202 与 id。每次最多向 finance 发送一次 |
 | GET /api/v1/backtests/{id} | 公开读取作业，返回状态、请求、结果摘要及错误。不存在时返回 404 |
 | GET /api/v1/backtests | 按 id 递增分页。limit 默认 20，范围 1 至 100，cursor 为上页的 next_cursor。返回 items、next_cursor |
 | GET /api/v1/market/status | 公开读取行情来源、状态、快照时间、最大年龄及逐合约的 stale 与 age_seconds |
@@ -35,8 +35,41 @@ system/status 的 market 字段包含 state、fresh、source、updated_at、inst
 
 ## 历史回测
 
-GET /api/v1/backtests/datasets 返回标的日历、来源和首尾日期。SmaCrossover 参数和详情的 research 字段复用 finance 的生成契约。GET /api/v1/backtests/by-key 接收 Bearer 和原请求头 Idempotency-Key，返回已知 ID 或 404。它独立于写入限流，返回 Cache-Control: no-store。网页只有查不到原提交后才允许重试同一键与参数。finance 上游只收到幂等键。
+GET /api/v1/backtests/datasets 返回标的日历、来源和首尾日期。SmaCrossover 参数和详情的 research 字段复用 finance 的生成契约。GET /api/v1/backtests/by-key 接收管理员 Bearer 或同源会话，以及原请求头 Idempotency-Key，返回已知 ID 或 404。它独立于写入限流，返回 `Cache-Control: no-store`。网页只有查不到原提交后才允许重试同一键与参数。finance 上游只收到幂等键。
 
 `research.windows` 透传 finance 的 `50y`、`10y`、`5y` 和 `longest_sample` 窗口。`Window` 仅要求 `coverage`。窗口标识、标签、日历边界和诊断、覆盖原因、请求年限及会话计数等字段可省略或为 `null`，web 保留上游写法。`coverage: insufficient` 时，上游缺少有效指标，响应中的 `metrics: null` 表示不可用。
 
 `Window.metrics` 引用 `WindowMetrics`。收益率和最大回撤是精确十进制字符串，年化收益率、夏普比率、波动率和换手率也使用十进制字符串，并允许省略或为 `null`。报告级 `research.metrics` 仍使用 `Metrics`。fertile 更新 web 契约快照后，frontend 应重新生成客户端，处理窗口和指标字段的省略及 `null`，并将不可用指标显示为「不可用」。
+
+## 管理会话与产品权限
+
+| 方法与路径 | 请求及响应 |
+| --- | --- |
+| POST /api/v1/admin/session | 发送现有管理 Bearer 和部署配置的 HTTPS Origin。201 返回 `csrf_token`、`expires_in`（秒），并设置 `__Host-web_admin_session` Cookie |
+| DELETE /api/v1/admin/session | 发送会话 Cookie、Origin 与 `X-CSRF-Token`。204 撤销服务端会话并清除 Cookie |
+| GET /api/v1/me/capabilities | 200 返回 `subject`（`anonymous` 或 `admin`）及可见的 `products`。有效会话额外返回 `csrf_token`，便于页面重载恢复 |
+
+Cookie 使用 `HttpOnly; Secure; SameSite=Strict; Path=/`，作用域为当前主机。所有 Cookie 管理写入都需 Origin 精确匹配，并发送会话的 CSRF token；新集成写接口收到显式 Bearer 和 Origin 时也校验 Origin。脚本可仅发送 Bearer。权限失败为 401 或 403，管理员登录及写入共享限流。会话、能力及集成接口返回 `Cache-Control: no-store`。
+
+匿名可见 `system`、`backtests`、`market_status`。管理员额外可见 `backtest_submission`、`integrations`、`restricted_market_data`。回测按原键查询和集成读取使用同一产品权限检查。受限行情产品权限已定义，数据端点、流、缓存和深链由后续 W2/U 系列接入。
+
+## 集成配置
+
+所有集成接口需要管理员权限，路径参数 ID 采用 UUID。
+
+| 方法与路径 | 请求及响应 |
+| --- | --- |
+| GET /api/v1/integrations/catalog | 200 返回 connector、产品、授权类型、允许字段和标的、文件类型、测试方式与可用状态、费用类别、自动回补能力 |
+| GET /api/v1/integrations | 200 返回配置列表，含 `revision`、`latest`、可空的 `active` 和 `last_test_id` |
+| POST /api/v1/integrations | 提交 `{"connector":"binance_spot","settings":{"symbol":"BTCUSDT"}}`，201 建立草稿 |
+| PATCH /api/v1/integrations/{id} | 提交 `{"action":"configure","settings":{"symbol":"ETHUSDT"}}` 新建草稿，或提交 `{"action":"disable"}` 停用集成。返回 200 |
+| PUT /api/v1/integrations/{id}/credential | 仅对要求凭据的 catalog 条目提交 `{"api_token":"…"}`，200 返回新草稿及固定掩码、版本和轮换时间 |
+| DELETE /api/v1/integrations/{id}/credential | 请求体为空。200 返回无凭据的草稿，并吊销此集成已有的凭据，停用依赖这些凭据的活动版本 |
+| POST /api/v1/integrations/{id}/tests | 请求体为空且无查询参数。将草稿提为候选并记录连接测试，返回 202 和测试记录 |
+| GET /api/v1/integration-tests/{id} | 200 返回测试所属配置版本、起止时间及状态 `pending`、`passed`、`failed`、`unavailable` 或 `superseded` |
+
+更新、吊销和发起测试需要 `If-Match: "1"` 形式的当前配置 revision。缺失返回 428，格式错误返回 422，旧版本或状态冲突返回 409。返回单个配置对象的写接口提供对应的 ETag。请求超时后先重新读取配置，核对 revision、版本和最近测试 ID，再决定是否重试。替换候选或从最新 revision 发起新的测试时，原待定测试会被标记为 `superseded`。
+
+catalog 的公共来源覆盖 Binance Spot、Binance USDⓈ-M、Hyperliquid Perp，另有受授权的期权占位。配置只接收 catalog 各条目的标的枚举。凭据仅接收 16 至 4096 字节的 ASCII token。服务器路径、任意测试目标、`.env` 导入和证书文件上传当前均不接受。凭据服务未配置或存储失败时返回 503。响应、日志和错误不含凭据原文，请求正文不写入日志。
+
+W1 的连接测试适配器会将合法候选标记为 `unavailable`，缺少必需凭据的候选标记为 `failed`。测试成功才在同一个数据库事务中退役原版本并提升候选，失败保留原活动版本。真实连接验证、数据流、自选列表与通知分别由后续 W2/F、U 和 W3 阶段接入。

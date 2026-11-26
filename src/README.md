@@ -5,3 +5,5 @@
 [finance_client](finance_client/README.md) 从 finance OpenAPI 生成；[static](static/README.md) 托管 frontend 产物；[openapi](openapi/README.md) 汇总导出。启动组装见 [startup](startup/README.md)，请求日志见 [telemetry](telemetry/README.md)，不在 handler 混入配置和连接池初始化。请求流与依赖方向见 [架构](../docs/architecture.md)。
 
 数据库生命周期见 database.rs，finance 探测见 finance.rs。
+
+[integrations.rs](integrations.rs) 管理集成 catalog 和 HTTP 契约，[store.rs](integrations/store.rs) 负责版本、测试、启停与审计事务，[credentials.rs](credentials.rs) 封装和持久化密文。

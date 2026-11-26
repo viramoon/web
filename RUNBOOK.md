@@ -40,7 +40,7 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 | 回滚 | 确认数据库向后兼容，按 fertile 指针组合恢复上一套 web 二进制、配置和静态目录。必要时先在独立库演练恢复 |
 | 本地接口正常、公网失败 | 由 Ruler 核对 https://fertile.viramoon.com 的 DNS、Tunnel 路由与外部可达性。web 源站使用 127.0.0.1:8090 |
 
-按照请求的 X-Request-Id 查找标准错误的 JSON 日志，可看到状态、方法、路径与耗时。发行与回滚由 fertile 管理。
+按照请求的 X-Request-Id 查找标准错误的 JSON 日志，可看到状态、方法、匹配的路由模板与耗时。发行与回滚由 fertile 管理。
 
 ## finance 转发及恢复
 
@@ -85,8 +85,24 @@ id=$(submit | jq -er .id)
 curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 ```
 
-已启用写权限时，无效或缺少 Bearer token 返回 401。请根据 429 响应的 Retry-After 等待窗口释放。相同 key、不同参数会被 finance 以 409 拒绝。超时返回 504，重新提交要保留 key 和原始请求。请求日志可按 X-Request-Id 关联，凭据只在读取 secret 和验证 Authorization 时使用。
+已启用写权限时，无有效管理员凭据的写请求返回 401。请根据 429 响应的 Retry-After 等待窗口释放。相同 key、不同参数会被 finance 以 409 拒绝。超时返回 504，先用原 key 查询，重试时沿用 key 和原始请求。请求日志可按 X-Request-Id 关联。
+
+## 启用浏览器管理会话
+
+在 HTTPS 入口的 web 进程环境设置 `WEB_PUBLIC_ORIGIN`，如 `https://fertile.viramoon.com`。Origin 包含协议、主机和非默认端口，省略尾部斜杠。保留 `WEB_ADMIN_TOKEN_FILE` 供会话登录和脚本鉴权。可用 `WEB_ADMIN_SESSION_TTL_SECONDS` 设置 1 至 900 秒的会话期限，默认 900 秒。
+
+浏览器以 Bearer 登录并接收 HttpOnly Cookie。页面使用返回的 CSRF token 执行同源写入，可从能力接口恢复 CSRF token。退出立即撤销该会话。管理 Bearer 轮换或进程重启后，浏览器重新登录。W1 的会话状态保存在单个 web 进程中。
+
+## 集成配置及凭据
+
+启用凭据录入时，成对设置 `WEB_CREDENTIAL_DIR` 与 `WEB_CREDENTIAL_RECIPIENT_PUBLIC_KEY_FILE`，然后重启 web。前者是 web 运行身份所有的 0700 持久绝对目录，置于静态资源树之外，使用支持原子重命名和目录同步的本地文件系统。后者是受部署保护的 RSA 公钥 PEM 绝对路径，采用 `BEGIN PUBLIC KEY`，RSA 长度 2048 至 8192 位。公钥由 web 运行身份或 root 所有，组与其他用户不得写入。由获授权的接收方保管私钥，仅将对应公钥交给 web。未配置这两个变量时，凭据写接口返回 503，管理和公共接口可照常使用。
+
+web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。0600 密文文件命名为 `<凭据 UUID>.jwe`，受保护头含 `credential_id` 及 `kid`。后者是公钥 DER SPKI 的 SHA-256，经 base64url 编码且省略填充。数据库文件引用应与头中的 UUID 一致。消费者的凭据交付将在对应集成接入时配置，使用独立的运行身份或受控交付路径。
+
+密文先写入持久目录，再提交 PostgreSQL 引用。数据库事务取消或提交结果不明后可能留下无引用密文。备份时保留配套的 PostgreSQL、密文目录及对应接收方私钥。轮换接收方公钥后，新录入的凭据使用新密钥，旧密文继续依赖其 `kid` 对应的私钥。清理时暂停凭据写入，与 PostgreSQL 中的全部引用、历史保留和备份核对后，再删除确认无引用的文件。接口吊销凭据会更新 PostgreSQL 中的可用状态，并保留历史密文供审计和备份。
+
+W1 catalog 允许按标的创建草稿。连接测试记录失败或不可用，保留原活动版本。更新请求超时后先读配置 revision 和最近测试 ID。W1 不需要修改端口或新增守护进程。部署前执行 `web migrate`，再启动新 web 进程。需要回到 W1 前的二进制时，保留已迁移的数据库和密文，并设置 `WEB_AUTO_MIGRATE=false`。
 
 ## 历史回测与提交确认
 
-回测页从 /api/v1/backtests/datasets 读取已审核的历史标的。配置数据后提交 SmaCrossover，并在工作台查看作业状态和历史结果。POST 超时或连接中断后，使用原 bearer 与 Idempotency-Key 请求 GET /api/v1/backtests/by-key；若查到 ID，继续轮询该作业。只有明确返回 404 后才允许带原请求、原键重试。提交和确认时从页面临时输入令牌，日志中仅记录路径、状态和请求 ID。
+回测页从 /api/v1/backtests/datasets 读取已审核的历史标的。配置数据后提交 SmaCrossover，并在工作台查看作业状态和历史结果。POST 超时或连接中断后，使用管理员身份和原 Idempotency-Key 请求 GET /api/v1/backtests/by-key。若查到 ID，继续轮询该作业。只有明确返回 404 后才允许带原请求及原键重试。
