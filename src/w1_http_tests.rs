@@ -22,6 +22,11 @@ const CSRF_HEADER: &str = "x-csrf-token";
 const MAX_BODY_BYTES: usize = 512;
 
 fn test_app() -> (Router, HeaderValue, tempfile::TempDir) {
+    let (state, authorization, directory) = test_state();
+    (router(state), authorization, directory)
+}
+
+fn test_state() -> (AppState, HeaderValue, tempfile::TempDir) {
     let directory = tempfile::tempdir_in("/tmp").unwrap();
     let token_path = directory.path().join("web.env");
     let token = Uuid::new_v4().to_string();
@@ -69,17 +74,17 @@ fn test_app() -> (Router, HeaderValue, tempfile::TempDir) {
         Duration::from_secs(1),
     )
     .unwrap();
-    let app = router(AppState {
+    let state = AppState {
         db,
         finance: Finance::new(&config.finance).unwrap(),
         config: Arc::new(config),
         write_access,
         credential_store: None,
         started_at: Utc::now(),
-    });
+    };
     let mut authorization = HeaderValue::from_str(&format!("Bearer {token}")).unwrap();
     authorization.set_sensitive(true);
-    (app, authorization, directory)
+    (state, authorization, directory)
 }
 
 async fn send(app: &Router, builder: Builder, body: impl Into<Body>) -> Response {
@@ -520,4 +525,84 @@ async fn credential_errors_and_http_logs_do_not_echo_request_secrets() {
     let captured = std::fs::read_to_string(logs.path()).unwrap();
     assert!(captured.contains("/api/v1/integrations/{id}/credential"));
     assert!(!captured.contains(&secret) && !captured.contains(token));
+}
+
+#[tokio::test]
+async fn production_trace_omits_request_and_panic_payloads() {
+    const CHILD: &str = "WEB_WG_TRACE_TEST_CHILD";
+    const MARKER: &str = "synthetic-private-wg23";
+    const QUOTE: &str =
+        r#"{"open":"1.23567890","high":"2.45000000","low":"1.20000000","close":"1.25000000"}"#;
+    if std::env::var_os(CHILD).is_none() {
+        // The production subscriber and panic hook are process-wide.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "w1_http_tests::production_trace_omits_request_and_panic_payloads",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("RUST_LOG", "trace")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success() && stdout.contains("1 passed"));
+        for secret in [MARKER, "1.23567890", "2.45000000"] {
+            assert!(!stdout.contains(secret) && !stderr.contains(secret));
+        }
+        let events: Vec<Value> = stderr
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("expected a structured log"))
+            .collect();
+        assert!(events.iter().any(|event| {
+            event["span"]["method"] == "OTHER"
+                && event["span"]["path"] == "/probe/{id}"
+                && event["fields"]["status"] == 405
+        }));
+        assert!(events.iter().any(|event| {
+            event["span"]["request_id"] == "12345678-1234-4234-9234-123456789abc"
+                && event["span"]["method"] == "POST"
+                && event["fields"]["status"] == 500
+        }));
+        assert!(
+            events
+                .iter()
+                .any(|event| { event["fields"]["message"] == "process panicked" })
+        );
+        return;
+    }
+
+    crate::telemetry::init();
+    let (state, _admin, _fixture) = test_state();
+    async fn panic_with_body(body: String) -> StatusCode {
+        tracing::trace!(target: "hyper::incoming", "{body}");
+        std::panic::panic_any(body)
+    }
+    let app = crate::with_controls(
+        Router::new().route("/probe/{id}", axum::routing::post(panic_with_body)),
+        state,
+    );
+    let target = format!("/probe/{MARKER}?marker={MARKER}");
+    let response = send(
+        &app,
+        Request::builder().method(MARKER).uri(&target),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    let response = send(
+        &app,
+        Request::post(&target)
+            .header(header::AUTHORIZATION, format!("Bearer {MARKER}"))
+            .header(header::COOKIE, format!("session={MARKER}"))
+            .header("x-request-id", "12345678-1234-4234-9234-123456789abc"),
+        QUOTE,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        response_json(response).await["error"]["code"],
+        "internal_error"
+    );
 }
