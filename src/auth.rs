@@ -1,9 +1,12 @@
-//! A single locally provisioned bearer credential for writes. No token is sent upstream.
-use crate::{api_error, config::ConfigError};
+//! A single locally provisioned administrator, with optional browser sessions.
+use crate::{AppState, ErrorBody, api_error, config::ConfigError};
 use axum::{
+    Json,
+    extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
@@ -15,14 +18,226 @@ use std::{
     time::{Duration, Instant},
 };
 use subtle::ConstantTimeEq;
+use url::Url;
+use utoipa::ToSchema;
+use uuid::Uuid;
 
 #[derive(Clone)]
-pub struct WriteAccess(Arc<Policy>);
+pub struct WriteAccess {
+    bearer: Arc<Policy>,
+    sessions: Option<Arc<Sessions>>,
+}
+
 struct Policy {
     digest: Option<[u8; 32]>,
     limit: usize,
     window: Duration,
     accepted: Mutex<VecDeque<Instant>>,
+}
+
+pub const SESSION_COOKIE_NAME: &str = "__Host-web_admin_session";
+const MAX_SESSIONS: usize = 64;
+const CSRF_HEADER: header::HeaderName = header::HeaderName::from_static("x-csrf-token");
+
+struct Sessions {
+    origin: HeaderValue,
+    ttl: Duration,
+    entries: Mutex<VecDeque<Session>>,
+}
+
+struct Session {
+    token_digest: [u8; 32],
+    csrf_token: Arc<str>,
+    expires_at: Instant,
+}
+
+enum Identity {
+    Bearer,
+    Session(Arc<str>),
+}
+
+#[derive(Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Product {
+    System,
+    Backtests,
+    MarketStatus,
+    BacktestSubmission,
+    Integrations,
+    RestrictedMarketData,
+}
+
+impl Product {
+    const ALL: [Self; 6] = [
+        Self::System,
+        Self::Backtests,
+        Self::MarketStatus,
+        Self::BacktestSubmission,
+        Self::Integrations,
+        Self::RestrictedMarketData,
+    ];
+
+    fn readable_by(self, subject: Subject) -> bool {
+        match self {
+            Self::System | Self::Backtests | Self::MarketStatus => true,
+            Self::BacktestSubmission | Self::Integrations | Self::RestrictedMarketData => {
+                matches!(subject, Subject::Admin)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+enum Subject {
+    Anonymous,
+    Admin,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct Capabilities {
+    subject: Subject,
+    products: Vec<Product>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    csrf_token: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct SessionCreated {
+    csrf_token: String,
+    /// Remaining lifetime of the new session in seconds.
+    expires_in: u64,
+}
+
+fn session_origin(origin: Option<&str>, ttl: Duration) -> Result<Option<HeaderValue>, ConfigError> {
+    if !(1..=900).contains(&ttl.as_secs()) || ttl.subsec_nanos() != 0 {
+        return Err("session lifetime must be between 1 and 900 whole seconds".into());
+    }
+    origin
+        .map(|origin| {
+            let url = Url::parse(origin).map_err(|_| "invalid administrator session origin")?;
+            if url.scheme() != "https" || url.origin().ascii_serialization() != origin {
+                return Err("administrator session origin must be a canonical HTTPS origin".into());
+            }
+            Ok(HeaderValue::from_str(origin)?)
+        })
+        .transpose()
+}
+
+pub fn validate_session_settings(origin: Option<&str>, ttl: Duration) -> Result<(), ConfigError> {
+    session_origin(origin, ttl).map(|_| ())
+}
+
+fn unique_header(headers: &HeaderMap, name: header::HeaderName) -> Option<&HeaderValue> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next()?;
+    values.next().is_none().then_some(value)
+}
+
+fn cookie_digest(headers: &HeaderMap) -> Option<[u8; 32]> {
+    let mut token = None;
+    for value in headers.get_all(header::COOKIE) {
+        for cookie in value.to_str().ok()?.split(';') {
+            let Some((name, value)) = cookie.trim().split_once('=') else {
+                continue;
+            };
+            if name == SESSION_COOKIE_NAME {
+                if token.is_some()
+                    || value.len() != 64
+                    || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                {
+                    return None;
+                }
+                token = Some(value);
+            }
+        }
+    }
+    token.map(|value| Sha256::digest(value.as_bytes()).into())
+}
+
+fn random_token() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+fn session_cookie(token: &str, max_age: u64) -> HeaderValue {
+    let mut cookie = HeaderValue::from_str(&format!(
+        "{SESSION_COOKIE_NAME}={token}; Path=/; Max-Age={max_age}; HttpOnly; Secure; SameSite=Strict"
+    ))
+    .expect("session cookie uses only ASCII");
+    cookie.set_sensitive(true);
+    cookie
+}
+
+impl Sessions {
+    fn check_origin(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+        if unique_header(headers, header::ORIGIN) != Some(&self.origin) {
+            return Err(WriteDenied::OriginRejected);
+        }
+        Ok(())
+    }
+
+    fn read(&self, digest: &[u8; 32]) -> Result<Arc<str>, WriteDenied> {
+        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        entries
+            .iter()
+            .find(|entry| {
+                bool::from(entry.token_digest.ct_eq(digest)) && Instant::now() < entry.expires_at
+            })
+            .map(|entry| Arc::clone(&entry.csrf_token))
+            .ok_or(WriteDenied::SessionUnauthorized)
+    }
+
+    fn check_csrf(&self, headers: &HeaderMap, expected: &str) -> Result<(), WriteDenied> {
+        self.check_origin(headers)?;
+        if !unique_header(headers, CSRF_HEADER)
+            .is_some_and(|value| bool::from(expected.as_bytes().ct_eq(value.as_bytes())))
+        {
+            return Err(WriteDenied::CsrfRejected);
+        }
+        Ok(())
+    }
+
+    fn create(&self, previous: Option<[u8; 32]>) -> (String, SessionCreated) {
+        let token = random_token();
+        let csrf_token = random_token();
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        entries.retain(|entry| {
+            now < entry.expires_at
+                && !previous.is_some_and(|previous| bool::from(entry.token_digest.ct_eq(&previous)))
+        });
+        if entries.len() == MAX_SESSIONS {
+            entries.pop_front();
+        }
+        entries.push_back(Session {
+            token_digest: Sha256::digest(token.as_bytes()).into(),
+            csrf_token: Arc::from(csrf_token.as_str()),
+            expires_at: now + self.ttl,
+        });
+        (
+            token,
+            SessionCreated {
+                csrf_token,
+                expires_in: self.ttl.as_secs(),
+            },
+        )
+    }
+
+    fn verify_deletion(&self, headers: &HeaderMap) -> Result<[u8; 32], WriteDenied> {
+        let digest = cookie_digest(headers).ok_or(WriteDenied::SessionUnauthorized)?;
+        let csrf = self.read(&digest)?;
+        self.check_csrf(headers, &csrf)?;
+        Ok(digest)
+    }
+
+    fn delete(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+        let digest = self.verify_deletion(headers)?;
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|entry| !bool::from(entry.token_digest.ct_eq(&digest)));
+        Ok(())
+    }
 }
 
 fn load_digest(path: &Path) -> Result<Option<[u8; 32]>, ConfigError> {
@@ -71,6 +286,10 @@ fn load_digest(path: &Path) -> Result<Option<[u8; 32]>, ConfigError> {
 pub enum WriteDenied {
     Disabled,
     Unauthorized,
+    SessionDisabled,
+    SessionUnauthorized,
+    OriginRejected,
+    CsrfRejected,
     RateLimited(u64),
 }
 impl IntoResponse for WriteDenied {
@@ -92,6 +311,26 @@ impl IntoResponse for WriteDenied {
                     .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
                 response
             }
+            Self::SessionDisabled => api_error(
+                StatusCode::FORBIDDEN,
+                "sessions_disabled",
+                "Administrator sessions are disabled",
+            ),
+            Self::SessionUnauthorized => api_error(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "A valid administrator session is required",
+            ),
+            Self::OriginRejected => api_error(
+                StatusCode::FORBIDDEN,
+                "origin_rejected",
+                "Request origin is not allowed",
+            ),
+            Self::CsrfRejected => api_error(
+                StatusCode::FORBIDDEN,
+                "csrf_rejected",
+                "A valid CSRF token is required",
+            ),
             Self::RateLimited(seconds) => {
                 let mut response = api_error(
                     StatusCode::TOO_MANY_REQUESTS,
@@ -111,40 +350,109 @@ impl WriteAccess {
         if max_requests == 0 || window.is_zero() {
             return Err("write rate limit and window must be positive".into());
         }
-        Ok(Self(Arc::new(Policy {
-            digest: load_digest(path)?,
-            limit: max_requests as usize,
-            window,
-            accepted: Mutex::new(VecDeque::new()),
-        })))
+        Ok(Self {
+            bearer: Arc::new(Policy {
+                digest: load_digest(path)?,
+                limit: max_requests as usize,
+                window,
+                accepted: Mutex::new(VecDeque::new()),
+            }),
+            sessions: None,
+        })
     }
 
-    pub fn authenticate(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
-        let policy = &self.0;
-        let Some(expected) = &policy.digest else {
+    pub fn with_sessions(
+        mut self,
+        origin: Option<&str>,
+        ttl: Duration,
+    ) -> Result<Self, ConfigError> {
+        self.sessions = session_origin(origin, ttl)?.map(|origin| {
+            Arc::new(Sessions {
+                origin,
+                ttl,
+                entries: Mutex::new(VecDeque::new()),
+            })
+        });
+        Ok(self)
+    }
+
+    fn authenticate_bearer(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+        let Some(expected) = &self.bearer.digest else {
             return Err(WriteDenied::Disabled);
         };
-        let mut values = headers.get_all(header::AUTHORIZATION).iter();
-        let token = values
-            .next()
+        let token = unique_header(headers, header::AUTHORIZATION)
             .and_then(|h| h.to_str().ok())
             .and_then(|h| h.split_once(' '))
             .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
             .map(|(_, token)| token.trim_start_matches(' '));
-        if values.next().is_some()
-            || !token.is_some_and(|token| {
-                let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-                bool::from(expected.ct_eq(&candidate))
-            })
-        {
+        if !token.is_some_and(|token| {
+            let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+            bool::from(expected.ct_eq(&candidate))
+        }) {
             return Err(WriteDenied::Unauthorized);
         }
         Ok(())
     }
 
+    fn identity(&self, headers: &HeaderMap) -> Result<Identity, WriteDenied> {
+        if !headers.contains_key(header::AUTHORIZATION)
+            && let (Some(sessions), Some(digest)) = (&self.sessions, cookie_digest(headers))
+        {
+            return sessions.read(&digest).map(Identity::Session);
+        }
+        self.authenticate_bearer(headers)?;
+        Ok(Identity::Bearer)
+    }
+
+    pub fn authenticate(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+        self.identity(headers).map(|_| ())
+    }
+
+    pub fn check_read(&self, headers: &HeaderMap, product: Product) -> Result<(), WriteDenied> {
+        if product.readable_by(Subject::Anonymous) {
+            return Ok(());
+        }
+        self.authenticate(headers)
+    }
+
     pub fn authorize(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
-        self.authenticate(headers)?;
-        let policy = &self.0;
+        self.authorize_write(headers, false)
+    }
+
+    pub fn authorize_same_origin(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+        self.authorize_write(headers, true)
+    }
+
+    pub(crate) fn check_session_creation(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+        self.authenticate_bearer(headers)?;
+        self.session_policy()?.check_origin(headers)
+    }
+
+    pub(crate) fn check_session_deletion(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+        self.session_policy()?.verify_deletion(headers).map(|_| ())
+    }
+
+    fn authorize_write(
+        &self,
+        headers: &HeaderMap,
+        check_bearer_origin: bool,
+    ) -> Result<(), WriteDenied> {
+        match self.identity(headers)? {
+            Identity::Session(csrf) => self.session_policy()?.check_csrf(headers, &csrf)?,
+            Identity::Bearer if check_bearer_origin && headers.contains_key(header::ORIGIN) => {
+                self.session_policy()?.check_origin(headers)?;
+            }
+            Identity::Bearer => {}
+        }
+        self.consume_write_quota()
+    }
+
+    fn session_policy(&self) -> Result<&Sessions, WriteDenied> {
+        self.sessions.as_deref().ok_or(WriteDenied::SessionDisabled)
+    }
+
+    fn consume_write_quota(&self) -> Result<(), WriteDenied> {
+        let policy = &self.bearer;
         // Only the provisioned credential owns this queue. Network addresses and
         // caller-controlled forwarding headers cannot create additional buckets.
         let mut accepted = policy.accepted.lock().unwrap_or_else(|e| e.into_inner());
@@ -167,10 +475,201 @@ impl WriteAccess {
     }
 }
 
+#[utoipa::path(post, path = "/api/v1/admin/session", security(("adminBearer" = [])),
+    params(("Origin" = String, Header, description="Configured HTTPS origin")),
+    responses((status=201, body=SessionCreated,
+        headers(("Set-Cookie" = String, description="HttpOnly, Secure, SameSite=Strict session cookie"))),
+        (status=401, body=ErrorBody), (status=403, body=ErrorBody), (status=413, body=ErrorBody),
+        (status=429, body=ErrorBody)))]
+pub(crate) async fn create_session(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, WriteDenied> {
+    let access = &s.write_access;
+    access.check_session_creation(&headers)?;
+    let sessions = access.session_policy()?;
+    access.consume_write_quota()?;
+    let (token, created) = sessions.create(cookie_digest(&headers));
+    let cookie = session_cookie(&token, created.expires_in);
+    Ok((
+        StatusCode::CREATED,
+        [(header::SET_COOKIE, cookie)],
+        Json(created),
+    )
+        .into_response())
+}
+
+#[utoipa::path(delete, path = "/api/v1/admin/session", security(("adminSession" = [])),
+    params(("Origin" = String, Header, description="Configured HTTPS origin"),
+        ("X-CSRF-Token" = String, Header, description="Token for the administrator session")),
+    responses((status=204, headers(("Set-Cookie" = String, description="Expires the session cookie"))),
+        (status=401, body=ErrorBody), (status=403, body=ErrorBody), (status=413, body=ErrorBody)))]
+pub(crate) async fn delete_session(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, WriteDenied> {
+    s.write_access.session_policy()?.delete(&headers)?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, session_cookie("", 0))],
+    )
+        .into_response())
+}
+
+#[utoipa::path(get, path = "/api/v1/me/capabilities",
+    security((), ("adminBearer" = []), ("adminSession" = [])),
+    responses((status=200, body=Capabilities)))]
+pub(crate) async fn capabilities(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Json<Capabilities> {
+    let (subject, csrf_token) = match s.write_access.identity(&headers) {
+        Ok(Identity::Session(token)) => (Subject::Admin, Some(token.to_string())),
+        Ok(Identity::Bearer) => (Subject::Admin, None),
+        Err(_) => (Subject::Anonymous, None),
+    };
+    Json(Capabilities {
+        subject,
+        csrf_token,
+        products: Product::ALL
+            .into_iter()
+            .filter(|product| product.readable_by(subject))
+            .collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{fs, io::Write, os::unix::fs::symlink};
+
+    const ORIGIN: &str = "https://web.example.test";
+
+    #[test]
+    fn session_configuration_requires_canonical_origin_and_short_lifetime() {
+        for invalid in [
+            "http://web.example.test",
+            "https://web.example.test/",
+            "https://web.example.test:443",
+            "https://web.example.test/path",
+            "https://web.example.test?query",
+            "https://web.example.test#fragment",
+            "https://user@web.example.test",
+            "https://WEB.example.test",
+            "null",
+        ] {
+            assert!(validate_session_settings(Some(invalid), Duration::from_secs(300)).is_err());
+        }
+        assert!(validate_session_settings(Some(ORIGIN), Duration::from_secs(900)).is_ok());
+        for invalid in [
+            Duration::ZERO,
+            Duration::from_millis(1_500),
+            Duration::from_secs(901),
+        ] {
+            assert!(validate_session_settings(Some(ORIGIN), invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn browser_session_requires_unique_origin_and_csrf_and_expires_server_side() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("web.env");
+        let bearer = Uuid::new_v4().to_string();
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap()
+            .write_all(format!("WEB_ADMIN_TOKEN={bearer}").as_bytes())
+            .unwrap();
+        let access = WriteAccess::load(&path, 10, Duration::from_secs(60))
+            .unwrap()
+            .with_sessions(Some(ORIGIN), Duration::from_secs(300))
+            .unwrap();
+        let sessions = access.session_policy().ok().unwrap();
+        let (token, created) = sessions.create(None);
+        let cookie_value =
+            HeaderValue::from_str(&format!("{SESSION_COOKIE_NAME}={token}")).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, cookie_value.clone());
+        assert!(
+            access
+                .check_read(&headers, Product::RestrictedMarketData)
+                .is_ok()
+        );
+        assert!(matches!(
+            access.authorize(&headers),
+            Err(WriteDenied::OriginRejected)
+        ));
+        headers.insert(header::ORIGIN, HeaderValue::from_static(ORIGIN));
+        assert!(matches!(
+            access.authorize(&headers),
+            Err(WriteDenied::CsrfRejected)
+        ));
+        let csrf = HeaderValue::from_str(&created.csrf_token).unwrap();
+        headers.insert(CSRF_HEADER, csrf.clone());
+        headers.append(header::ORIGIN, HeaderValue::from_static(ORIGIN));
+        assert!(matches!(
+            access.authorize(&headers),
+            Err(WriteDenied::OriginRejected)
+        ));
+        headers.insert(header::ORIGIN, HeaderValue::from_static(ORIGIN));
+        headers.append(CSRF_HEADER, csrf);
+        assert!(matches!(
+            access.authorize(&headers),
+            Err(WriteDenied::CsrfRejected)
+        ));
+        headers.insert(
+            CSRF_HEADER,
+            HeaderValue::from_str(&created.csrf_token).unwrap(),
+        );
+        assert!(access.authorize(&headers).is_ok());
+
+        headers.append(header::COOKIE, cookie_value.clone());
+        assert!(matches!(
+            access.check_read(&headers, Product::Integrations),
+            Err(WriteDenied::Unauthorized)
+        ));
+        headers.insert(header::COOKIE, cookie_value);
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer invalid"),
+        );
+        assert!(matches!(
+            access.check_read(&headers, Product::Integrations),
+            Err(WriteDenied::Unauthorized)
+        ));
+        headers.remove(header::AUTHORIZATION);
+        sessions
+            .entries
+            .lock()
+            .unwrap()
+            .front_mut()
+            .unwrap()
+            .expires_at = Instant::now();
+        assert!(matches!(
+            access.check_read(&headers, Product::Integrations),
+            Err(WriteDenied::SessionUnauthorized)
+        ));
+
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {bearer}")).unwrap(),
+        );
+        headers.remove(header::ORIGIN);
+        assert!(access.authorize_same_origin(&headers).is_ok());
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://other.example.test"),
+        );
+        assert!(matches!(
+            access.authorize_same_origin(&headers),
+            Err(WriteDenied::OriginRejected)
+        ));
+        assert!(access.authorize(&headers).is_ok());
+    }
+
     #[test]
     fn secret_file_rejects_wrong_mode_symlinks_and_ambiguous_assignments() {
         let dir = tempfile::tempdir().unwrap();

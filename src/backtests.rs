@@ -66,8 +66,10 @@ fn lookup_key(headers: &HeaderMap) -> Option<&str> {
     })
 }
 
-#[utoipa::path(post, path = "/api/v1/backtests", security(("adminBearer" = [])),
-    params(("Idempotency-Key" = String, Header, description="Stable key, 1..128 visible ASCII characters")),
+#[utoipa::path(post, path = "/api/v1/backtests", security(("adminBearer" = []), ("adminSession" = [])),
+    params(("Idempotency-Key" = String, Header, description="Stable key, 1..128 visible ASCII characters"),
+        ("Origin" = Option<String>, Header, description="Configured HTTPS origin with the session cookie"),
+        ("X-CSRF-Token" = Option<String>, Header, description="Required with the session cookie")),
     request_body = ref("#/components/schemas/JobRequest"),
     responses((status=202,body=ref("#/components/schemas/Accepted")), (status=401,body=ErrorBody),
     (status=403,body=ErrorBody),(status=409,body=ErrorBody),(status=413,body=ErrorBody),
@@ -102,7 +104,7 @@ pub(crate) async fn submit(
     }
 }
 
-#[utoipa::path(get, path = "/api/v1/backtests/by-key", security(("adminBearer" = [])),
+#[utoipa::path(get, path = "/api/v1/backtests/by-key", security(("adminBearer" = []), ("adminSession" = [])),
     params(("Idempotency-Key" = String, Header, description="Exact attempted submission key")),
     responses((status=200,body=ref("#/components/schemas/Accepted")),(status=401,body=ErrorBody),
     (status=403,body=ErrorBody),(status=404,body=ErrorBody),(status=422,body=ErrorBody),

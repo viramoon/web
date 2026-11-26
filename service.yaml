@@ -12,6 +12,10 @@ environment:
   FINANCE_BASE_URL: http://127.0.0.1:8081
   WEB_REQUIRE_FINANCE: false
   DATABASE_URL: 由部署环境传入，仅引用受控配置
+  WEB_PUBLIC_ORIGIN: 可选，浏览器管理会话使用的规范 HTTPS origin
+  WEB_ADMIN_SESSION_TTL_SECONDS: 900
+  WEB_CREDENTIAL_DIR: 可选，web 所有且权限为 0700 的持久化绝对目录
+  WEB_CREDENTIAL_RECIPIENT_PUBLIC_KEY_FILE: 可选，与 WEB_CREDENTIAL_DIR 成对设置的 RSA 公钥 PEM 绝对路径
 finance_http:
   config_section: finance
   cloudbox: {connect_timeout_ms: 3000, request_timeout_ms: 3000, backoff_ms: 150, circuit_failure_threshold: 3, circuit_open_ms: 10000}
@@ -49,4 +53,9 @@ write_access:
   secret_key: WEB_ADMIN_TOKEN
   mode: "0600"
   missing_file: writes_disabled_403
-  rate_limit: {max_requests: 10, window_ms: 60000, identity: authenticated_token}
+  session:
+    cookie: __Host-web_admin_session
+    attributes: [HttpOnly, Secure, SameSite=Strict, Path=/]
+    csrf_header: X-CSRF-Token
+    lifetime_seconds: 900
+  rate_limit: {max_requests: 10, window_ms: 60000, identity: single_admin}

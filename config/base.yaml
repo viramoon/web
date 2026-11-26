@@ -25,3 +25,8 @@ security:
   admin_token_file: /home/box/fertile/secrets/web.env
   max_requests: 10
   window_ms: 60000
+  public_origin: null
+  session_ttl_seconds: 900
+credentials:
+  directory: null
+  recipient_public_key_file: null

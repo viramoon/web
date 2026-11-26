@@ -9,6 +9,7 @@ use tracing_subscriber::EnvFilter;
 use web::{
     AppState,
     config::{ConfigError, Settings},
+    credentials::CredentialStore,
     database::Database,
     finance::Finance,
     openapi, router,
@@ -50,7 +51,28 @@ async fn main() -> Result<(), ConfigError> {
         &s.security.admin_token_file,
         s.security.max_requests,
         Duration::from_millis(s.security.window_ms),
-    )?;
+    )?
+    .with_sessions(s.security.public_origin.as_deref(), s.admin_session_ttl())?;
+    let credential_store = s
+        .credentials
+        .directory
+        .as_deref()
+        .zip(s.credentials.recipient_public_key_file.as_deref())
+        .map(|(dir, key)| -> Result<_, ConfigError> {
+            let static_root = &s.paths.static_root;
+            let resolved_static = static_root.canonicalize();
+            let resolved_dir = dir.canonicalize();
+            if dir.starts_with(static_root)
+                || resolved_static
+                    .ok()
+                    .zip(resolved_dir.ok())
+                    .is_some_and(|(root, credentials)| credentials.starts_with(root))
+            {
+                return Err("credential directory must be outside the static root".into());
+            }
+            Ok(CredentialStore::open(dir, key)?)
+        })
+        .transpose()?;
     let drain_timeout = s.drain_timeout();
     let listener = TcpListener::bind((s.server.bind_host, s.server.port)).await?;
     let mut term = signal(SignalKind::terminate())?;
@@ -62,6 +84,7 @@ async fn main() -> Result<(), ConfigError> {
         db: db.clone(),
         finance,
         write_access,
+        credential_store,
         started_at: Utc::now(),
     };
     tracing::info!(address=%listener.local_addr()?, "listening");

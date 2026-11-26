@@ -19,6 +19,8 @@ pub struct Settings {
     pub finance: FinanceConfig,
     pub paths: Paths,
     pub security: SecurityConfig,
+    #[serde(default)]
+    pub credentials: CredentialConfig,
 }
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +64,20 @@ pub struct SecurityConfig {
     pub admin_token_file: PathBuf,
     pub max_requests: u32,
     pub window_ms: u64,
+    pub public_origin: Option<String>,
+    #[serde(default = "session_ttl_seconds")]
+    pub session_ttl_seconds: u64,
+}
+
+fn session_ttl_seconds() -> u64 {
+    900
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialConfig {
+    pub directory: Option<PathBuf>,
+    pub recipient_public_key_file: Option<PathBuf>,
 }
 
 fn overlay(base: &mut Value, layer: Value) {
@@ -111,6 +127,18 @@ impl Settings {
         if let Some(path) = get("WEB_ADMIN_TOKEN_FILE") {
             cfg.security.admin_token_file = PathBuf::from(path);
         }
+        if let Some(origin) = get("WEB_PUBLIC_ORIGIN") {
+            cfg.security.public_origin = Some(origin);
+        }
+        if let Some(seconds) = get("WEB_ADMIN_SESSION_TTL_SECONDS") {
+            cfg.security.session_ttl_seconds = seconds.parse()?;
+        }
+        if let Some(path) = get("WEB_CREDENTIAL_DIR") {
+            cfg.credentials.directory = Some(PathBuf::from(path));
+        }
+        if let Some(path) = get("WEB_CREDENTIAL_RECIPIENT_PUBLIC_KEY_FILE") {
+            cfg.credentials.recipient_public_key_file = Some(PathBuf::from(path));
+        }
         cfg.validate()?;
         Ok(cfg)
     }
@@ -128,6 +156,18 @@ impl Settings {
             || !(1..=86_400_000).contains(&self.security.window_ms)
         {
             return Err("security requires an absolute secret path, a positive request limit and a window between 1ms and one day".into());
+        }
+        crate::auth::validate_session_settings(
+            self.security.public_origin.as_deref(),
+            self.admin_session_ttl(),
+        )?;
+        match (
+            self.credentials.directory.as_deref(),
+            self.credentials.recipient_public_key_file.as_deref(),
+        ) {
+            (None, None) => {}
+            (Some(dir), Some(key)) if dir.is_absolute() && key.is_absolute() => {}
+            _ => return Err("both credential paths must be configured and absolute".into()),
         }
         for ms in [
             api.request_timeout_ms,
@@ -169,6 +209,10 @@ impl Settings {
     pub fn drain_timeout(&self) -> Duration {
         Duration::from_millis(self.server.shutdown_timeout_ms)
     }
+
+    pub fn admin_session_ttl(&self) -> Duration {
+        Duration::from_secs(self.security.session_ttl_seconds)
+    }
 }
 
 #[cfg(test)]
@@ -200,6 +244,9 @@ mod tests {
             ("DATABASE_URL", "file:///data"),
             ("WEB_STATIC_ROOT", "relative"),
             ("FERTILE_PROFILE", "../escape"),
+            ("WEB_PUBLIC_ORIGIN", "http://example.test"),
+            ("WEB_ADMIN_SESSION_TTL_SECONDS", "901"),
+            ("WEB_CREDENTIAL_DIR", "/tmp/only-one-path"),
         ] {
             assert!(
                 Settings::load(d.path(), |k| if k == key {

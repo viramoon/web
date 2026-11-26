@@ -39,12 +39,20 @@ impl Database {
         })
     }
 
-    async fn connection(&self) -> Result<PoolConnection<Postgres>, sqlx::Error> {
+    pub(crate) async fn connection(&self) -> Result<PoolConnection<Postgres>, sqlx::Error> {
         // A stale idle connection can be replaced during any acquire, so the
         // handshake deadline applies to warm pools as well as cold startups.
         timeout(self.connect_timeout, self.pool.acquire())
             .await
             .map_err(|_| sqlx::Error::PoolTimedOut)?
+    }
+
+    pub(crate) async fn write_connection(&self) -> Result<PoolConnection<Postgres>, sqlx::Error> {
+        let mut connection = self.connection().await?;
+        // A request can be cancelled while BEGIN is still awaiting acknowledgment.
+        // Close this connection on drop so an open transaction cannot reenter the pool.
+        connection.close_on_drop();
+        Ok(connection)
     }
 
     pub async fn migrate(&self) -> Result<(), sqlx::migrate::MigrateError> {
@@ -56,17 +64,22 @@ impl Database {
 
     async fn ready(&self) -> Result<bool, sqlx::Error> {
         let mut connection = self.connection().await?;
-        timeout(
-            self.connect_timeout,
-            sqlx::query_scalar!(
+        timeout(self.connect_timeout, async {
+            let initialized = sqlx::query_scalar!(
                 r#"SELECT (version = 1 AND to_regnamespace('blog') IS NOT NULL) AS "ready!"
                FROM app.schema_info WHERE component = 'web'"#
             )
-            .fetch_optional(&mut *connection),
-        )
+            .fetch_optional(&mut *connection)
+            .await?;
+            if initialized != Some(true) {
+                return Ok(false);
+            }
+            sqlx::query_scalar("SELECT to_regclass('app.integration_configs') IS NOT NULL")
+                .fetch_one(&mut *connection)
+                .await
+        })
         .await
         .map_err(|_| sqlx::Error::PoolTimedOut)?
-        .map(|value| value.unwrap_or(false))
     }
 
     pub fn status(&self) -> DbStatus {
@@ -88,7 +101,7 @@ impl Database {
                 }
                 match self.ready().await {
                     Ok(true) => Ok(()),
-                    Ok(false) => Err("schema version or blog schema missing"),
+                    Ok(false) => Err("required schemas or integration migration missing"),
                     Err(_) => Err("database or schema metadata unavailable"),
                 }
             };
