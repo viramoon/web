@@ -747,13 +747,16 @@ async fn disabling_a_retrying_summary_requeues_only_enabled_members() {
     assert_eq!(fixture.attempts(summary).await, [AttemptOutcome::Transient]);
 
     let editor = RuleEditor::new(&fixture.db, morning);
-    for (rule, revision, enabled) in [
-        (changed_rule, 1, false),
-        (changed_rule, 2, true),
-        (first_rule, 1, false),
-    ] {
-        editor.set_enabled(rule, revision, enabled).await;
-    }
+    let initial_revision = 1;
+    editor
+        .set_enabled(changed_rule, initial_revision, false)
+        .await;
+    editor
+        .set_enabled(changed_rule, initial_revision + 1, true)
+        .await;
+    editor
+        .set_enabled(first_rule, initial_revision, false)
+        .await;
 
     // The only work is the still-enabled member of a now-suppressed summary.
     assert!(!fixture.next(&mail, later(morning, 29)).await);

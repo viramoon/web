@@ -7,9 +7,19 @@ use std::{
 // These inputs are authored synthetic fixtures. No generated payload is sampled
 // from a market source. Commands check the actual argument and byte boundary.
 const STRATEGY: &str = "metadata: {id: example.synthetic, version: '1.0.0'}\n";
-const SYNTHETIC_CSV: &str = "date,open,high,low,close,volume\n\
-    2024-01-02,20.01,20.05,20.00,20.04,123\n\
-    2024-01-03,20.04,20.06,20.02,20.05,456\n";
+
+fn synthetic_csv() -> String {
+    let mut csv = String::new();
+    for row in [
+        ["date", "open", "high", "low", "close", "volume"],
+        ["2024-01-02", "20.01", "20.05", "20.00", "20.04", "123"],
+        ["2024-01-03", "20.04", "20.06", "20.02", "20.05", "456"],
+    ] {
+        csv.push_str(&row.join(","));
+        csv.push('\n');
+    }
+    csv
+}
 
 fn executable(dir: &Path, script: &str) -> std::path::PathBuf {
     let path = dir.join("synthetic-tool");
@@ -105,15 +115,16 @@ async fn research_hashes_the_exact_staged_bytes_and_checks_the_importer_manifest
     let fixture = tempfile::tempdir_in("/tmp").unwrap();
     let manifest = fixture.path().join("manifest.json");
     let csv = fixture.path().join(CSV_NAME);
-    fs::write(&csv, SYNTHETIC_CSV).unwrap();
+    let contents = synthetic_csv();
+    fs::write(&csv, &contents).unwrap();
     let source = "SYNTHETIC_PRIVATE_SOURCE";
     let request = serde_json::json!({
         "license": "synthetic",
-        "dataset": dataset(source, SYNTHETIC_CSV)
+        "dataset": dataset(source, &contents)
     });
     fs::write(&manifest, request.to_string()).unwrap();
     let marker = fixture.path().join("scratch-used");
-    let response = dataset("W4 synthetic preflight", SYNTHETIC_CSV);
+    let response = dataset("W4 synthetic preflight", &contents);
     let script = format!(
         r#"test "$#" = 14
           test "$1 $2 $3 $4" = '-I -B -m fertile_finance.research_catalog'
@@ -127,7 +138,7 @@ async fn research_hashes_the_exact_staged_bytes_and_checks_the_importer_manifest
           printf '%s' "$FERTILE_RESEARCH_ROOT" > '{}'
           printf '%s\n' '{response}' > "$FERTILE_RESEARCH_ROOT/SYNTH.XNYS/dataset.json"
           printf '%s\n' '{response}'"#,
-        sha256(SYNTHETIC_CSV.as_bytes()),
+        sha256(contents.as_bytes()),
         marker.display(),
     );
     let tool = executable(fixture.path(), &script);
@@ -140,7 +151,7 @@ async fn research_hashes_the_exact_staged_bytes_and_checks_the_importer_manifest
     assert!(!output.contains(source));
     assert!(!output.contains(csv.to_str().unwrap()));
     assert!(!Path::new(&fs::read_to_string(marker).unwrap()).exists());
-    assert_eq!(fs::read_to_string(&csv).unwrap(), SYNTHETIC_CSV);
+    assert_eq!(fs::read_to_string(&csv).unwrap(), contents);
 
     let mut wrong_coverage = response;
     wrong_coverage["observations"] = 3.into();
@@ -150,11 +161,8 @@ async fn research_hashes_the_exact_staged_bytes_and_checks_the_importer_manifest
         LocalProbeResult::InvalidProducerResponse
     );
 
-    fs::write(
-        csv,
-        format!("{SYNTHETIC_CSV}2024-01-04,1.00,1.00,1.00,1.00,0\n"),
-    )
-    .unwrap();
+    let extra_row = ["2024-01-04", "1.00", "1.00", "1.00", "1.00", "0"].join(",");
+    fs::write(csv, format!("{contents}{extra_row}\n")).unwrap();
     assert_eq!(
         research(Path::new("/nonexistent/tool"), &manifest)
             .await
@@ -167,12 +175,13 @@ async fn research_hashes_the_exact_staged_bytes_and_checks_the_importer_manifest
 async fn research_validates_permissions_calendar_and_instrument_before_invoking_importer() {
     let fixture = tempfile::tempdir_in("/tmp").unwrap();
     let manifest = fixture.path().join("manifest.json");
+    let contents = synthetic_csv();
     for (field, wrong) in [
         ("data_kind", "historical"),
         ("calendar", "24X7"),
         ("instrument", "../../SYNTH.XNYS"),
     ] {
-        let mut malformed = dataset("Synthetic preflight", SYNTHETIC_CSV);
+        let mut malformed = dataset("Synthetic preflight", &contents);
         malformed[field] = wrong.into();
         fs::write(
             &manifest,

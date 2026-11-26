@@ -216,6 +216,26 @@ sys.exit(data_guard.main())
         self.assert_rejected(result, "oversize")
         self.assert_rejected(result, "blocked-path")
 
+    def test_pr_merge_tip_accepts_constructed_w4_test_inputs(self):
+        paths = (
+            "src/integrations/local_probe/files/tests.rs",
+            "tests/api/notifications_worker.rs",
+        )
+        for path in paths:
+            self.write(path, (ROOT / path).read_bytes())
+        self.git("add", *paths)
+        tree = self.git("write-tree").stdout.decode().strip()
+        feature = self.git("commit-tree", tree, "-p", self.base, "-m",
+                           "Add W4 tests").stdout.decode().strip()
+        # A PR checkout compares its tip to main, not to the feature branch.
+        preview = self.git("commit-tree", tree, "-p", self.base, "-p", feature, "-m",
+                           "Preview merge into main").stdout.decode().strip()
+        self.git("checkout", "--detach", preview)
+        self.assertEqual(self.git("rev-parse", "HEAD^1").stdout.decode().strip(), self.base)
+        self.git("diff", "--check", "origin/main", "HEAD")
+        result = self.guard("--show-paths", "range", "origin/main", "HEAD")
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
     def test_ci_range_validates_rule_schema_in_intermediate_commits(self):
         path = ".data-guard/rules.json"
         original = (self.repo / path).read_bytes()
