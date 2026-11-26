@@ -2,6 +2,8 @@
 
 默认地址为 http://127.0.0.1:8090。每个响应都有 X-Request-Id。调用者传入合法 UUID 时保留，否则服务生成新 UUID。tracing 的 JSON 日志记录请求 ID、HTTP 方法、匹配的路由模板、状态码与耗时。
 
+请求日志使用匹配的模板，未匹配时记录 <unmatched>，自定义方法统一记录 OTHER。请求头、查询参数和正文都留在请求处理边界内。上游错误的 HTTP 响应按下文既有转发规则返回，日志只记录状态和固定错误类别。请求处理 panic 返回 500 与 error.code 为 internal_error 的通用错误。参见[日志、样本与 CI 防护](data-guard.md)。
+
 | GET | 状态与返回值 |
 | --- | --- |
 | /healthz/live | 200，进程可提供 HTTP，status 为 ok |
@@ -13,6 +15,8 @@ OpenAPI 由 handler 注解和输出类型生成。执行下列命令可在不启
     cargo run --locked -q -- export-openapi > openapi/web.openapi.json
 
 CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.openapi.json)逐字节比对。正式集成时将本提交的生成物交给 fertile/contracts/web.openapi.json，再由 frontend 使用 Hey API 生成客户端。生成物只能经导出流程更新。
+
+本仓 CI 在临时目录校验导出内容，校验结果只显示状态。OpenAPI 中的 example、examples 和生成客户端的样例须登记合成来源。生成快照与客户端仍使用各自的既有导出和再生成流程。
 
 路由未命中时，解码后首段为 `api` 或 `healthz` 的路径返回 JSON 404，判断时忽略空段和 `.` 段。错误结构为 `error.code`、`error.message`，日志由 `X-Request-Id` 关联。
 

@@ -6,7 +6,11 @@ on:
 permissions:
   contents: read
 jobs:
+  data-guard:
+    name: Finance client data guard
+    uses: ./.github/workflows/data-guard.yml
   regenerate:
+    needs: data-guard
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -23,6 +27,4 @@ jobs:
           components: rustfmt
       - name: Regenerate from the recorded finance contract
         run: |
-          scripts/gen-finance-client.sh from-snapshot
-          git diff --exit-code -- openapi/ crates/finance-client/
-          test -z "$(git ls-files --others --exclude-standard -- crates/finance-client/)"
+          sh scripts/ci-check.sh finance-client-generation scripts/gen-finance-client.sh --check

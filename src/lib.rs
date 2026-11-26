@@ -9,6 +9,7 @@ mod integrations;
 mod market;
 pub mod notifications;
 mod spa;
+pub mod telemetry;
 #[cfg(test)]
 mod w1_http_tests;
 
@@ -286,7 +287,19 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
             path,
             "/api/v1/backtests/by-key" | "/api/v1/admin/session" | "/api/v1/me/capabilities"
         );
-    let span = tracing::info_span!("http", request_id = %id, method = %req.method(), path);
+    let method = match *req.method() {
+        Method::GET
+        | Method::HEAD
+        | Method::POST
+        | Method::PUT
+        | Method::PATCH
+        | Method::DELETE
+        | Method::OPTIONS
+        | Method::CONNECT
+        | Method::TRACE => req.method().as_str(),
+        _ => "OTHER",
+    };
+    let span = tracing::info_span!("http", request_id = %id, method, path);
     let id = HeaderValue::from_str(&id.to_string()).expect("UUID is valid ASCII");
     req.headers_mut().insert("x-request-id", id.clone());
     async move {

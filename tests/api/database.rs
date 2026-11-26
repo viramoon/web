@@ -21,6 +21,7 @@ impl Drop for Server {
 pub(super) fn web(pg: &Cluster, static_root: &Path, port: u16) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_web"));
     command
+        .env_clear()
         .env("DATABASE_URL", pg.url())
         .env("RUST_LOG", "warn")
         .env("WEB_STATIC_ROOT", static_root)
@@ -37,7 +38,8 @@ pub(super) fn web(pg: &Cluster, static_root: &Path, port: u16) -> Command {
             "WEB_CONFIG_DIR",
             Path::new(env!("CARGO_MANIFEST_DIR")).join("config"),
         )
-        .env("FINANCE_BASE_URL", "http://127.0.0.1:1");
+        .env("FINANCE_BASE_URL", "http://127.0.0.1:1")
+        .env("NO_PROXY", "*");
     command
 }
 
@@ -71,6 +73,7 @@ pub(super) fn http_fixture() -> (TempDir, u16, String, reqwest::Client) {
     let base = format!("http://127.0.0.1:{port}");
     let client = reqwest::Client::builder()
         .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(3))
         .build()
         .unwrap();
