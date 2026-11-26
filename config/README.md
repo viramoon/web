@@ -24,3 +24,5 @@ finance 下的连接与单次请求时限分别为 connect_timeout_ms、request_
 web 自行读取这个 0600 普通文件中的 WEB_ADMIN_TOKEN。文件缺失将关闭写权限。唯一管理员在 security.window_ms（默认 60000ms）滑动窗口内共享 security.max_requests（默认 10）次已认证写请求额度。重启后重新加载 token，并清空会话和限流状态。
 
 WEB_PUBLIC_ORIGIN 须与浏览器 Origin 完全相同，例如 `https://fertile.viramoon.com`，省略尾部斜杠和默认端口。凭据目录与公钥须使用绝对路径。目录和 PEM 的权限以及备份要求见[运行手册](../RUNBOOK.md)。
+
+`web-notifier` 从独立进程环境读取 SMTP 和投递策略，与 web 使用同一 `DATABASE_URL`。配置键、默认值和 SMTP 认证文件要求见[告警与邮件进程](../RUNBOOK.md#告警与邮件进程)。
