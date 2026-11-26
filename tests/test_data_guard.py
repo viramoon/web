@@ -55,6 +55,17 @@ class DataGuardTests(unittest.TestCase):
     def guard(self, *args):
         return self.run_command(sys.executable, "-B", "scripts/data_guard.py", *args)
 
+    def guard_with_review(self, commit, path, check, digest, *args):
+        script = """
+import sys
+from scripts import data_guard
+commit, path, check, digest = sys.argv[1:5]
+data_guard.REVIEWED_HISTORICAL_BLOBS[commit] = {path: (check, digest)}
+del sys.argv[1:5]
+sys.exit(data_guard.main())
+"""
+        return self.run_command(sys.executable, "-B", "-c", script, commit, path, check, digest, *args)
+
     def assert_rejected(self, result, reason):
         self.assertNotEqual(result.returncode, 0)
         output = result.stdout + result.stderr
@@ -205,6 +216,26 @@ class DataGuardTests(unittest.TestCase):
         self.assert_rejected(result, "oversize")
         self.assert_rejected(result, "blocked-path")
 
+    def test_pr_merge_tip_accepts_constructed_w4_test_inputs(self):
+        paths = (
+            "src/integrations/local_probe/files/tests.rs",
+            "tests/api/notifications_worker.rs",
+        )
+        for path in paths:
+            self.write(path, (ROOT / path).read_bytes())
+        self.git("add", *paths)
+        tree = self.git("write-tree").stdout.decode().strip()
+        feature = self.git("commit-tree", tree, "-p", self.base, "-m",
+                           "Add W4 tests").stdout.decode().strip()
+        # A PR checkout compares its tip to main, not to the feature branch.
+        preview = self.git("commit-tree", tree, "-p", self.base, "-p", feature, "-m",
+                           "Preview merge into main").stdout.decode().strip()
+        self.git("checkout", "--detach", preview)
+        self.assertEqual(self.git("rev-parse", "HEAD^1").stdout.decode().strip(), self.base)
+        self.git("diff", "--check", "origin/main", "HEAD")
+        result = self.guard("--show-paths", "range", "origin/main", "HEAD")
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
     def test_ci_range_validates_rule_schema_in_intermediate_commits(self):
         path = ".data-guard/rules.json"
         original = (self.repo / path).read_bytes()
@@ -215,6 +246,62 @@ class DataGuardTests(unittest.TestCase):
         self.git("add", path)
         self.git("-c", "core.hooksPath=" + os.devnull, "commit", "-qm", "Restore valid policy")
         self.assert_rejected(self.guard("range", self.base, "HEAD"), "invalid-rules")
+
+    def test_historical_review_requires_matching_commit_path_and_digest(self):
+        path = "tests/legacy_smtp_source.rs"
+        fixture = "Authorization: Bearer " + MARKER
+        digest = hashlib.sha256(fixture.encode()).hexdigest()
+        self.write(path, fixture)
+        self.git("add", path)
+        self.git("-c", "core.hooksPath=" + os.devnull, "commit", "-qm", "Add historical synthetic bytes")
+        reviewed = self.git("rev-parse", "HEAD").stdout.decode().strip()
+        self.assert_rejected(
+            self.guard_with_review(reviewed, path, "credential-test", digest, "range", self.base, "HEAD"),
+            "credential-material",
+        )
+
+        self.git("rm", path)
+        self.git("commit", "-qm", "Remove historical synthetic bytes from tip")
+        for review_path, review_digest in ((path + ".copy", digest), (path, "0" * 64)):
+            self.assert_rejected(
+                self.guard_with_review(
+                    reviewed, review_path, "credential-test", review_digest, "range", self.base, "HEAD",
+                ),
+                "credential-material",
+            )
+        self.assertEqual(
+            self.guard_with_review(reviewed, path, "credential-test", digest, "range", self.base, "HEAD").returncode,
+            0,
+        )
+
+        self.write(path, fixture)
+        self.git("add", path)
+        self.assert_rejected(
+            self.guard_with_review(reviewed, path, "credential-test", digest, "staged"),
+            "credential-material",
+        )
+        self.git("-c", "core.hooksPath=" + os.devnull, "commit", "-qm", "Copy the same synthetic bytes")
+        self.git("rm", path)
+        self.git("commit", "-qm", "Remove the unreviewed copy from tip")
+        self.assert_rejected(
+            self.guard_with_review(reviewed, path, "credential-test", digest, "range", self.base, "HEAD"),
+            "credential-material",
+        )
+
+    def test_historical_review_continues_other_checks(self):
+        path = ".github/workflows/service.yml"
+        fixture = "# Authorization: Bearer " + MARKER + "\n- uses: actions/upload-artifact@v4\n"
+        digest = hashlib.sha256(fixture.encode()).hexdigest()
+        self.write(path, fixture)
+        self.git("add", path)
+        self.git("-c", "core.hooksPath=" + os.devnull, "commit", "-qm", "Add two historical guard violations")
+        reviewed = self.git("rev-parse", "HEAD").stdout.decode().strip()
+        self.git("rm", path)
+        self.git("commit", "-qm", "Remove the historical workflow")
+        self.assert_rejected(
+            self.guard_with_review(reviewed, path, "credential-test", digest, "range", self.base, "HEAD"),
+            "artifact-upload",
+        )
 
     def test_pre_commit_recognizes_market_data_inside_text_wrappers(self):
         columns = ("open", "high", "low", "close")

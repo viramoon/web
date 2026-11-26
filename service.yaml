@@ -16,12 +16,30 @@ environment:
   WEB_ADMIN_SESSION_TTL_SECONDS: 900
   WEB_CREDENTIAL_DIR: 可选，web 所有且权限为 0700 的持久化绝对目录
   WEB_CREDENTIAL_RECIPIENT_PUBLIC_KEY_FILE: 可选，与 WEB_CREDENTIAL_DIR 成对设置的 RSA 公钥 PEM 绝对路径
+  WEB_BINANCE_PROBES_ENABLED: false
+  WEB_STRATEGY_COMPILER: 可选，finance F2 策略编译器绝对路径
+  WEB_RESEARCH_PYTHON: 可选，安装 finance 研究依赖的解释器绝对路径
+  WEB_TEST_RCLONE: /usr/bin/rclone
+  WEB_INTEGRATION_PRIMARY_STRATEGY_FILE: 可选，部署预置的策略文件
+  WEB_INTEGRATION_PRIMARY_RESEARCH_MANIFEST: 可选，部署预置的研究数据清单
+  WEB_INTEGRATION_PRIMARY_DRIVE_TEST_ROOT: 可选，web 所有的 0700 本机加密测试目录
+  WEB_INTEGRATION_SECONDARY_STRATEGY_FILE: 可选，备选槽位的策略文件
+  WEB_INTEGRATION_SECONDARY_RESEARCH_MANIFEST: 可选，备选槽位的研究数据清单
+  WEB_INTEGRATION_SECONDARY_DRIVE_TEST_ROOT: 可选，备选槽位的 0700 本机加密测试目录
+  WEB_BACKUP_STATUS_FILE: 可选，T2b 备份远端状态文件
+  WEB_BACKUP_RESTORE_FILE: 可选，T2b 隔离恢复凭据文件
+  WEB_QUALITY_STATUS_FILE: 可选，授权的采集质量快照
 finance_http:
   config_section: finance
   cloudbox: {connect_timeout_ms: 3000, request_timeout_ms: 3000, backoff_ms: 150, circuit_failure_threshold: 3, circuit_open_ms: 10000}
   stable: {connect_timeout_ms: 1000, request_timeout_ms: 2000, backoff_ms: 100, circuit_failure_threshold: 5, circuit_open_ms: 5000}
   max_read_retries: 2
   write_retries: 0
+maintenance:
+  publish_quality:
+    command: web publish-quality INPUTS
+    output_env: WEB_QUALITY_STATUS_FILE
+    instructions: docs/quality-publishing.md
 processes:
   - name: web
     command: web serve
@@ -37,6 +55,7 @@ processes:
     requires: [PostgreSQL, "/usr/bin/curl (SMTP/SMTPS)", system_ca, linux_proc]
     environment:
       DATABASE_URL: 与 web 共用，由部署从受控配置注入
+      WEB_STATIC_ROOT: 启用 SMTP 快照时必填，与 web 使用同一静态根绝对路径
       WEB_PUBLIC_ORIGIN: 可选，邮件内使用的私有终端 HTTPS origin
       WEB_SMTP_HOST: 部署配置的固定邮件中继
       WEB_SMTP_PORT: 隐式 TLS 默认 465，STARTTLS 默认 587
@@ -45,6 +64,8 @@ processes:
       WEB_SMTP_TO: 部署配置的本人收件地址
       WEB_SMTP_CREDENTIAL_FILE: 可选，仅引用由本机部署提供的 0600 秘密文件绝对路径
       WEB_SMTP_TIMEOUT_SECONDS: 10
+      WEB_SMTP_SECONDARY_HOST: 可选，备选 SMTP 槽位。其他 WEB_SMTP_SECONDARY_* 参数与主槽位同名
+      WEB_SMTP_SNAPSHOT_DIR: W4 SMTP 必需，notifier 独占的 0700 持久绝对目录，逐级校验且位于静态资源树外
       WEB_NOTIFIER_QUIET_TIME_ZONE: Asia/Shanghai
       WEB_NOTIFIER_QUIET_START: "23:00"
       WEB_NOTIFIER_QUIET_END: "08:00"
@@ -57,7 +78,7 @@ processes:
       field: notifications.state
     graceful_stop:
       signals: [SIGTERM, SIGINT]
-      deadline_ms: 75000
+      deadline_ms: 85000
 telemetry:
   format: json_stderr
   request_metadata: [request_id, method, path, status, latency_ms]

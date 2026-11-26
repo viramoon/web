@@ -7,7 +7,7 @@ use tokio::{
 use web::{
     database::Database,
     notifications::{
-        channel::EmailChannel,
+        channel::EmailChannels,
         worker::{self, NotificationPolicy},
     },
     telemetry,
@@ -50,9 +50,8 @@ async fn run() -> Result<(), Failure> {
             "invalid notifier policy configuration",
         )
     })?;
-    let channel = EmailChannel::from_environment(get)
-        .map_err(|_| ("smtp_configuration", "invalid SMTP configuration"))?
-        .ok_or(("smtp_configuration", "SMTP configuration is required"))?;
+    let channel = EmailChannels::from_environment(get)
+        .map_err(|error| ("smtp_configuration", error.reason()))?;
     let database_url =
         get("DATABASE_URL").ok_or(("database_configuration", "DATABASE_URL is required"))?;
     let db = Database::new(
@@ -79,8 +78,7 @@ async fn run() -> Result<(), Failure> {
         _ = async { tokio::select! { _ = term.recv() => {}, _ = int.recv() => {} } } => {
             shutdown.send_replace(true);
             tracing::info!("draining notifier");
-            let drain = channel.timeout() + Duration::from_secs(10);
-            match time::timeout(drain, &mut running).await {
+            match time::timeout(channel.drain_timeout(), &mut running).await {
                 Ok(result) => result.map_err(worker_error)?,
                 Err(_) => tracing::warn!("notifier drain deadline reached"),
             }

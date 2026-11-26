@@ -1,9 +1,9 @@
-use super::Settings;
-use crate::database::Database;
+use super::{Settings, TestEvidence};
+use crate::{database::Database, notifications::model::AttemptOutcome};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::{Connection, FromRow, PgConnection};
+use sqlx::{Connection, FromRow, PgConnection, types::Json};
 use std::future::Future;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -16,6 +16,7 @@ pub(crate) struct Integration {
     pub revision: i64,
     pub latest: VersionView,
     pub active: Option<VersionView>,
+    pub rollback_versions: Vec<i64>,
     #[schema(format = "uuid")]
     pub last_test_id: Option<String>,
 }
@@ -74,6 +75,7 @@ pub(crate) struct TestView {
     pub status: TestStatus,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+    pub evidence: Option<TestEvidence>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, ToSchema, sqlx::Type)]
@@ -88,8 +90,6 @@ pub(crate) enum TestStatus {
 }
 
 pub(crate) enum Outcome {
-    // Only a fixture can provide successful connector evidence in W1.
-    #[cfg_attr(not(test), allow(dead_code))]
     Passed,
     Failed,
     Unavailable,
@@ -142,6 +142,7 @@ struct VisibleVersion {
     credential_mask: Option<String>,
     credential_rotated_at: Option<DateTime<Utc>>,
     last_test_id: Option<Uuid>,
+    rollback_versions: Vec<i64>,
 }
 
 async fn fetch_integrations(
@@ -152,7 +153,15 @@ async fn fetch_integrations(
         "SELECT i.id, i.connector, i.revision, i.latest_version,
                 v.version, v.state, v.settings,
                 c.version AS credential_version, c.mask AS credential_mask,
-                c.rotated_at AS credential_rotated_at, a.test_id AS last_test_id
+                c.rotated_at AS credential_rotated_at, a.test_id AS last_test_id,
+                ARRAY(
+                    SELECT history.version FROM app.integration_versions history
+                    LEFT JOIN app.integration_credentials old ON old.id = history.credential_id
+                    WHERE history.integration_id = i.id AND history.state = 'disabled'
+                      AND history.activated_at IS NOT NULL AND old.revoked_at IS NULL
+                      AND (i.connector <> 'smtp' OR history.smtp_snapshot_id IS NOT NULL)
+                    ORDER BY history.version DESC
+                ) AS rollback_versions
          FROM app.integration_configs i
          JOIN app.integration_versions v ON v.integration_id = i.id
              AND (v.version = i.latest_version OR v.state = 'active')
@@ -194,6 +203,7 @@ async fn fetch_integrations(
                 active: (row.state == VersionState::Active).then(|| version.clone()),
                 latest: version,
                 last_test_id: row.last_test_id.map(|id| id.to_string()),
+                rollback_versions: row.rollback_versions,
             });
         } else {
             let integration = integrations.last_mut().ok_or(Error::Internal)?;
@@ -228,11 +238,17 @@ pub(crate) async fn create(
     let id = Uuid::new_v4();
     let mut connection = db.write_connection().await?;
     let mut tx = connection.begin().await?;
-    sqlx::query("INSERT INTO app.integration_configs (id, connector) VALUES ($1, $2)")
-        .bind(id)
-        .bind(connector)
-        .execute(&mut *tx)
-        .await?;
+    let inserted = sqlx::query(
+        "INSERT INTO app.integration_configs (id, connector) VALUES ($1, $2)
+         ON CONFLICT (connector) WHERE connector = 'smtp' DO NOTHING",
+    )
+    .bind(id)
+    .bind(connector)
+    .execute(&mut *tx)
+    .await?;
+    if inserted.rows_affected() == 0 {
+        return Err(Error::Conflict);
+    }
     sqlx::query(
         "INSERT INTO app.integration_versions (integration_id, version, state, settings)
          VALUES ($1, 1, 'draft', $2)",
@@ -330,16 +346,10 @@ pub(crate) async fn change(
             )
         }
     };
-    let result = stage_version(
-        &mut tx,
-        id,
-        current.latest_version + 1,
-        settings,
-        credential,
-        state,
-        action,
-    )
-    .await?;
+    let version = current.latest_version + 1;
+    stage_version(&mut tx, id, version, settings, credential, state, None).await?;
+    audit(&mut tx, id, version, action, None).await?;
+    let result = fetch_integration(&mut tx, id).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -369,16 +379,18 @@ pub(crate) async fn set_credential(
     .bind(credential.mask)
     .execute(&mut *tx)
     .await?;
-    let result = stage_version(
+    stage_version(
         &mut tx,
         id,
         version,
         current.settings,
         Some(credential.reference),
         VersionState::Draft,
-        "credential_staged",
+        None,
     )
     .await?;
+    audit(&mut tx, id, version, "credential_staged", None).await?;
+    let result = fetch_integration(&mut tx, id).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -406,8 +418,8 @@ async fn stage_version(
     settings: Value,
     credential: Option<Uuid>,
     state: VersionState,
-    action: &'static str,
-) -> Result<Integration, Error> {
+    smtp_snapshot: Option<Uuid>,
+) -> Result<(), Error> {
     supersede_pending(connection, id).await?;
     sqlx::query(
         "UPDATE app.integration_versions SET state = 'disabled'
@@ -418,14 +430,16 @@ async fn stage_version(
     .execute(&mut *connection)
     .await?;
     sqlx::query(
-        "INSERT INTO app.integration_versions (integration_id, version, settings, credential_id, state)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO app.integration_versions
+            (integration_id, version, settings, credential_id, state, activated_at, smtp_snapshot_id)
+         VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 = 'active' THEN now() END, $6)",
     )
     .bind(id)
     .bind(version)
     .bind(settings)
     .bind(credential)
     .bind(state)
+    .bind(smtp_snapshot)
     .execute(&mut *connection)
     .await?;
     sqlx::query(
@@ -435,8 +449,7 @@ async fn stage_version(
     .bind(version)
     .execute(&mut *connection)
     .await?;
-    audit(connection, id, version, action, None).await?;
-    fetch_integration(connection, id).await
+    Ok(())
 }
 
 #[derive(FromRow)]
@@ -447,6 +460,7 @@ struct TestRow {
     status: TestStatus,
     started_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
+    evidence: Option<Json<TestEvidence>>,
 }
 
 impl From<TestRow> for TestView {
@@ -458,6 +472,7 @@ impl From<TestRow> for TestView {
             status: row.status,
             started_at: row.started_at,
             finished_at: row.finished_at,
+            evidence: row.evidence.map(|value| value.0),
         }
     }
 }
@@ -469,7 +484,7 @@ pub(crate) async fn get_test(db: &Database, test_id: Uuid) -> Result<TestView, E
 
 async fn load_test(connection: &mut PgConnection, test_id: Uuid) -> Result<TestRow, Error> {
     sqlx::query_as::<_, TestRow>(
-        "SELECT id, integration_id, config_version, status, started_at, finished_at
+        "SELECT id, integration_id, config_version, status, started_at, finished_at, evidence
          FROM app.integration_tests WHERE id = $1",
     )
     .bind(test_id)
@@ -498,13 +513,24 @@ pub(crate) async fn begin_test(db: &Database, id: Uuid, revision: i64) -> Result
     let test = sqlx::query_as::<_, TestRow>(
         "INSERT INTO app.integration_tests (id, integration_id, config_version, status)
          VALUES ($1, $2, $3, 'pending')
-         RETURNING id, integration_id, config_version, status, started_at, finished_at",
+         RETURNING id, integration_id, config_version, status, started_at, finished_at, evidence",
     )
     .bind(test_id)
     .bind(id)
     .bind(current.latest_version)
     .fetch_one(&mut *tx)
     .await?;
+    if current.connector == "smtp" {
+        sqlx::query(
+            "INSERT INTO app.notification_outbox (id, kind, priority, test_key, integration_test_id)
+             VALUES ($1, 'test', 'normal', $2, $3)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .bind(test_id)
+        .execute(&mut *tx)
+        .await?;
+    }
     bump_revision(&mut tx, id).await?;
     audit(
         &mut tx,
@@ -535,50 +561,185 @@ pub(crate) async fn finish_test(
     db: &Database,
     id: Uuid,
     test_id: Uuid,
-    outcome: Outcome,
+    result: (Outcome, TestEvidence),
 ) -> Result<TestView, Error> {
     let mut connection = db.write_connection().await?;
     let mut tx = connection.begin().await?;
-    let current = lock(&mut tx, id, None).await?;
-    let test = load_test(&mut tx, test_id).await?;
+    let finished = settle_test(&mut tx, id, test_id, result).await?;
+    tx.commit().await?;
+    Ok(finished)
+}
+
+async fn settle_test(
+    connection: &mut PgConnection,
+    id: Uuid,
+    test_id: Uuid,
+    (outcome, evidence): (Outcome, TestEvidence),
+) -> Result<TestView, Error> {
+    let current = lock(connection, id, None).await?;
+    let test = load_test(connection, test_id).await?;
     if test.integration_id != id {
         return Err(Error::Missing);
     }
     if test.status != TestStatus::Pending {
-        tx.commit().await?;
         return Ok(test.into());
     }
     if current.latest_version != test.config_version || current.state != VersionState::Candidate {
         return Err(Error::Conflict);
     }
     let (status, action) = match outcome {
-        Outcome::Passed => {
-            retire_active(&mut tx, id, false).await?;
-            sqlx::query(
-                "UPDATE app.integration_versions SET state = 'active'
-                 WHERE integration_id = $1 AND version = $2",
-            )
-            .bind(id)
-            .bind(test.config_version)
-            .execute(&mut *tx)
-            .await?;
-            (TestStatus::Passed, "test_passed")
-        }
+        Outcome::Passed => (TestStatus::Passed, "test_passed"),
         Outcome::Failed => (TestStatus::Failed, "test_failed"),
         Outcome::Unavailable => (TestStatus::Unavailable, "test_unavailable"),
     };
     let finished = sqlx::query_as::<_, TestRow>(
-        "UPDATE app.integration_tests SET status = $2, finished_at = now() WHERE id = $1
-         RETURNING id, integration_id, config_version, status, started_at, finished_at",
+        "UPDATE app.integration_tests SET status = $2, finished_at = now(), evidence = $3 WHERE id = $1
+         RETURNING id, integration_id, config_version, status, started_at, finished_at, evidence",
     )
     .bind(test_id)
     .bind(status)
-    .fetch_one(&mut *tx)
+    .bind(Json(evidence))
+    .fetch_one(&mut *connection)
+    .await?;
+    bump_revision(connection, id).await?;
+    audit(connection, id, test.config_version, action, Some(test_id)).await?;
+    Ok(finished.into())
+}
+
+pub(crate) async fn finish_smtp_test(
+    connection: &mut PgConnection,
+    id: Uuid,
+    test_id: Uuid,
+    attempt: AttemptOutcome,
+) -> Result<(), sqlx::Error> {
+    let outcome = match attempt {
+        AttemptOutcome::Accepted => Outcome::Passed,
+        AttemptOutcome::ConfigurationError => Outcome::Unavailable,
+        _ => Outcome::Failed,
+    };
+    settle_test(
+        connection,
+        id,
+        test_id,
+        (outcome, TestEvidence::Smtp(attempt)),
+    )
+    .await
+    .map_err(|_| sqlx::Error::Protocol("could not settle integration SMTP test".into()))?;
+    Ok(())
+}
+
+fn can_apply(connector: &str, binance_enabled: bool) -> Result<(), Error> {
+    if matches!(connector, "binance_spot" | "binance_usd_m") && !binance_enabled {
+        return Err(Error::Conflict);
+    }
+    Ok(())
+}
+
+pub(crate) async fn activate(
+    db: &Database,
+    id: Uuid,
+    revision: i64,
+    test_id: Uuid,
+    binance_enabled: bool,
+) -> Result<Integration, Error> {
+    let mut connection = db.write_connection().await?;
+    let mut tx = connection.begin().await?;
+    let current = lock(&mut tx, id, Some(revision)).await?;
+    can_apply(&current.connector, binance_enabled)?;
+    if current.state != VersionState::Candidate {
+        return Err(Error::Conflict);
+    }
+    let (latest_id, status, snapshot): (Uuid, TestStatus, Option<Uuid>) = sqlx::query_as(
+        "SELECT t.id, t.status, job.smtp_snapshot_id
+         FROM app.integration_audit a JOIN app.integration_tests t ON t.id = a.test_id
+         LEFT JOIN app.notification_outbox job ON job.integration_test_id = t.id AND job.status = 'accepted'
+         WHERE a.integration_id = $1 AND a.config_version = $2 AND a.action = 'test_started'
+         ORDER BY a.sequence DESC LIMIT 1",
+    )
+    .bind(id)
+    .bind(current.latest_version)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::Conflict)?;
+    if latest_id != test_id
+        || status != TestStatus::Passed
+        || (current.connector == "smtp" && snapshot.is_none())
+    {
+        return Err(Error::Conflict);
+    }
+    retire_active(&mut tx, id, false).await?;
+    sqlx::query(
+        "UPDATE app.integration_versions SET state = 'active', activated_at = now(), smtp_snapshot_id = $3
+         WHERE integration_id = $1 AND version = $2",
+    )
+    .bind(id)
+    .bind(current.latest_version)
+    .bind(snapshot)
+    .execute(&mut *tx)
     .await?;
     bump_revision(&mut tx, id).await?;
-    audit(&mut tx, id, test.config_version, action, Some(test_id)).await?;
+    audit(
+        &mut tx,
+        id,
+        current.latest_version,
+        "activated",
+        Some(test_id),
+    )
+    .await?;
+    let result = fetch_integration(&mut tx, id).await?;
     tx.commit().await?;
-    Ok(finished.into())
+    Ok(result)
+}
+
+pub(crate) async fn rollback(
+    db: &Database,
+    id: Uuid,
+    revision: i64,
+    prior_version: i64,
+    binance_enabled: bool,
+) -> Result<Integration, Error> {
+    let mut connection = db.write_connection().await?;
+    let mut tx = connection.begin().await?;
+    let current = lock(&mut tx, id, Some(revision)).await?;
+    can_apply(&current.connector, binance_enabled)?;
+    let (settings, credential, snapshot): (Value, Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT v.settings, v.credential_id, v.smtp_snapshot_id
+         FROM app.integration_versions v LEFT JOIN app.integration_credentials c ON c.id = v.credential_id
+         WHERE v.integration_id = $1 AND v.version = $2 AND v.state = 'disabled'
+           AND v.activated_at IS NOT NULL AND c.revoked_at IS NULL",
+    )
+    .bind(id)
+    .bind(prior_version)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::Conflict)?;
+    if current.connector == "smtp" && snapshot.is_none() {
+        return Err(Error::Conflict);
+    }
+    let version = current.latest_version + 1;
+    retire_active(&mut tx, id, false).await?;
+    stage_version(
+        &mut tx,
+        id,
+        version,
+        settings,
+        credential,
+        VersionState::Active,
+        snapshot,
+    )
+    .await?;
+    sqlx::query(
+        "INSERT INTO app.integration_audit (integration_id, config_version, action, restored_from_version)
+         VALUES ($1, $2, 'rolled_back', $3)",
+    )
+    .bind(id)
+    .bind(version)
+    .bind(prior_version)
+    .execute(&mut *tx)
+    .await?;
+    let result = fetch_integration(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(result)
 }
 
 async fn supersede_pending(connection: &mut PgConnection, id: Uuid) -> Result<(), Error> {

@@ -20,10 +20,13 @@ SOURCES = ".data-guard/sources.json"
 BOOTSTRAP_RULES_COMMIT = "e663bbd3fe64abf75f62925f2170e2cb58506e4f"
 MAX_POLICY_BYTES = 256 * 1024
 REGULAR_MODES = {b"100644", b"100755"}
-# Reviewed W3 source writes fixed synthetic credentials to temporary fixtures.
-# Only the exact source blob and path may satisfy the credential check.
+# Reviewed W3 and W4 sources write fixed synthetic credentials to temporary
+# fixtures. Only an exact source blob and path may satisfy the credential check.
 REVIEWED_CREDENTIAL_TESTS = {
-    "src/notifications/channel/tests.rs": "beb37680e9a5e9f82e7c5d6533c563b61cd467f1928c2803d668162f263f7bb3",
+    "src/notifications/channel/tests.rs": (
+        "beb37680e9a5e9f82e7c5d6533c563b61cd467f1928c2803d668162f263f7bb3",
+        "7075fe0c8eb795cff27dc531c86736e4ab4738fab3fcc5ab7ef2f422a01d07d1",
+    ),
 }
 # Exact CI-only credential lines from the approved W3 main workflow (4c966be).
 REVIEWED_CI_CREDENTIAL_LINES = frozenset({
@@ -33,20 +36,69 @@ REVIEWED_CI_CREDENTIAL_LINES = frozenset({
 # Established source blobs that match market-data signatures. Each entry is
 # pinned to bytes reviewed in the named commits, never a path-wide exception.
 REVIEWED_MARKET_SOURCE_DIGESTS = {
-    "src/notifications/worker.rs": (  # 4c966be: integer notification policy bounds.
+    "src/notifications/worker.rs": (  # W3/W4 integer notification policy bounds.
         "be5d1a3971142d1b2e0a54eab35c4de172c4c0c6dfae00911a5627d7c3a84d9a",
+        "ef57c4731a138a0d130ee87de9048e24084fe989279fc90d5a72efcfad829724",
     ),
-    "src/w1_http_tests.rs": (  # 4992a15 and 7e641b6: fixed OHLC redaction canary.
+    "src/w1_http_tests.rs": (  # WG fixed OHLC redaction canary with W4 timeout tests.
         "3ebb7492acdd8dcbfcbb857f0dde425c0b9449896d07b91238ec53176c021352",
         "e05dac63895d9cb6552d0a5a40a895086b63910af6543d73044646551eb32f4e",
+        "c28e5377623a2562cd5007d6f862229d6aad69cf4e3337a2765b45f5f2afb659",
     ),
-    "tests/api/database.rs": (  # 4c966be and 7e641b6: migration version assertions.
+    "tests/api/database.rs": (  # W3, WG and W4 migration version assertions.
         "7ecf7e6f8288dbcf90690479fed74283cc9a466e8b08561034c991424cbccb4b",
         "11e747ad4261b5514426b6dbff552d8a6471c619a794dc875ed6786fc133af4b",
+        "6f58b1b6711f094da829489d9cbb6dab3200dc73f06bc72f63dde204474b0d78",
     ),
     "tests/api/notifications_worker.rs": (  # 4c966be: synthetic rule state tuples.
         "c212791b32ff6297be1d1f3b993cd118437bd4d3817e0c1bfc0030c7d0ebdd9d",
     ),
+}
+# W4 was committed before WG and is merged without rewriting its ancestry.
+# Each review applies to one exact historical blob and one heuristic.
+REVIEWED_HISTORICAL_BLOBS = {
+    "981dd24f953a51fd5c5aa0bf5a64441f091b9db2": {
+        "src/integrations/local_probe/files/tests.rs": (
+            "source-table", "d56ca0fa10ef913c3f7b2dadf7533c12c1572a77f2f1956dcf1a2e7acc8bc628",
+        ),
+        "src/notifications/channel/tests.rs": (
+            "credential-test", "a79bd3ba4964586436889a2f2bfae21810bccff99aade8f8cb68f6687cd857a8",
+        ),
+        "src/notifications/worker.rs": (
+            "source-table", "972dd45f3f8f25a3aa4bf370f11b57e439345275854c6b89d7727ed06932f652",
+        ),
+        "tests/api/database.rs": (
+            "source-table", "7493089c80dda1ea73c08af67fc2ff899c85271d2ed20cb717beb14443850839",
+        ),
+        "tests/api/notifications_worker.rs": (
+            "source-table", "806bf46bf52beec565a9f14f54e3f4be48fb54f7eb2f1389db1aaef963edc4f3",
+        ),
+    },
+    "e46a991c60f84bb71a30162cf90b65bb27cbcdb6": {
+        ".github/workflows/service.yml": (
+            "old-openapi-artifact", "e66200e1785e561f293bbf5c9480af95dcc22af2bc7fc5373853792cd5c0d471",
+        ),
+        "src/notifications/channel/tests.rs": (
+            "credential-test", "189287b6b74e3a06c7763b14e45801f9a20296ce7f27df8085eee41c28adc129",
+        ),
+        "src/notifications/worker.rs": (
+            "source-table", "ef57c4731a138a0d130ee87de9048e24084fe989279fc90d5a72efcfad829724",
+        ),
+        "tests/api/database.rs": (
+            "source-table", "9cd49510e5b5731c8502c22f5c79ebcdec4e48e5c5ea985f792efbae8518470c",
+        ),
+        "tests/api/notifications_worker.rs": (
+            "source-table", "3c743660efa864ae5c90efdd0c97dcdf65a2887d3ef8924f968d64e5b95e4a0d",
+        ),
+    },
+    "dce9c80925f57ece28c2814ad4f9c8ec4ef8b64b": {
+        "src/notifications/channel/tests.rs": (
+            "credential-test", "7075fe0c8eb795cff27dc531c86736e4ab4738fab3fcc5ab7ef2f422a01d07d1",
+        ),
+        "tests/api/notifications_worker.rs": (
+            "source-table", "8116df0d7e8642e1482e597422767dc08eab3509a0dd9a8d1d6de81ba10057b4",
+        ),
+    },
 }
 # Ordinary tracked files. Other paths require a source record in the same tree.
 ALLOWED_FILES = frozenset({
@@ -483,7 +535,7 @@ def json_content_reason(text, *, openapi=False):
     return None
 
 
-def inspect_blob(path, entry, rules, source):
+def inspect_blob(path, entry, rules, source, historical_review=None):
     if not valid_path(path):
         return "invalid-path"
     if credential_in_path(path):
@@ -508,17 +560,23 @@ def inspect_blob(path, entry, rules, source):
         return "non-text"
     # Recognize field shapes in plain text and in quoted or escaped payloads.
     content = normalize_payload(text)
+    historical_check = None
+    if historical_review:
+        check, expected_digest = historical_review
+        if hashlib.sha256(data).hexdigest() == expected_digest:
+            historical_check = check
     if PRIVATE_KEY.search(text):
         return "credential-material"
-    if has_credential(path, text, content):
-        reviewed = REVIEWED_CREDENTIAL_TESTS.get(path)
-        if reviewed is None or hashlib.sha256(data).hexdigest() != reviewed:
+    if has_credential(path, text, content) and historical_check != "credential-test":
+        reviewed = REVIEWED_CREDENTIAL_TESTS.get(path, ())
+        if not reviewed or hashlib.sha256(data).hexdigest() not in reviewed:
             return "credential-material"
     if TEST_REPORT.search(text):
         return "test-report"
     if LOG_LINE.search(text) or EXCEPTION_DUMP.search(text):
         return "log-export"
-    if normalized.startswith(".github/workflows/") and ARTIFACT_UPLOAD.search(text):
+    if (normalized.startswith(".github/workflows/") and ARTIFACT_UPLOAD.search(text)
+            and historical_check != "old-openapi-artifact"):
         return "artifact-upload"
     diagnostic = json_diagnostic_reason(text)
     if diagnostic:
@@ -543,14 +601,15 @@ def inspect_blob(path, entry, rules, source):
     if source_code:
         content = "\n".join(line for line in content.splitlines() if DATA_LINE.match(line))
     fields = {normal_field(match["field"]) for match in FIELD_VALUE.finditer(content.replace(r"\n", "\n"))}
-    if looks_like_table(text) or any(group <= fields for group in MARKET_FIELDS):
+    if ((historical_check != "source-table" and looks_like_table(text))
+            or any(group <= fields for group in MARKET_FIELDS)):
         reviewed = REVIEWED_MARKET_SOURCE_DIGESTS.get(path, ())
         if not reviewed or hashlib.sha256(data).hexdigest() not in reviewed:
             return "fixture-source-required"
     return None
 
 
-def inspect_tree(tree, before, paths, rules, report, require_sources=False):
+def inspect_tree(tree, before, paths, rules, report, require_sources=False, historical_commit=None):
     # Candidate rule changes are schema-checked without replacing the policy.
     if require_sources or tree.get(RULES) != before.get(RULES):
         load_rules(tree)
@@ -565,9 +624,10 @@ def inspect_tree(tree, before, paths, rules, report, require_sources=False):
     if SOURCES in paths:
         previous_sources = load_sources(before, required=False)
         paths = sorted(set(paths) | sources.keys() | previous_sources.keys())
+    reviews = REVIEWED_HISTORICAL_BLOBS.get(historical_commit, {})
     for path in paths:
         if path in tree:
-            reason = inspect_blob(path, tree[path], rules, sources.get(path))
+            reason = inspect_blob(path, tree[path], rules, sources.get(path), reviews.get(path))
             if reason:
                 report(reason, path)
 
@@ -577,7 +637,10 @@ def inspect_range(base, tip, rules, report):
         commit, *parents = line.decode("ascii").split()
         tree = read_tree(commit)
         before = read_tree(parents[0]) if parents else {}
-        inspect_tree(tree, before, changed_paths(before, tree), rules, report, require_sources=commit == tip)
+        inspect_tree(
+            tree, before, changed_paths(before, tree), rules, report,
+            require_sources=commit == tip, historical_commit=None if commit == tip else commit,
+        )
 
 
 def remote_default_commit(remote):

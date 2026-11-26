@@ -1,9 +1,11 @@
+mod snapshot;
+
 use chrono::Utc;
 use rustix::{
     fs::{MemfdFlags, memfd_create},
     process::geteuid,
 };
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     fmt,
     fs::{File, OpenOptions},
@@ -15,6 +17,7 @@ use std::{
     },
     path::Path,
     process::{Output, Stdio},
+    sync::Arc,
     time::Duration,
 };
 use tokio::{process::Command, time::timeout};
@@ -23,9 +26,11 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::model::Condition;
+use snapshot::SnapshotStore;
 
 const CURL_BIN: &str = "/usr/bin/curl";
 const TRANSFER_GRACE: Duration = Duration::from_secs(1);
+const SNAPSHOT_LOAD_DEADLINE: Duration = Duration::from_secs(2);
 const SMTP_ENV: [&str; 6] = [
     "WEB_SMTP_PORT",
     "WEB_SMTP_TLS",
@@ -44,6 +49,13 @@ pub enum DeliveryOutcome {
     ConfigurationError,
 }
 
+#[derive(Clone, Copy, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum SmtpProfile {
+    Primary,
+    Secondary,
+}
+
 /// The entire input to the alert template. Market data and producer strings have no path into it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MailKind {
@@ -58,10 +70,37 @@ pub trait NotificationChannel: Sync + Send {
     fn validate(&self) -> Result<(), ChannelConfigError>;
     fn test(&self, id: Uuid) -> impl Future<Output = DeliveryOutcome> + Send;
     fn send(&self, id: Uuid, mail: MailKind) -> impl Future<Output = DeliveryOutcome> + Send;
+
+    fn capture_profile(&self, _profile: SmtpProfile) -> impl Future<Output = Option<Uuid>> + Send {
+        async { None }
+    }
+
+    fn test_snapshot(
+        &self,
+        _snapshot: Uuid,
+        _id: Uuid,
+    ) -> impl Future<Output = DeliveryOutcome> + Send {
+        async { DeliveryOutcome::ConfigurationError }
+    }
+
+    fn send_snapshot(
+        &self,
+        _snapshot: Uuid,
+        _id: Uuid,
+        _mail: MailKind,
+    ) -> impl Future<Output = DeliveryOutcome> + Send {
+        async { DeliveryOutcome::ConfigurationError }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChannelConfigError(&'static str);
+
+impl ChannelConfigError {
+    pub fn reason(self) -> &'static str {
+        self.0
+    }
+}
 
 impl fmt::Display for ChannelConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -71,12 +110,18 @@ impl fmt::Display for ChannelConfigError {
 
 impl std::error::Error for ChannelConfigError {}
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Credentials {
-    #[serde(deserialize_with = "protected_string")]
+    #[serde(
+        deserialize_with = "protected_string",
+        serialize_with = "serialize_secret"
+    )]
     username: Zeroizing<String>,
-    #[serde(deserialize_with = "protected_string")]
+    #[serde(
+        deserialize_with = "protected_string",
+        serialize_with = "serialize_secret"
+    )]
     password: Zeroizing<String>,
 }
 
@@ -84,6 +129,13 @@ fn protected_string<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Zeroizing<String>, D::Error> {
     String::deserialize(deserializer).map(Zeroizing::new)
+}
+
+fn serialize_secret<S: Serializer>(
+    value: &Zeroizing<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(value)
 }
 
 impl Credentials {
@@ -357,14 +409,7 @@ impl EmailChannel {
 
 impl NotificationChannel for EmailChannel {
     fn validate(&self) -> Result<(), ChannelConfigError> {
-        let binary = std::fs::metadata(CURL_BIN)
-            .map_err(|_| ChannelConfigError("SMTP transport requires /usr/bin/curl"))?;
-        if !binary.is_file() || binary.permissions().mode() & 0o111 == 0 {
-            return Err(ChannelConfigError(
-                "SMTP transport requires executable /usr/bin/curl",
-            ));
-        }
-        Ok(())
+        validate_transport()
     }
 
     async fn test(&self, id: Uuid) -> DeliveryOutcome {
@@ -373,6 +418,139 @@ impl NotificationChannel for EmailChannel {
 
     async fn send(&self, id: Uuid, mail: MailKind) -> DeliveryOutcome {
         self.deliver(id, MessageKind::Notification(mail)).await
+    }
+}
+
+fn validate_transport() -> Result<(), ChannelConfigError> {
+    let binary = std::fs::metadata(CURL_BIN)
+        .map_err(|_| ChannelConfigError("SMTP transport requires /usr/bin/curl"))?;
+    if !binary.is_file() || binary.permissions().mode() & 0o111 == 0 {
+        return Err(ChannelConfigError(
+            "SMTP transport requires executable /usr/bin/curl",
+        ));
+    }
+    Ok(())
+}
+
+pub struct EmailChannels {
+    primary: Option<Arc<EmailChannel>>,
+    secondary: Option<Arc<EmailChannel>>,
+    snapshots: Option<Arc<SnapshotStore>>,
+}
+
+impl EmailChannels {
+    pub fn from_environment(
+        get: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, ChannelConfigError> {
+        let slot = |result: Result<Option<EmailChannel>, ChannelConfigError>, profile| match result
+        {
+            Ok(channel) => channel.map(Arc::new),
+            Err(_) => {
+                tracing::warn!(profile, "SMTP profile is unavailable");
+                None
+            }
+        };
+        let primary = slot(EmailChannel::from_environment(&get), "primary");
+        let secondary = slot(
+            EmailChannel::from_environment(|name| match name.strip_prefix("WEB_SMTP_") {
+                Some(suffix) => get(&format!("WEB_SMTP_SECONDARY_{suffix}")),
+                None => get(name),
+            }),
+            "secondary",
+        );
+        let snapshots = get("WEB_SMTP_SNAPSHOT_DIR")
+            .map(|path| {
+                let static_root = get("WEB_STATIC_ROOT").ok_or(ChannelConfigError(
+                    "WEB_STATIC_ROOT is required with WEB_SMTP_SNAPSHOT_DIR",
+                ))?;
+                SnapshotStore::open(Path::new(&path), Path::new(&static_root)).map(Arc::new)
+            })
+            .transpose()?;
+        if primary.is_none() && snapshots.is_none() {
+            return Err(ChannelConfigError(
+                "SMTP primary profile or snapshot storage is required",
+            ));
+        }
+        Ok(Self {
+            primary,
+            secondary,
+            snapshots,
+        })
+    }
+
+    pub fn drain_timeout(&self) -> Duration {
+        if self.snapshots.is_some() {
+            // A retained snapshot can have a longer timeout than the current slots.
+            // Allow three DB deadlines for claim, capture/pin and settlement.
+            Duration::from_secs(75) + TRANSFER_GRACE + SNAPSHOT_LOAD_DEADLINE
+        } else {
+            self.primary
+                .as_deref()
+                .map_or(TRANSFER_GRACE, EmailChannel::timeout)
+                + Duration::from_secs(10)
+        }
+    }
+
+    fn channel(&self, profile: SmtpProfile) -> Option<&Arc<EmailChannel>> {
+        match profile {
+            SmtpProfile::Primary => self.primary.as_ref(),
+            SmtpProfile::Secondary => self.secondary.as_ref(),
+        }
+    }
+
+    async fn open_snapshot(&self, id: Uuid) -> Option<EmailChannel> {
+        let store = self.snapshots.as_ref()?.clone();
+        timeout(
+            SNAPSHOT_LOAD_DEADLINE,
+            tokio::task::spawn_blocking(move || store.load(id)),
+        )
+        .await
+        .ok()?
+        .ok()?
+        .ok()
+    }
+}
+
+impl NotificationChannel for EmailChannels {
+    fn validate(&self) -> Result<(), ChannelConfigError> {
+        validate_transport()
+    }
+
+    async fn test(&self, id: Uuid) -> DeliveryOutcome {
+        match &self.primary {
+            Some(channel) => channel.test(id).await,
+            None => DeliveryOutcome::ConfigurationError,
+        }
+    }
+
+    async fn send(&self, id: Uuid, mail: MailKind) -> DeliveryOutcome {
+        match &self.primary {
+            Some(channel) => channel.send(id, mail).await,
+            None => DeliveryOutcome::ConfigurationError,
+        }
+    }
+
+    async fn capture_profile(&self, profile: SmtpProfile) -> Option<Uuid> {
+        let store = self.snapshots.as_ref()?.clone();
+        let channel = self.channel(profile)?.clone();
+        tokio::task::spawn_blocking(move || store.save(&channel))
+            .await
+            .ok()?
+            .ok()
+    }
+
+    async fn test_snapshot(&self, snapshot: Uuid, id: Uuid) -> DeliveryOutcome {
+        match self.open_snapshot(snapshot).await {
+            Some(channel) => channel.test(id).await,
+            None => DeliveryOutcome::ConfigurationError,
+        }
+    }
+
+    async fn send_snapshot(&self, snapshot: Uuid, id: Uuid, mail: MailKind) -> DeliveryOutcome {
+        match self.open_snapshot(snapshot).await {
+            Some(channel) => channel.send(id, mail).await,
+            None => DeliveryOutcome::ConfigurationError,
+        }
     }
 }
 

@@ -1038,6 +1038,64 @@
         }
       }
     },
+    "/api/v1/backup/status": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "operationId": "backup_status",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Request deadline exceeded (request_timeout)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "adminBearer": []
+          },
+          {
+            "adminSession": []
+          }
+        ]
+      }
+    },
     "/api/v1/integration-tests/{id}": {
       "get": {
         "tags": [
@@ -1115,6 +1173,16 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "request_timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1169,6 +1237,16 @@
           },
           "503": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout",
             "content": {
               "application/json": {
                 "schema": {
@@ -1305,6 +1383,16 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "request_timeout. Read the integrations list before retrying",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1369,6 +1457,110 @@
       }
     },
     "/api/v1/integrations/{id}": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "get_integration",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "adminBearer": []
+          },
+          {
+            "adminSession": []
+          }
+        ]
+      },
       "patch": {
         "tags": [
           "integrations"
@@ -1528,6 +1720,202 @@
           },
           "503": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision before retrying",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "adminBearer": []
+          },
+          {
+            "adminSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/integrations/{id}/activate": {
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "activate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Activate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision and active version before retrying",
             "content": {
               "application/json": {
                 "schema": {
@@ -1714,6 +2102,16 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision before retrying",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1881,6 +2279,202 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision before retrying",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "adminBearer": []
+          },
+          {
+            "adminSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/integrations/{id}/rollback": {
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "rollback",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Rollback"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision and active version before retrying",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1946,6 +2540,13 @@
         "responses": {
           "202": {
             "description": "",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -2036,6 +2637,124 @@
           },
           "503": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision and latest test before retrying",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "adminBearer": []
+          },
+          {
+            "adminSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/integrations/{id}/tests/{testId}": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "get_scoped_test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout",
             "content": {
               "application/json": {
                 "schema": {
@@ -2774,6 +3493,131 @@
         ]
       }
     },
+    "/api/v1/quality/gaps": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "operationId": "quality_gaps",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QualityGapsPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Request deadline exceeded (request_timeout)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "adminBearer": []
+          },
+          {
+            "adminSession": []
+          }
+        ]
+      }
+    },
     "/api/v1/system/status": {
       "get": {
         "tags": [],
@@ -2852,6 +3696,27 @@
             "format": "int64"
           }
         }
+      },
+      "Activate": {
+        "type": "object",
+        "required": [
+          "test_id"
+        ],
+        "properties": {
+          "test_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdapterResult": {
+        "type": "string",
+        "enum": [
+          "missing_credential",
+          "unsupported",
+          "deadline_exceeded"
+        ]
       },
       "Alert": {
         "type": "object",
@@ -3036,6 +3901,89 @@
         },
         "additionalProperties": false
       },
+      "BackupState": {
+        "type": "string",
+        "enum": [
+          "disabled",
+          "unavailable",
+          "no_verified_point",
+          "healthy",
+          "degraded"
+        ]
+      },
+      "BackupStatus": {
+        "type": "object",
+        "required": [
+          "state",
+          "alert",
+          "degraded"
+        ],
+        "properties": {
+          "age_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "alert": {
+            "type": "boolean",
+            "description": "Whether an enabled backup has an unavailable, degraded or overdue recovery point."
+          },
+          "degraded": {
+            "type": "boolean",
+            "description": "The latest T2b producer observation reported an error or invalid recovery chain."
+          },
+          "last_full_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_hourly_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_isolated_restore": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IsolatedRestore"
+              }
+            ]
+          },
+          "last_recoverable_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_recoverable_point": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Modification time of the last valid T2b state file observation."
+          },
+          "state": {
+            "$ref": "#/components/schemas/BackupState"
+          }
+        }
+      },
       "BlockedOrder": {
         "type": "object",
         "required": [
@@ -3066,6 +4014,12 @@
             "format": "date"
           }
         }
+      },
+      "Calendar": {
+        "type": "string",
+        "enum": [
+          "XNYS"
+        ]
       },
       "Capabilities": {
         "type": "object",
@@ -3102,6 +4056,7 @@
           "credential_fields",
           "file_types",
           "symbols",
+          "profiles",
           "test_method",
           "test_available",
           "fee_class",
@@ -3134,6 +4089,12 @@
           },
           "product": {
             "$ref": "#/components/schemas/Product"
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Profile"
+            }
           },
           "settings_fields": {
             "type": "array",
@@ -3279,7 +4240,12 @@
           "binance_spot",
           "binance_usd_m",
           "hyperliquid_perp",
-          "licensed_options"
+          "licensed_options",
+          "ibkr_paper",
+          "strategy_file",
+          "research_file",
+          "smtp",
+          "google_drive"
         ]
       },
       "Coverage": {
@@ -3341,6 +4307,38 @@
             "format": "int64"
           }
         }
+      },
+      "CryptoMarketEvidence": {
+        "type": "object",
+        "required": [
+          "metadata",
+          "snapshot"
+        ],
+        "properties": {
+          "event_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "metadata": {
+            "type": "boolean"
+          },
+          "price_precision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "maximum": 38,
+            "minimum": 0
+          },
+          "snapshot": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
       },
       "Dataset": {
         "type": "object",
@@ -3645,6 +4643,12 @@
           "ignored"
         ]
       },
+      "DriveMode": {
+        "type": "string",
+        "enum": [
+          "local_test"
+        ]
+      },
       "ErrorBody": {
         "type": "object",
         "required": [
@@ -3670,6 +4674,11 @@
             "type": "string"
           }
         }
+      },
+      "ExactCount": {
+        "type": "string",
+        "description": "An F3 unsigned 64-bit count, position or timestamp transported as decimal text.",
+        "pattern": "^(?:0|[1-9][0-9]{0,19})(?![\\s\\S])"
       },
       "ExecutionAudit": {
         "type": "object",
@@ -3721,6 +4730,12 @@
             "minimum": 0
           }
         }
+      },
+      "ExecutionModel": {
+        "type": "string",
+        "enum": [
+          "execution.next_close_cash_equity@1.0.0"
+        ]
       },
       "FeeClass": {
         "type": "string",
@@ -3794,6 +4809,26 @@
           }
         }
       },
+      "GapCause": {
+        "type": "string",
+        "enum": [
+          "license_skip",
+          "rotation",
+          "source_rate_limit",
+          "disconnected",
+          "source_gap",
+          "storage_unavailable"
+        ]
+      },
+      "GapRecovery": {
+        "type": "string",
+        "enum": [
+          "tick_backfilled",
+          "bar_backfilled",
+          "book_restored_from_snapshot",
+          "history_unrecoverable"
+        ]
+      },
       "Health": {
         "type": "object",
         "required": [
@@ -3847,7 +4882,8 @@
           "id",
           "connector",
           "revision",
-          "latest"
+          "latest",
+          "rollback_versions"
         ],
         "properties": {
           "active": {
@@ -3880,6 +4916,34 @@
           "revision": {
             "type": "integer",
             "format": "int64"
+          },
+          "rollback_versions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "IsolatedRestore": {
+        "type": "object",
+        "required": [
+          "point",
+          "recoverable_at",
+          "restored_at"
+        ],
+        "properties": {
+          "point": {
+            "type": "string"
+          },
+          "recoverable_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "restored_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -3970,6 +5034,155 @@
           "timed_out"
         ]
       },
+      "LocalDrivePreview": {
+        "type": "object",
+        "required": [
+          "mode",
+          "encrypted_round_trip",
+          "cleaned_up"
+        ],
+        "properties": {
+          "available_bytes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9]+$"
+          },
+          "cleaned_up": {
+            "type": "boolean"
+          },
+          "encrypted_round_trip": {
+            "type": "boolean"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DriveMode"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LocalEvidence": {
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "drive": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LocalDrivePreview"
+              }
+            ]
+          },
+          "research": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResearchPreview"
+              }
+            ]
+          },
+          "result": {
+            "$ref": "#/components/schemas/LocalProbeResult"
+          },
+          "strategy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StrategyPreview"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "LocalProbeResult": {
+        "type": "string",
+        "enum": [
+          "verified",
+          "not_configured",
+          "invalid_file",
+          "hash_mismatch",
+          "invalid_producer_response",
+          "tool_unavailable",
+          "validation_failed",
+          "remote_failed",
+          "round_trip_mismatch",
+          "cleanup_failed",
+          "deadline_exceeded"
+        ]
+      },
+      "MarketEvidence": {
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "observation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MarketObservation"
+              }
+            ]
+          },
+          "result": {
+            "$ref": "#/components/schemas/MarketResult"
+          }
+        }
+      },
+      "MarketObservation": {
+        "type": "object",
+        "required": [
+          "origin",
+          "observed_at",
+          "details"
+        ],
+        "properties": {
+          "details": {
+            "$ref": "#/components/schemas/ObservationDetails"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ObservationOrigin"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MarketResult": {
+        "type": "string",
+        "enum": [
+          "verified",
+          "market_closed",
+          "delayed",
+          "frozen",
+          "no_permission",
+          "lines_full",
+          "source_unavailable",
+          "disabled",
+          "adapter_unavailable",
+          "observation_pending",
+          "timed_out",
+          "invalid_configuration",
+          "invalid_response",
+          "unsafe_broker_session",
+          "evidence_incomplete",
+          "stale_observation",
+          "replay_only"
+        ]
+      },
       "MarketStatus": {
         "type": "object",
         "required": [
@@ -4047,6 +5260,42 @@
           }
         }
       },
+      "MarketWatermarks": {
+        "type": "object",
+        "required": [
+          "local_durable",
+          "projected"
+        ],
+        "properties": {
+          "local_durable": {
+            "$ref": "#/components/schemas/ExactCount"
+          },
+          "projected": {
+            "$ref": "#/components/schemas/ExactCount"
+          },
+          "remote_verified": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExactCount"
+              }
+            ]
+          },
+          "source_latest": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceObservation"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "Metrics": {
         "type": "object",
         "required": [
@@ -4115,6 +5364,53 @@
           "unavailable"
         ]
       },
+      "ObservationDetails": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "kind"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/PaperMarketEvidence"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "ibkr_paper"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "kind"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/CryptoMarketEvidence"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "crypto_market"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "ObservationOrigin": {
+        "type": "string",
+        "enum": [
+          "live",
+          "replay"
+        ]
+      },
       "Page": {
         "type": "object",
         "required": [
@@ -4136,11 +5432,95 @@
           }
         }
       },
+      "PaperMarketEvidence": {
+        "type": "object",
+        "required": [
+          "paper_endpoint",
+          "paper_account",
+          "read_only",
+          "unique_market_data_client",
+          "option_open_interest",
+          "option_greeks",
+          "nasdaq_depth_callback"
+        ],
+        "properties": {
+          "nasdaq_depth_callback": {
+            "type": "boolean"
+          },
+          "option_contract_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "option_greeks": {
+            "type": "boolean"
+          },
+          "option_l1_market_data_type": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "maximum": 4,
+            "minimum": 1
+          },
+          "option_open_interest": {
+            "type": "boolean"
+          },
+          "paper_account": {
+            "type": "boolean"
+          },
+          "paper_endpoint": {
+            "type": "boolean"
+          },
+          "read_only": {
+            "type": "boolean"
+          },
+          "remaining_depth_lines": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "remaining_l1_lines": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "stock_l1_market_data_type": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "maximum": 4,
+            "minimum": 1
+          },
+          "unique_market_data_client": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "Phase": {
         "type": "string",
         "enum": [
           "triggered",
           "recovered"
+        ]
+      },
+      "PlanVersion": {
+        "type": "string",
+        "enum": [
+          "fertile.finance/strategy-plan/v1"
         ]
       },
       "Product": {
@@ -4154,6 +5534,195 @@
           "restricted_market_data",
           "notifications"
         ]
+      },
+      "Profile": {
+        "type": "string",
+        "enum": [
+          "primary",
+          "secondary"
+        ]
+      },
+      "QualityCoverage": {
+        "type": "object",
+        "required": [
+          "source",
+          "product",
+          "license"
+        ],
+        "properties": {
+          "license": {
+            "type": "string"
+          },
+          "product": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "watermarks": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MarketWatermarks"
+              }
+            ]
+          }
+        }
+      },
+      "QualityGap": {
+        "type": "object",
+        "required": [
+          "source",
+          "product",
+          "channel",
+          "instrument_id",
+          "from",
+          "to",
+          "cause"
+        ],
+        "properties": {
+          "cause": {
+            "$ref": "#/components/schemas/GapCause"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "count": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExactCount"
+              }
+            ]
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Inclusive UTC start of the gap."
+          },
+          "instrument_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GapRecovery"
+              }
+            ]
+          },
+          "product": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Exclusive UTC end of the gap."
+          }
+        }
+      },
+      "QualityGapsPage": {
+        "type": "object",
+        "required": [
+          "state",
+          "coverage",
+          "items"
+        ],
+        "properties": {
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "coverage": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QualityCoverage"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QualityGap"
+            }
+          },
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/QualityState"
+          }
+        }
+      },
+      "QualityState": {
+        "type": "string",
+        "enum": [
+          "unavailable",
+          "available"
+        ]
+      },
+      "ResearchLicense": {
+        "type": "string",
+        "enum": [
+          "synthetic",
+          "private_research"
+        ]
+      },
+      "ResearchPreview": {
+        "type": "object",
+        "required": [
+          "instrument",
+          "calendar",
+          "first_session",
+          "last_session",
+          "observations",
+          "license",
+          "source_sha256"
+        ],
+        "properties": {
+          "calendar": {
+            "$ref": "#/components/schemas/Calendar"
+          },
+          "first_session": {
+            "type": "string",
+            "format": "date"
+          },
+          "instrument": {
+            "type": "string"
+          },
+          "last_session": {
+            "type": "string",
+            "format": "date"
+          },
+          "license": {
+            "$ref": "#/components/schemas/ResearchLicense"
+          },
+          "observations": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
       },
       "ResearchReport": {
         "type": "object",
@@ -4249,6 +5818,20 @@
             }
           }
         }
+      },
+      "Rollback": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
       },
       "Rule": {
         "type": "object",
@@ -4393,12 +5976,26 @@
       },
       "Settings": {
         "type": "object",
-        "required": [
-          "symbol"
-        ],
         "properties": {
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Profile"
+              }
+            ]
+          },
           "symbol": {
-            "$ref": "#/components/schemas/Symbol"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Symbol"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -4410,6 +6007,46 @@
           "important",
           "urgent"
         ]
+      },
+      "SourceObservation": {
+        "type": "object",
+        "required": [
+          "channel",
+          "instrument_id",
+          "epoch",
+          "seq",
+          "receive_ts"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string"
+          },
+          "epoch": {
+            "$ref": "#/components/schemas/ExactCount"
+          },
+          "exchange_ts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExactCount",
+                "description": "UTC nanoseconds since the Unix epoch, as observed by the market source."
+              }
+            ]
+          },
+          "instrument_id": {
+            "type": "string"
+          },
+          "receive_ts": {
+            "$ref": "#/components/schemas/ExactCount",
+            "description": "UTC nanoseconds since the Unix epoch, as observed by the collector."
+          },
+          "seq": {
+            "$ref": "#/components/schemas/ExactCount"
+          }
+        },
+        "additionalProperties": false
       },
       "StrategyParams": {
         "type": "object",
@@ -4441,6 +6078,47 @@
         },
         "additionalProperties": false
       },
+      "StrategyPreview": {
+        "type": "object",
+        "required": [
+          "plan_version",
+          "execution_model",
+          "source_sha256",
+          "content_sha256",
+          "factors",
+          "modules",
+          "sleeves"
+        ],
+        "properties": {
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "execution_model": {
+            "$ref": "#/components/schemas/ExecutionModel"
+          },
+          "factors": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "modules": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "plan_version": {
+            "$ref": "#/components/schemas/PlanVersion"
+          },
+          "sleeves": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
+      },
       "Subject": {
         "type": "string",
         "enum": [
@@ -4463,7 +6141,9 @@
           "ETHUSDT",
           "BTC",
           "ETH",
-          "SPX"
+          "SPX",
+          "SPY",
+          "QQQ"
         ]
       },
       "SystemStatus": {
@@ -4493,11 +6173,91 @@
           }
         }
       },
+      "TestEvidence": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "details",
+              "kind"
+            ],
+            "properties": {
+              "details": {
+                "$ref": "#/components/schemas/MarketEvidence"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "market"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "details",
+              "kind"
+            ],
+            "properties": {
+              "details": {
+                "$ref": "#/components/schemas/LocalEvidence"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "local"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "details",
+              "kind"
+            ],
+            "properties": {
+              "details": {
+                "$ref": "#/components/schemas/AttemptOutcome"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "smtp"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "details",
+              "kind"
+            ],
+            "properties": {
+              "details": {
+                "$ref": "#/components/schemas/AdapterResult"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "adapter"
+                ]
+              }
+            }
+          }
+        ]
+      },
       "TestMethod": {
         "type": "string",
         "enum": [
           "public_market_sample",
-          "authorized_read"
+          "authorized_read",
+          "paper_market_sample",
+          "file_validation",
+          "test_email",
+          "encrypted_local_round_trip"
         ]
       },
       "TestStatus": {
@@ -4523,6 +6283,16 @@
           "config_version": {
             "type": "integer",
             "format": "int64"
+          },
+          "evidence": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TestEvidence"
+              }
+            ]
           },
           "finished_at": {
             "type": [

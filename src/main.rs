@@ -1,5 +1,10 @@
 use chrono::Utc;
-use std::{path::PathBuf, process::ExitCode, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     net::TcpListener,
     signal::unix::{SignalKind, signal},
@@ -10,40 +15,76 @@ use web::{
     openapi, router, telemetry,
 };
 
+type Failure = (&'static str, Option<&'static str>);
+
+enum Command<'a> {
+    Serve,
+    Migrate,
+    PublishQuality(&'a Path),
+}
+
 fn main() -> ExitCode {
     telemetry::init();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
-        Err(stage) => {
-            tracing::error!(stage, "web command failed");
+        Err((stage, reason)) => {
+            if let Some(reason) = reason {
+                tracing::error!(stage, reason, "web command failed");
+            } else {
+                tracing::error!(stage, "web command failed");
+            }
             ExitCode::FAILURE
         }
     }
 }
 
-fn run() -> Result<(), &'static str> {
+fn run() -> Result<(), Failure> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if args == ["export-openapi"] {
-        let document = openapi().to_pretty_json().map_err(|_| "openapi_export")?;
+        let document = openapi()
+            .to_pretty_json()
+            .map_err(|_| ("openapi_export", None))?;
         println!("{document}");
         return Ok(());
     }
-    if !args.is_empty() && args != ["serve"] && args != ["migrate"] {
-        eprintln!("usage: web [serve|migrate|export-openapi]");
-        return Err("command_line");
-    }
+    let command = match args.as_slice() {
+        [] => Command::Serve,
+        [command] if command == "serve" => Command::Serve,
+        [command] if command == "migrate" => Command::Migrate,
+        [command, inputs] if command == "publish-quality" => {
+            Command::PublishQuality(Path::new(inputs))
+        }
+        _ => {
+            eprintln!("usage: web [serve|migrate|export-openapi|publish-quality INPUTS]");
+            return Err(("command_line", None));
+        }
+    };
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .map_err(|_| "async_runtime")?
-        .block_on(serve_or_migrate(args == ["migrate"]))
+        .map_err(|_| ("async_runtime", None))?
+        .block_on(execute(command))
 }
 
-async fn serve_or_migrate(migrate: bool) -> Result<(), &'static str> {
+async fn execute(command: Command<'_>) -> Result<(), Failure> {
     let dir = std::env::var_os("WEB_CONFIG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("config"));
-    let s = Settings::load(&dir, |name| std::env::var(name).ok()).map_err(|_| "configuration")?;
+    let s = Settings::load(&dir, |name| std::env::var(name).ok())
+        .map_err(|_| ("configuration", None))?;
+    if let Command::PublishQuality(inputs) = command {
+        return s
+            .ops
+            .publish_quality(inputs, &s.paths.static_root)
+            .await
+            .map_err(|reason| ("quality_publish", Some(reason)));
+    }
+    serve_or_migrate(s, matches!(command, Command::Migrate))
+        .await
+        .map_err(|stage| (stage, None))
+}
+
+async fn serve_or_migrate(s: Settings, migrate: bool) -> Result<(), &'static str> {
     let db = Database::new(
         &s.database.url,
         Duration::from_millis(s.database.acquire_timeout_ms),

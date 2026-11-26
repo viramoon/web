@@ -25,11 +25,15 @@ const CSRF_HEADER: &str = "x-csrf-token";
 const MAX_BODY_BYTES: usize = 512;
 
 fn test_app() -> (Router, HeaderValue, tempfile::TempDir) {
-    let (state, authorization, directory) = test_state();
+    app_with_deadline(None)
+}
+
+fn app_with_deadline(deadline_ms: Option<u64>) -> (Router, HeaderValue, tempfile::TempDir) {
+    let (state, authorization, directory) = test_state(deadline_ms);
     (router(state), authorization, directory)
 }
 
-fn test_state() -> (AppState, HeaderValue, tempfile::TempDir) {
+fn test_state(deadline_ms: Option<u64>) -> (AppState, HeaderValue, tempfile::TempDir) {
     let directory = tempfile::tempdir_in("/tmp").unwrap();
     let token_path = directory.path().join("web.env");
     let token = Uuid::new_v4().to_string();
@@ -49,6 +53,9 @@ fn test_state() -> (AppState, HeaderValue, tempfile::TempDir) {
     })
     .unwrap();
     config.server.max_body_bytes = MAX_BODY_BYTES;
+    if let Some(deadline_ms) = deadline_ms {
+        config.server.request_timeout_ms = deadline_ms;
+    }
     config.paths.static_root = directory.path().join("static");
     std::fs::create_dir(&config.paths.static_root).unwrap();
     std::fs::write(
@@ -77,6 +84,11 @@ fn test_state() -> (AppState, HeaderValue, tempfile::TempDir) {
         Duration::from_secs(1),
     )
     .unwrap();
+    let db = if deadline_ms.is_some() {
+        db.with_stalled_connections()
+    } else {
+        db
+    };
     let state = AppState {
         db,
         finance: Finance::new(&config.finance).unwrap(),
@@ -471,6 +483,89 @@ async fn integration_patch_rejects_fields_outside_the_selected_action() {
 }
 
 #[tokio::test]
+async fn versioned_integration_routes_require_admin_origin_and_revision() {
+    let (app, admin, _fixture) = test_app();
+    let path = format!("{INTEGRATIONS}/{}", Uuid::new_v4());
+    let test_id = Uuid::new_v4();
+    for path in [&path, &format!("{path}/tests/{test_id}")] {
+        let response = send(&app, Request::get(path), Body::empty()).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_no_store(&response);
+    }
+    for (action, body) in [
+        ("activate", json!({"test_id": test_id.to_string()})),
+        ("rollback", json!({"version": 1})),
+    ] {
+        let action = format!("{path}/{action}");
+        let response = send(
+            &app,
+            Request::post(&action)
+                .header(header::AUTHORIZATION, admin.clone())
+                .header(header::ORIGIN, "https://other.example.invalid")
+                .header(header::CONTENT_TYPE, "application/json"),
+            body.to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_no_store(&response);
+        let response = send(
+            &app,
+            Request::post(action)
+                .header(header::AUTHORIZATION, admin.clone())
+                .header(header::ORIGIN, ORIGIN)
+                .header(header::CONTENT_TYPE, "application/json"),
+            body.to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
+        assert_no_store(&response);
+    }
+}
+
+#[tokio::test]
+async fn integration_write_timeouts_match_the_exported_contract() {
+    let (app, admin, _fixture) = app_with_deadline(Some(5));
+    let spec = serde_json::to_value(crate::openapi()).unwrap();
+    let id = Uuid::new_v4();
+    let test_id = Uuid::new_v4();
+    for (action, body, hint) in [
+        ("tests", String::new(), "latest test"),
+        (
+            "activate",
+            json!({"test_id": test_id.to_string()}).to_string(),
+            "active version",
+        ),
+        (
+            "rollback",
+            json!({"version": 1}).to_string(),
+            "active version",
+        ),
+    ] {
+        let response = send(
+            &app,
+            Request::post(format!("{INTEGRATIONS}/{id}/{action}"))
+                .header(header::AUTHORIZATION, admin.clone())
+                .header(header::IF_MATCH, "\"1\"")
+                .header(header::CONTENT_TYPE, "application/json"),
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert_no_store(&response);
+        let problem = response_json(response).await;
+        assert_eq!(problem["error"]["code"], "request_timeout");
+        assert!(problem["error"]["message"].as_str().unwrap().contains(hint));
+        let declared =
+            &spec["paths"][format!("{INTEGRATIONS}/{{id}}/{action}")]["post"]["responses"]["504"];
+        assert!(declared["description"].as_str().unwrap().contains(hint));
+        assert_eq!(
+            declared["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/ErrorBody"
+        );
+    }
+}
+
+#[tokio::test]
 async fn credential_upload_rejects_path_dotenv_and_pem_token_forms() {
     let (app, admin, _fixture) = test_app();
     let path = format!("{INTEGRATIONS}/{}/credential", Uuid::new_v4());
@@ -759,7 +854,7 @@ async fn production_trace_omits_request_and_panic_payloads() {
     }
 
     crate::telemetry::init();
-    let (state, _admin, _fixture) = test_state();
+    let (state, _admin, _fixture) = test_state(None);
     async fn panic_with_body(body: String) -> StatusCode {
         tracing::trace!(target: "hyper::incoming", "{body}");
         std::panic::panic_any(body)

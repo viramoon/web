@@ -1,8 +1,12 @@
-mod store;
+pub(crate) mod local_probe;
+mod market_probe;
+pub(crate) mod store;
 
-use crate::{AppState, ErrorBody, api_error, auth::Product};
+use crate::{
+    AppState, ErrorBody, api_error, auth::Product, config, notifications::model::AttemptOutcome,
+};
 use axum::{
-    Extension, Json, Router,
+    Json, Router,
     body::Bytes,
     extract::{
         Path, RawQuery, State,
@@ -10,10 +14,10 @@ use axum::{
     },
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, patch, post, put},
+    routing::{get, post, put},
 };
 use serde::{Deserialize, Serialize};
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::time::Duration;
 use store::{Change, CredentialRef, Error, Integration, Outcome, TestInput, TestView};
 use utoipa::{
     Modify, ToSchema,
@@ -29,6 +33,11 @@ enum Connector {
     BinanceUsdM,
     HyperliquidPerp,
     LicensedOptions,
+    IbkrPaper,
+    StrategyFile,
+    ResearchFile,
+    Smtp,
+    GoogleDrive,
 }
 
 #[derive(Clone, Copy, PartialEq, Deserialize, Serialize, ToSchema)]
@@ -39,6 +48,8 @@ enum Symbol {
     Btc,
     Eth,
     Spx,
+    Spy,
+    Qqq,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, ToSchema)]
@@ -53,6 +64,10 @@ enum AuthKind {
 enum TestMethod {
     PublicMarketSample,
     AuthorizedRead,
+    PaperMarketSample,
+    FileValidation,
+    TestEmail,
+    EncryptedLocalRoundTrip,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -72,6 +87,7 @@ struct CatalogEntry {
     credential_fields: Vec<&'static str>,
     file_types: Vec<&'static str>,
     symbols: Vec<Symbol>,
+    profiles: Vec<Profile>,
     test_method: TestMethod,
     test_available: bool,
     fee_class: FeeClass,
@@ -79,11 +95,16 @@ struct CatalogEntry {
 }
 
 impl Connector {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 9] = [
         Self::BinanceSpot,
         Self::BinanceUsdM,
         Self::HyperliquidPerp,
         Self::LicensedOptions,
+        Self::IbkrPaper,
+        Self::StrategyFile,
+        Self::ResearchFile,
+        Self::Smtp,
+        Self::GoogleDrive,
     ];
 
     fn id(self) -> &'static str {
@@ -92,6 +113,11 @@ impl Connector {
             Self::BinanceUsdM => "binance_usd_m",
             Self::HyperliquidPerp => "hyperliquid_perp",
             Self::LicensedOptions => "licensed_options",
+            Self::IbkrPaper => "ibkr_paper",
+            Self::StrategyFile => "strategy_file",
+            Self::ResearchFile => "research_file",
+            Self::Smtp => "smtp",
+            Self::GoogleDrive => "google_drive",
         }
     }
 
@@ -100,6 +126,8 @@ impl Connector {
             Self::BinanceSpot | Self::BinanceUsdM => &[Symbol::Btcusdt, Symbol::Ethusdt],
             Self::HyperliquidPerp => &[Symbol::Btc, Symbol::Eth],
             Self::LicensedOptions => &[Symbol::Spx],
+            Self::IbkrPaper => &[Symbol::Spy, Symbol::Qqq],
+            _ => &[],
         }
     }
 
@@ -110,55 +138,121 @@ impl Connector {
         }
     }
 
-    fn catalog(self) -> CatalogEntry {
-        let title = match self {
-            Self::BinanceSpot => "Binance Spot",
-            Self::BinanceUsdM => "Binance USDⓈ-M",
-            Self::HyperliquidPerp => "Hyperliquid Perp",
-            Self::LicensedOptions => "Licensed Options",
-        };
-        let requires_token = self.auth_kind() == AuthKind::ApiToken;
-        let (product, test_method, fee_class, credential_fields) = if requires_token {
-            (
-                Product::RestrictedMarketData,
-                TestMethod::AuthorizedRead,
-                FeeClass::Unavailable,
-                vec!["api_token"],
-            )
-        } else {
-            (
+    fn catalog(
+        self,
+        config: &config::Settings,
+        database_ready: bool,
+        market_adapter_configured: bool,
+    ) -> CatalogEntry {
+        use TestMethod::*;
+
+        let (title, product, test_method, test_available) = match self {
+            Self::BinanceSpot => (
+                "Binance Spot",
                 Product::MarketStatus,
-                TestMethod::PublicMarketSample,
-                FeeClass::Free,
-                Vec::new(),
-            )
+                PublicMarketSample,
+                config.binance_probes_enabled && market_adapter_configured,
+            ),
+            Self::BinanceUsdM => (
+                "Binance USDⓈ-M",
+                Product::MarketStatus,
+                PublicMarketSample,
+                config.binance_probes_enabled && market_adapter_configured,
+            ),
+            Self::HyperliquidPerp => (
+                "Hyperliquid Perp",
+                Product::MarketStatus,
+                PublicMarketSample,
+                market_adapter_configured,
+            ),
+            Self::LicensedOptions => (
+                "Licensed Options",
+                Product::RestrictedMarketData,
+                AuthorizedRead,
+                false,
+            ),
+            Self::IbkrPaper => (
+                "IBKR Paper",
+                Product::RestrictedMarketData,
+                PaperMarketSample,
+                market_adapter_configured,
+            ),
+            Self::StrategyFile => (
+                "Strategy File",
+                Product::Integrations,
+                FileValidation,
+                config.local_probes.available(self.id()),
+            ),
+            Self::ResearchFile => (
+                "Research File",
+                Product::Integrations,
+                FileValidation,
+                config.local_probes.available(self.id()),
+            ),
+            Self::Smtp => ("SMTP", Product::Notifications, TestEmail, true),
+            Self::GoogleDrive => (
+                "Google Drive",
+                Product::Integrations,
+                EncryptedLocalRoundTrip,
+                config.local_probes.available(self.id()),
+            ),
+        };
+        let (settings_fields, profiles) = if self.symbols().is_empty() {
+            (vec!["profile"], vec![Profile::Primary, Profile::Secondary])
+        } else {
+            (vec!["symbol"], Vec::new())
+        };
+        let (fee_class, credential_fields) = match self {
+            Self::LicensedOptions => (FeeClass::Unavailable, vec!["api_token"]),
+            Self::IbkrPaper => (FeeClass::Unavailable, Vec::new()),
+            _ => (FeeClass::Free, Vec::new()),
         };
         CatalogEntry {
             connector: self,
             title,
             product,
             auth_kind: self.auth_kind(),
-            settings_fields: vec!["symbol"],
+            settings_fields,
             credential_fields,
-            file_types: Vec::new(),
+            file_types: match self {
+                Self::StrategyFile => vec!["yaml", "yml", "json"],
+                Self::ResearchFile => vec!["dataset.json", "bars.csv"],
+                _ => Vec::new(),
+            },
             symbols: self.symbols().to_vec(),
+            profiles,
             test_method,
-            test_available: false,
+            test_available: test_available && database_ready,
             fee_class,
             auto_backfill: false,
         }
     }
 }
 
+#[derive(Clone, Copy, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+enum Profile {
+    Primary,
+    Secondary,
+}
+
 #[derive(Clone, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Settings {
-    symbol: Symbol,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    symbol: Option<Symbol>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<Profile>,
 }
 
 impl Settings {
     fn validate(self, connector: Connector) -> Result<serde_json::Value, ApiError> {
-        if !connector.symbols().contains(&self.symbol) {
+        let valid = match (self.symbol, self.profile) {
+            (Some(symbol), None) => connector.symbols().contains(&symbol),
+            (None, Some(_)) => connector.symbols().is_empty(),
+            _ => false,
+        };
+        if !valid {
             return Err(ApiError::Invalid);
         }
         serde_json::to_value(self).map_err(|_| ApiError::Store(Error::Internal))
@@ -235,52 +329,64 @@ impl Drop for Credential {
     }
 }
 
-pub(crate) trait ConnectorTester: Send + Sync {
-    fn test(&self, input: TestInput) -> Pin<Box<dyn Future<Output = Outcome> + Send + '_>>;
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", content = "details", rename_all = "snake_case")]
+pub(crate) enum TestEvidence {
+    Market(market_probe::MarketEvidence),
+    Local(local_probe::LocalEvidence),
+    Smtp(AttemptOutcome),
+    Adapter(AdapterResult),
 }
 
-struct DeferredTests;
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AdapterResult {
+    MissingCredential,
+    Unsupported,
+    DeadlineExceeded,
+}
 
-impl ConnectorTester for DeferredTests {
-    fn test(&self, input: TestInput) -> Pin<Box<dyn Future<Output = Outcome> + Send + '_>> {
-        Box::pin(async move {
-            // W2 wires authorized connector test jobs through the generated finance client.
-            // W1 has no connection target or credential reader.
-            let TestInput {
-                connector,
-                settings,
-                credential,
-                ..
-            } = input;
-            let Some(connector) = Connector::ALL.into_iter().find(|c| c.id() == connector) else {
-                return Outcome::Failed;
-            };
-            if serde_json::from_value::<Settings>(settings)
-                .ok()
-                .is_none_or(|settings| !connector.symbols().contains(&settings.symbol))
-                || (connector.auth_kind() == AuthKind::ApiToken && credential.is_none())
-            {
-                return Outcome::Failed;
-            }
-            Outcome::Unavailable
-        })
+async fn probe(s: &AppState, input: &TestInput) -> (Outcome, TestEvidence) {
+    match input.connector.as_str() {
+        "ibkr_paper" | "binance_spot" | "binance_usd_m" | "hyperliquid_perp" => {
+            let (outcome, evidence) =
+                market_probe::test(&s.finance, input, s.config.binance_probes_enabled).await;
+            (outcome, TestEvidence::Market(evidence))
+        }
+        "strategy_file" | "research_file" | "google_drive" => {
+            let (outcome, evidence) = local_probe::test(&s.config.local_probes, input).await;
+            (outcome, TestEvidence::Local(evidence))
+        }
+        "licensed_options" if input.credential.is_none() => (
+            Outcome::Failed,
+            TestEvidence::Adapter(AdapterResult::MissingCredential),
+        ),
+        _ => (
+            Outcome::Unavailable,
+            TestEvidence::Adapter(AdapterResult::Unsupported),
+        ),
     }
 }
 
 pub(crate) fn routes() -> Router<AppState> {
-    let tester: Arc<dyn ConnectorTester> = Arc::new(DeferredTests);
     Router::new()
         .route("/api/v1/integrations/catalog", get(catalog))
         .route("/api/v1/integrations", get(list).post(create))
-        .route("/api/v1/integrations/{id}", patch(update))
+        .route(
+            "/api/v1/integrations/{id}",
+            get(get_integration).patch(update),
+        )
         .route(
             "/api/v1/integrations/{id}/credential",
             put(put_credential).delete(delete_credential),
         )
+        .route("/api/v1/integrations/{id}/tests", post(start_test))
         .route(
-            "/api/v1/integrations/{id}/tests",
-            post(start_test).layer(Extension(tester)),
+            "/api/v1/integrations/{id}/tests/{testId}",
+            get(get_scoped_test),
         )
+        .route("/api/v1/integrations/{id}/activate", post(activate))
+        .route("/api/v1/integrations/{id}/rollback", post(rollback))
         .route("/api/v1/integration-tests/{id}", get(get_test))
 }
 
@@ -395,11 +501,15 @@ fn stored_connector(integration: &Integration) -> Result<Connector, ApiError> {
 #[utoipa::path(get, path="/api/v1/integrations/catalog",
     security(("adminBearer" = []), ("adminSession" = [])),
     responses((status=200, body=[CatalogEntry]),(status=401,body=ErrorBody),(status=403,body=ErrorBody)))]
-pub(crate) async fn catalog() -> impl IntoResponse {
+pub(crate) async fn catalog(State(s): State<AppState>) -> impl IntoResponse {
+    let database_ready = s.db.status().ok;
+    let market_adapter_configured = s.finance.integration_probe_client().is_some();
     Json(
         Connector::ALL
             .into_iter()
-            .map(Connector::catalog)
+            .map(|connector| {
+                connector.catalog(&s.config, database_ready, market_adapter_configured)
+            })
             .collect::<Vec<_>>(),
     )
 }
@@ -407,9 +517,25 @@ pub(crate) async fn catalog() -> impl IntoResponse {
 #[utoipa::path(get, path="/api/v1/integrations",
     security(("adminBearer" = []), ("adminSession" = [])),
     responses((status=200,body=[Integration]),(status=401,body=ErrorBody),
-        (status=403,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=403,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout",body=ErrorBody)))]
 pub(crate) async fn list(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(store::list(&s.db).await?))
+}
+
+#[utoipa::path(get, path="/api/v1/integrations/{id}",
+    params(("id" = String, Path, format = "uuid")),
+    security(("adminBearer" = []), ("adminSession" = [])),
+    responses((status=200,body=Integration,headers(("ETag" = String))),
+        (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
+        (status=422,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout",body=ErrorBody)))]
+pub(crate) async fn get_integration(
+    State(s): State<AppState>,
+    path: Result<Path<String>, PathRejection>,
+) -> Result<Response, ApiError> {
+    let integration = store::get(&s.db, request_id(path)?).await?;
+    Ok(integration_response(StatusCode::OK, integration))
 }
 
 #[utoipa::path(post, path="/api/v1/integrations", request_body=Create,
@@ -418,7 +544,8 @@ pub(crate) async fn list(State(s): State<AppState>) -> Result<impl IntoResponse,
         ("X-CSRF-Token" = Option<String>, Header, description="Required with the session cookie")),
     responses((status=201,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=413,body=ErrorBody),
-        (status=422,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=422,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integrations list before retrying",body=ErrorBody)))]
 pub(crate) async fn create(
     State(s): State<AppState>,
     body: Result<Json<Create>, JsonRejection>,
@@ -441,7 +568,8 @@ pub(crate) async fn create(
     responses((status=200,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
         (status=409,body=ErrorBody),(status=413,body=ErrorBody),(status=422,body=ErrorBody),
-        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision before retrying",body=ErrorBody)))]
 pub(crate) async fn update(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -470,7 +598,8 @@ pub(crate) async fn update(
     responses((status=200,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
         (status=409,body=ErrorBody),(status=413,body=ErrorBody),(status=422,body=ErrorBody),
-        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision before retrying",body=ErrorBody)))]
 pub(crate) async fn put_credential(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -519,7 +648,8 @@ pub(crate) async fn put_credential(
     responses((status=200,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
         (status=409,body=ErrorBody),(status=413,body=ErrorBody),(status=422,body=ErrorBody),
-        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision before retrying",body=ErrorBody)))]
 pub(crate) async fn delete_credential(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -539,13 +669,14 @@ pub(crate) async fn delete_credential(
         ("If-Match" = String, Header, description="Quoted integration revision"),
         ("Origin" = Option<String>, Header, description="Matches the configured HTTPS origin when sent and is required with the session cookie"),
         ("X-CSRF-Token" = Option<String>, Header, description="Required with the session cookie")),
-    responses((status=202,body=TestView),(status=401,body=ErrorBody),(status=403,body=ErrorBody),
+    responses((status=202,body=TestView,headers(("Location" = String))),
+        (status=401,body=ErrorBody),(status=403,body=ErrorBody),
         (status=404,body=ErrorBody),(status=409,body=ErrorBody),(status=413,body=ErrorBody),
         (status=422,body=ErrorBody),(status=428,body=ErrorBody),(status=429,body=ErrorBody),
-        (status=503,body=ErrorBody)))]
+        (status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision and latest test before retrying",body=ErrorBody)))]
 pub(crate) async fn start_test(
     State(s): State<AppState>,
-    Extension(tester): Extension<Arc<dyn ConnectorTester>>,
     path: Result<Path<String>, PathRejection>,
     RawQuery(query): RawQuery,
     headers: HeaderMap,
@@ -559,21 +690,138 @@ pub(crate) async fn start_test(
     empty_body(body)?;
     let input = store::begin_test(&s.db, id, revision).await?;
     let test_id = Uuid::parse_str(&input.test.id).map_err(|_| Error::Internal)?;
-    let outcome = tester.test(input).await;
-    let test = store::finish_test(&s.db, id, test_id, outcome).await?;
-    Ok((StatusCode::ACCEPTED, Json(test)))
+    let test = if input.connector == "smtp" {
+        // begin_test publishes the SMTP job in the same transaction.
+        input.test
+    } else {
+        // Continue settling a test if the client times out or loses its connection.
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(Duration::from_secs(13), probe(&s, &input))
+                .await
+                .unwrap_or((
+                    Outcome::Unavailable,
+                    TestEvidence::Adapter(AdapterResult::DeadlineExceeded),
+                ));
+            store::finish_test(&s.db, id, test_id, result).await
+        })
+        .await
+        .map_err(|_| Error::Internal)??
+    };
+    let location = format!("/api/v1/integrations/{id}/tests/{test_id}");
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::LOCATION, location)],
+        Json(test),
+    ))
 }
 
 #[utoipa::path(get, path="/api/v1/integration-tests/{id}",
     security(("adminBearer" = []), ("adminSession" = [])),
     params(("id" = String, Path, format = "uuid")),
     responses((status=200,body=TestView),(status=401,body=ErrorBody),(status=403,body=ErrorBody),
-        (status=404,body=ErrorBody),(status=422,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=404,body=ErrorBody),(status=422,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout",body=ErrorBody)))]
 pub(crate) async fn get_test(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(store::get_test(&s.db, request_id(path)?).await?))
+}
+
+#[utoipa::path(get, path="/api/v1/integrations/{id}/tests/{testId}",
+    params(("id" = String, Path, format = "uuid"), ("testId" = String, Path, format = "uuid")),
+    security(("adminBearer" = []), ("adminSession" = [])),
+    responses((status=200,body=TestView),(status=401,body=ErrorBody),(status=403,body=ErrorBody),
+        (status=404,body=ErrorBody),(status=422,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout",body=ErrorBody)))]
+pub(crate) async fn get_scoped_test(
+    State(s): State<AppState>,
+    path: Result<Path<(String, String)>, PathRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Path((id, test_id)) = path.map_err(|_| ApiError::Invalid)?;
+    let id = Uuid::parse_str(&id).map_err(|_| ApiError::Invalid)?;
+    let test_id = Uuid::parse_str(&test_id).map_err(|_| ApiError::Invalid)?;
+    let test = store::get_test(&s.db, test_id).await?;
+    if test.integration_id != id.to_string() {
+        return Err(Error::Missing.into());
+    }
+    Ok(Json(test))
+}
+
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Activate {
+    #[schema(format = "uuid")]
+    test_id: String,
+}
+
+#[utoipa::path(post, path="/api/v1/integrations/{id}/activate", request_body=Activate,
+    params(("id" = String, Path, format = "uuid"), ("If-Match" = String, Header),
+        ("Origin" = Option<String>, Header), ("X-CSRF-Token" = Option<String>, Header)),
+    security(("adminBearer" = []), ("adminSession" = [])),
+    responses((status=200,body=Integration,headers(("ETag" = String))),
+        (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
+        (status=409,body=ErrorBody),(status=413,body=ErrorBody),(status=422,body=ErrorBody),
+        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision and active version before retrying",body=ErrorBody)))]
+pub(crate) async fn activate(
+    State(s): State<AppState>,
+    path: Result<Path<String>, PathRejection>,
+    headers: HeaderMap,
+    body: Result<Json<Activate>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let id = request_id(path)?;
+    let revision = revision(&headers)?;
+    let request = request_json(body)?;
+    let test_id = Uuid::parse_str(&request.test_id).map_err(|_| ApiError::Invalid)?;
+    let integration = store::activate(
+        &s.db,
+        id,
+        revision,
+        test_id,
+        s.config.binance_probes_enabled,
+    )
+    .await?;
+    Ok(integration_response(StatusCode::OK, integration))
+}
+
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Rollback {
+    #[schema(minimum = 1)]
+    version: i64,
+}
+
+#[utoipa::path(post, path="/api/v1/integrations/{id}/rollback", request_body=Rollback,
+    params(("id" = String, Path, format = "uuid"), ("If-Match" = String, Header),
+        ("Origin" = Option<String>, Header), ("X-CSRF-Token" = Option<String>, Header)),
+    security(("adminBearer" = []), ("adminSession" = [])),
+    responses((status=200,body=Integration,headers(("ETag" = String))),
+        (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
+        (status=409,body=ErrorBody),(status=413,body=ErrorBody),(status=422,body=ErrorBody),
+        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision and active version before retrying",body=ErrorBody)))]
+pub(crate) async fn rollback(
+    State(s): State<AppState>,
+    path: Result<Path<String>, PathRejection>,
+    headers: HeaderMap,
+    body: Result<Json<Rollback>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let id = request_id(path)?;
+    let revision = revision(&headers)?;
+    let Rollback { version } = request_json(body)?;
+    if version < 1 {
+        return Err(ApiError::Invalid);
+    }
+    let integration = store::rollback(
+        &s.db,
+        id,
+        revision,
+        version,
+        s.config.binance_probes_enabled,
+    )
+    .await?;
+    Ok(integration_response(StatusCode::OK, integration))
 }
 
 #[cfg(test)]
@@ -639,6 +887,36 @@ mod tests {
                 Update::Configure { .. } => "configure",
                 Update::Disable { .. } => "disable",
             };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn integration_selectors_accept_catalog_symbols_or_configured_profile_names() {
+        for (connector, payload, expected) in [
+            (Connector::IbkrPaper, json!({"symbol":"SPY"}), true),
+            (Connector::IbkrPaper, json!({"symbol":"BTC"}), false),
+            (Connector::GoogleDrive, json!({"profile":"secondary"}), true),
+            (
+                Connector::GoogleDrive,
+                json!({"profile":"actual_drive"}),
+                false,
+            ),
+            (
+                Connector::GoogleDrive,
+                json!({"profile":"primary","path":"/tmp/other"}),
+                false,
+            ),
+            (
+                Connector::StrategyFile,
+                json!({"profile":"primary","symbol":"SPY"}),
+                false,
+            ),
+            (Connector::Smtp, json!({}), false),
+        ] {
+            let actual = serde_json::from_value::<Settings>(payload)
+                .ok()
+                .is_some_and(|settings| settings.validate(connector).is_ok());
             assert_eq!(actual, expected);
         }
     }

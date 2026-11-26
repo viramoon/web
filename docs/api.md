@@ -65,22 +65,37 @@ Cookie 使用 `HttpOnly; Secure; SameSite=Strict; Path=/`，作用域为当前�
 
 | 方法与路径 | 请求及响应 |
 | --- | --- |
-| GET /api/v1/integrations/catalog | 200 返回 connector、产品、授权类型、允许字段和标的、文件类型、测试方式与可用状态、费用类别、自动回补能力 |
-| GET /api/v1/integrations | 200 返回配置列表，含 `revision`、`latest`、可空的 `active` 和 `last_test_id` |
+| GET /api/v1/integrations/catalog | 200 返回 connector、产品、授权类型、允许字段、标的或配置槽、文件类型、测试方式与可用状态、费用类别、自动回补能力 |
+| GET /api/v1/integrations | 200 返回配置列表，含 `revision`、`latest`、可空的 `active`、`last_test_id` 和可回滚的 `rollback_versions` |
+| GET /api/v1/integrations/{id} | 200 返回单个配置及 ETag。重试前可用此接口读取最新版本和测试 ID |
 | POST /api/v1/integrations | 提交 `{"connector":"binance_spot","settings":{"symbol":"BTCUSDT"}}`，201 建立草稿 |
 | PATCH /api/v1/integrations/{id} | 提交 `{"action":"configure","settings":{"symbol":"ETHUSDT"}}` 新建草稿，或提交 `{"action":"disable"}` 停用集成。返回 200 |
 | PUT /api/v1/integrations/{id}/credential | 仅对要求凭据的 catalog 条目提交 `{"api_token":"…"}`，200 返回新草稿及固定掩码、版本和轮换时间 |
 | DELETE /api/v1/integrations/{id}/credential | 请求体为空。200 返回无凭据的草稿，并吊销此集成已有的凭据，停用依赖这些凭据的活动版本 |
-| POST /api/v1/integrations/{id}/tests | 请求体为空且无查询参数。将草稿提为候选并记录连接测试，返回 202 和测试记录 |
-| GET /api/v1/integration-tests/{id} | 200 返回测试所属配置版本、起止时间及状态 `pending`、`passed`、`failed`、`unavailable` 或 `superseded` |
+| POST /api/v1/integrations/{id}/tests | 请求体为空且无查询参数。将草稿提为候选并记录连接测试，返回 202、测试记录及查询路径 `Location` |
+| GET /api/v1/integrations/{id}/tests/{testId} | 200 返回此集成的测试、`config_version`、起止时间、状态和可空的类型化 `evidence` |
+| GET /api/v1/integration-tests/{id} | W1 的兼容查询路径。响应与上行一致，路径参数为测试 UUID |
+| POST /api/v1/integrations/{id}/activate | 提交 `{"test_id":"<uuid>"}`，凭当前候选的最近一次通过测试原子切换活动版本。返回 200 和新 ETag |
+| POST /api/v1/integrations/{id}/rollback | 提交 `{"version":1}`，复制可回滚的配置到新的活动版本。返回 200 和新 ETag |
 
-更新、吊销和发起测试需要 `If-Match: "1"` 形式的当前配置 revision。缺失返回 428，格式错误返回 422，旧版本或状态冲突返回 409。返回单个配置对象的写接口提供对应的 ETag。请求超时后先重新读取配置，核对 revision、版本和最近测试 ID，再决定是否重试。替换候选或从最新 revision 发起新的测试时，原待定测试会被标记为 `superseded`。
+更新、吊销、发起测试、启用与回滚需要 `If-Match: "1"` 形式的当前配置 revision。缺失返回 428，格式错误返回 422，旧版本或状态冲突返回 409。HTTP 请求达到时限时返回 504 和 `error.code=request_timeout`。发起测试超时后先读取配置的 revision 和最新测试 ID，再查询该测试。启用或回滚超时后先核对 revision 和活动版本。创建超时先读取集成列表，其他修改超时先检查配置 revision。替换候选或再次开始测试时，原待定测试会被标记为 `superseded`。回滚时同样使待定测试失效，并保留历史版本与审计。已吊销凭据关联的版本无法回滚。
 
-catalog 的公共来源覆盖 Binance Spot、Binance USDⓈ-M、Hyperliquid Perp，另有受授权的期权占位。配置只接收 catalog 各条目的标的枚举。`configure` 只允许 `action` 和 `settings`，`disable` 只允许 `action`。多余字段返回 422。
+行情卡以 `symbol` 选择 catalog 中的固定标的，覆盖 IBKR Paper、Binance Spot、Binance USDⓈ-M、Hyperliquid Perp 和授权期权占位。策略文件、研究文件、SMTP 和 Google Drive 使用 `{"profile":"primary"}` 或 `{"profile":"secondary"}` 选择部署端配置槽。两个 Binance 探测默认关闭。`configure` 只允许 `action` 和 `settings`，`disable` 只允许 `action`。多余字段返回 422。
+
+`test_available` 根据数据库就绪和配置前置条件计算。各槽位、行情生产者和 SMTP notifier 的实际可用性以测试证据为准。
 
 凭据 token 必须为 16 至 4096 个 ASCII 字符。首字符是英文字母或数字，其余字符可另外使用 `-`、`.`、`_`、`~`、`+`，末尾可有最多两个 `=`。服务器路径、任意测试目标、`.env` 内容和 PEM 内容均不接受。密文存储未配置或存储失败时，凭据录入的 PUT 返回 503。凭据吊销的 DELETE 只需数据库可用并通过鉴权和请求校验。响应、日志和错误不含凭据原文，请求正文不写入日志。
 
-W1 的连接测试适配器会将合法候选标记为 `unavailable`，缺少必需凭据的候选标记为 `failed`。测试成功才在同一个数据库事务中退役原版本并提升候选，失败保留原活动版本。集成候选版本与 SMTP 的绑定由 W4 接入。
+测试状态包括 `pending`、`passed`、`failed`、`unavailable` 和 `superseded`。测试与版本绑定，完成后保留活动版本，且只有最新的通过测试允许启用。`evidence.kind` 为 `market`、`local`、`smtp` 或 `adapter`。`details` 提供固定结果码、观测时间及对应的结构化验证摘要。行情证据区分休市、延迟、权限不足和行满。SMTP 候选在 outbox 排队，通过表示中继已接收。启用版本和回滚继承相应测试的加密 SMTP 配置引用，响应仍只提供有限结果码。未绑定快照的旧 SMTP 历史版本不可直接启用或回滚。Drive 候选返回本机加密往返结果。[行情生产者契约](market-probes.md) · [运行手册](../RUNBOOK.md#集成配置及凭据)
+
+## 备份与采集质量
+
+`GET /api/v1/backup/status` 和 `GET /api/v1/quality/gaps` 需要管理员权限，返回 `Cache-Control: no-store`。两个查询从部署提供的本机文件读取，独立于公开系统状态和就绪探测。
+
+- 备份响应包含 `state`、`observed_at`、`last_recoverable_point`、`last_recoverable_at`、`last_full_at`、`last_hourly_at`、`age_seconds`、`alert`、`degraded` 及 `last_isolated_restore`。未配置时状态为 `disabled`。缺失或不合格的文件显示 `unavailable`。有效状态的 `observed_at` 取自 T2b 文件发布时间，`last_recoverable_at` 取自已验证恢复点的数据截点。降级观测可以保留原截点。备份已启用时，水位缺失、时钟倒置、点龄超过 3600 秒或生产者降级均使 `alert` 为真。隔离恢复凭据包括同一远端实际恢复的 `point`、`recoverable_at` 和 `restored_at`，可为空。
+- 缺口响应包含 `state`、`as_of`、`coverage`、`items` 和 `next_offset`。`unavailable` 表示暂无有效观测，`available` 可返回空结果。支持 `source`、`product`、`from`、`to` 筛选，与记录的 UTC 半开区间相交即匹配。列表按起始时间倒序，`limit` 范围 1–100，默认 20，`offset` 默认为 0。翻页比较 `as_of`，快照变化后从首屏重新读取。每段含源、产品、标的、频道、原因、恢复类别和可选计数。恢复类别为 `tick_backfilled`、`bar_backfilled`、`book_restored_from_snapshot`、`history_unrecoverable`，`null` 表示待恢复。覆盖项包含许可和可选的源最新、本机持久、投影和远端已验证水位。WAL 位置、纳秒时间和计数使用精确十进制字符串。
+
+质量文件上限 1 MiB。`web publish-quality INPUTS` 对获准且可持久化的产品读取 finance F3 `finance-market-wal quality` 与 `watermarks`，校验后原子发布。根字段为 `version`（`1`）、`observed_at`（RFC 3339 UTC 时间）及 `streams`（最多 64 项）。每项含 F1 `source`、`product`、`license`、可空的 F3 `watermarks` 对象及 F3 `reports` 数组。web 将 F3 闭区间的 `to_ts` 增加一纳秒后导出半开区间。生产者未提供远端水位时 `remote_verified` 为空。有效快照发布前接口返回 `unavailable`。[发布配置](quality-publishing.md) · [运行手册](../RUNBOOK.md#备份与采集缺口)
 
 ## 告警规则与邮件通知
 

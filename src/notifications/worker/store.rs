@@ -1,7 +1,9 @@
 use super::{ABANDONED_AFTER, NotificationHealth, NotificationPolicy};
 use crate::{
     database::Database,
+    integrations::store::finish_smtp_test,
     notifications::{
+        channel::SmtpProfile,
         model::{AttemptOutcome, Condition, DeliveryKind},
         store::lock_rule_updates,
     },
@@ -35,6 +37,9 @@ pub(super) struct Job {
     pub(super) kind: DeliveryKind,
     pub(super) condition: Option<Condition>,
     pub(super) count: u64,
+    pub(super) candidate_profile: Option<SmtpProfile>,
+    pub(super) snapshot_id: Option<Uuid>,
+    pub(super) integration_test_id: Option<Uuid>,
     attempt: i32,
 }
 
@@ -47,6 +52,9 @@ struct Pending {
     attempts: i32,
     digest_count: Option<i64>,
     defer_reason: Option<String>,
+    candidate_profile: Option<SmtpProfile>,
+    snapshot_id: Option<Uuid>,
+    integration_test_id: Option<Uuid>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -55,6 +63,7 @@ struct Sending {
     kind: DeliveryKind,
     attempts: i32,
     send_started_at: DateTime<Utc>,
+    integration_test_id: Option<Uuid>,
 }
 
 pub(super) async fn valid_time_zone(db: &Database, name: &str) -> Result<bool, sqlx::Error> {
@@ -97,13 +106,20 @@ pub(super) async fn claim(
     lock_rule_updates(&mut tx).await?;
     let now = clock();
     if let Some(active) = sqlx::query_as::<_, Sending>(
-        "SELECT id, kind, attempts, send_started_at FROM app.notification_outbox
+        "SELECT id, kind, attempts, send_started_at, integration_test_id FROM app.notification_outbox
          WHERE status = 'sending' FOR UPDATE",
     )
     .fetch_optional(&mut *tx)
     .await?
     {
-        if active.send_started_at + ABANDONED_AFTER > now {
+        // A versioned test can spend one extra DB deadline capturing and pinning
+        // the snapshot between reservation and transport start.
+        let abandonment = if active.integration_test_id.is_some() {
+            ABANDONED_AFTER + chrono::TimeDelta::seconds(5)
+        } else {
+            ABANDONED_AFTER
+        };
+        if active.send_started_at + abandonment > now {
             tx.rollback().await?;
             unlock_sender(&mut lock).await?;
             return Ok(None);
@@ -114,16 +130,48 @@ pub(super) async fn claim(
             condition: None,
             attempt: active.attempts,
             count: 1,
+            candidate_profile: None,
+            snapshot_id: None,
+            integration_test_id: active.integration_test_id,
         };
         settle(&mut tx, &job, AttemptOutcome::Interrupted, now).await?;
     }
+    sqlx::query(
+        "UPDATE app.notification_outbox job SET status = 'suppressed', updated_at = $1
+         FROM app.integration_tests test
+         WHERE job.integration_test_id = test.id AND job.status = 'pending' AND test.status <> 'pending'",
+    )
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
     replace_suppressed_summaries(&mut tx, now).await?;
     apply_policy(&mut tx, policy, now).await?;
     let Some(pending) = sqlx::query_as::<_, Pending>(
-        "SELECT job.id, job.kind, event.condition, job.priority, job.attempts, job.digest_count, job.defer_reason
+        "WITH smtp AS (
+             SELECT version.smtp_snapshot_id AS active_snapshot,
+                    CASE WHEN version.version IS NOT NULL THEN version.smtp_snapshot_id IS NOT NULL
+                         ELSE NOT EXISTS (
+                             SELECT FROM app.integration_audit audit
+                             WHERE audit.integration_id = config.id AND audit.action = 'disabled'
+                         ) END AS delivery_enabled
+             FROM (VALUES (1)) fallback(row)
+             LEFT JOIN app.integration_configs config ON config.connector = 'smtp'
+             LEFT JOIN app.integration_versions version
+               ON version.integration_id = config.id AND version.state = 'active'
+         )
+         SELECT job.id, job.kind, event.condition, job.priority, job.attempts,
+                job.digest_count, job.defer_reason, job.integration_test_id,
+                candidate.settings->>'profile' AS candidate_profile,
+                CASE WHEN job.integration_test_id IS NOT NULL THEN job.smtp_snapshot_id
+                     ELSE smtp.active_snapshot END AS snapshot_id
          FROM app.notification_outbox job
+         CROSS JOIN smtp
          LEFT JOIN app.alert_events event ON event.id = job.event_id
+         LEFT JOIN app.integration_tests test ON test.id = job.integration_test_id
+         LEFT JOIN app.integration_versions candidate
+           ON candidate.integration_id = test.integration_id AND candidate.version = test.config_version
          WHERE job.status = 'pending' AND job.available_at <= $1
+           AND ((job.integration_test_id IS NULL AND smtp.delivery_enabled) OR test.status = 'pending')
            AND (job.kind NOT IN ('reminder', 'recovery') OR NOT EXISTS (
                SELECT FROM app.notification_outbox prior
                JOIN app.alert_events previous ON previous.id = prior.event_id
@@ -173,10 +221,12 @@ pub(super) async fn claim(
     .bind(now)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("UPDATE app.notification_health SET last_attempt_at = $1 WHERE singleton")
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+    if pending.integration_test_id.is_none() {
+        sqlx::query("UPDATE app.notification_health SET last_attempt_at = $1 WHERE singleton")
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     Ok(Some((
         lock,
@@ -186,6 +236,9 @@ pub(super) async fn claim(
             condition: pending.condition,
             count: count as u64,
             attempt,
+            candidate_profile: pending.candidate_profile,
+            snapshot_id: pending.snapshot_id,
+            integration_test_id: pending.integration_test_id,
         },
     )))
 }
@@ -363,6 +416,31 @@ async fn quiet_until(
     .await
 }
 
+/// Persist the capture before sending. The caller holds the sender advisory lock.
+pub(super) async fn pin_snapshot(
+    db: &mut PgConnection,
+    job_id: Uuid,
+    snapshot_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    let count = sqlx::query(
+        "UPDATE app.notification_outbox SET smtp_snapshot_id = $2
+         WHERE id = $1 AND status = 'sending' AND integration_test_id IS NOT NULL
+           AND smtp_snapshot_id IS NULL",
+    )
+    .bind(job_id)
+    .bind(snapshot_id)
+    .execute(db)
+    .await?
+    .rows_affected();
+    if count == 1 {
+        Ok(())
+    } else {
+        Err(sqlx::Error::Protocol(
+            "SMTP snapshot could not be pinned".into(),
+        ))
+    }
+}
+
 pub(super) async fn finish(
     db: &mut PgConnection,
     job: &Job,
@@ -419,7 +497,20 @@ async fn settle(
     .bind(next_attempt)
     .execute(&mut *db)
     .await?;
-    track_health(db, outcome, now).await
+    if let Some(test_id) = job.integration_test_id {
+        if next_attempt.is_none() {
+            let id = sqlx::query_scalar(
+                "SELECT integration_id FROM app.integration_tests WHERE id = $1",
+            )
+            .bind(test_id)
+            .fetch_one(&mut *db)
+            .await?;
+            finish_smtp_test(db, id, test_id, outcome).await?;
+        }
+        Ok(())
+    } else {
+        track_health(db, outcome, now).await
+    }
 }
 
 async fn track_health(

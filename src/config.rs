@@ -21,6 +21,12 @@ pub struct Settings {
     pub security: SecurityConfig,
     #[serde(default)]
     pub credentials: CredentialConfig,
+    #[serde(default)]
+    pub binance_probes_enabled: bool,
+    #[serde(default)]
+    pub local_probes: crate::integrations::local_probe::LocalProbeConfig,
+    #[serde(default)]
+    pub ops: crate::ops::OpsConfig,
 }
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +145,13 @@ impl Settings {
         if let Some(path) = get("WEB_CREDENTIAL_RECIPIENT_PUBLIC_KEY_FILE") {
             cfg.credentials.recipient_public_key_file = Some(PathBuf::from(path));
         }
+        if let Some(value) = get("WEB_BINANCE_PROBES_ENABLED") {
+            cfg.binance_probes_enabled = value
+                .parse()
+                .map_err(|_| "WEB_BINANCE_PROBES_ENABLED must be true or false")?;
+        }
+        cfg.local_probes.overlay(&get);
+        cfg.ops.overlay(&get);
         cfg.validate()?;
         Ok(cfg)
     }
@@ -169,6 +182,8 @@ impl Settings {
             (Some(dir), Some(key)) if dir.is_absolute() && key.is_absolute() => {}
             _ => return Err("both credential paths must be configured and absolute".into()),
         }
+        self.local_probes.validate(&self.paths.static_root)?;
+        self.ops.validate(&self.paths.static_root)?;
         for ms in [
             api.request_timeout_ms,
             api.shutdown_timeout_ms,
@@ -237,6 +252,7 @@ mod tests {
         .unwrap();
         assert_eq!(settings.server.port, 8300);
         assert_eq!(settings.paths.static_root, Path::new("/alternate"));
+        assert!(!settings.binance_probes_enabled);
         for (key, value) in [
             ("WEB_PORT", "0"),
             ("WEB_PORT", "8080"),
@@ -247,6 +263,7 @@ mod tests {
             ("WEB_PUBLIC_ORIGIN", "http://example.test"),
             ("WEB_ADMIN_SESSION_TTL_SECONDS", "901"),
             ("WEB_CREDENTIAL_DIR", "/tmp/only-one-path"),
+            ("WEB_BINANCE_PROBES_ENABLED", "on"),
         ] {
             assert!(
                 Settings::load(d.path(), |k| if k == key {
