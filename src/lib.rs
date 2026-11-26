@@ -4,18 +4,26 @@ mod circuit;
 pub mod config;
 pub mod credentials;
 pub mod database;
+mod events;
 pub mod finance;
 mod integrations;
 mod market;
+#[cfg(test)]
+mod market_gateway_tests;
+mod market_pending;
+mod market_reads;
+pub mod market_stream;
+mod market_types;
 pub mod notifications;
 mod ops;
 mod spa;
 pub mod telemetry;
 #[cfg(test)]
 mod w1_http_tests;
+mod watchlists;
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{MatchedPath, Request, State},
     http::{HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
@@ -47,6 +55,9 @@ pub struct AppState {
     pub credential_store: Option<credentials::CredentialStore>,
     pub started_at: DateTime<Utc>,
 }
+
+#[derive(Clone)]
+pub(crate) struct StreamShutdown(pub(crate) tokio::sync::watch::Receiver<bool>);
 
 #[derive(Serialize, ToSchema)]
 pub struct ErrorBody {
@@ -242,10 +253,26 @@ fn read_product(path: &str) -> Option<auth::Product> {
     Some(product)
 }
 
+fn is_market_rest(path: &str) -> bool {
+    market_pending::is_private(path)
+        || market_reads::is_private(path)
+        || path == watchlists::WATCHLIST
+}
+
+fn is_stream(path: &str) -> bool {
+    matches!(path, market_stream::MARKET_STREAM | events::EVENTS)
+}
+
 async fn check_access(State(s): State<AppState>, req: Request, next: Next) -> Response {
     let path = matched_path(&req).unwrap_or_default();
     let headers = req.headers();
     let access = match (req.method(), path) {
+        (&Method::GET | &Method::HEAD, path) if is_stream(path) => s
+            .write_access
+            .authorize_stream(headers, path == market_stream::MARKET_STREAM),
+        (&Method::GET | &Method::HEAD, path) if is_market_rest(path) => {
+            s.write_access.authorize_market_read(headers)
+        }
         (&Method::GET | &Method::HEAD, path) => read_product(path).map_or(Ok(()), |product| {
             s.write_access.check_read(headers, product)
         }),
@@ -263,6 +290,7 @@ async fn check_access(State(s): State<AppState>, req: Request, next: Next) -> Re
         )
         | (&Method::PATCH, "/api/v1/integrations/{id}")
         | (&Method::PUT | &Method::DELETE, "/api/v1/integrations/{id}/credential")
+        | (&Method::PUT, watchlists::WATCHLIST | market_pending::DEPTH_FOCUS)
         | (&Method::PUT, notification_http::RULE)
         | (&Method::POST, notification_http::ACK | notification_http::CHANNEL_TESTS) => {
             s.write_access.authorize_same_origin(headers)
@@ -284,6 +312,9 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         .unwrap_or_else(Uuid::new_v4);
     let path = matched_path(&req).unwrap_or("<unmatched>");
     let write_timeout_hint = match (req.method(), path) {
+        (&Method::PUT, watchlists::WATCHLIST) => {
+            Some("Watchlist update outcome unknown. Read the current revision before retrying")
+        }
         (&Method::PUT, notification_http::RULE) => {
             Some("Rule update outcome unknown; read the rule revision before retrying")
         }
@@ -314,6 +345,8 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
     let no_store = is_integration_route(path)
         || ops::is_private(path)
         || notification_http::is_private(path)
+        || is_market_rest(path)
+        || is_stream(path)
         || matches!(
             path,
             "/api/v1/backtests/by-key" | "/api/v1/admin/session" | "/api/v1/me/capabilities"
@@ -396,8 +429,17 @@ pub fn router(s: AppState) -> Router {
         .merge(integrations::routes())
         .merge(notification_http::routes())
         .merge(ops::routes())
+        .merge(watchlists::routes())
+        .merge(market_pending::routes())
+        .merge(market_reads::routes())
+        .merge(market_stream::routes())
+        .merge(events::routes())
         .fallback(spa::serve);
     with_controls(routes, s)
+}
+
+pub fn router_with_shutdown(s: AppState, shutdown: tokio::sync::watch::Receiver<bool>) -> Router {
+    router(s).layer(Extension(StreamShutdown(shutdown)))
 }
 
 fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
@@ -470,8 +512,12 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
 )]
 pub struct WebApi;
 
-pub fn openapi() -> utoipa::openapi::OpenApi {
+pub fn openapi() -> serde_json::Value {
     let mut spec = WebApi::openapi();
+    spec.merge(watchlists::WatchlistApi::openapi());
+    spec.merge(market_pending::MarketPendingApi::openapi());
+    spec.merge(market_stream::MarketStreamApi::openapi());
+    spec.merge(events::EventsApi::openapi());
     // The repository has no declared license. OpenAPI requires a name if the object exists.
     if spec
         .info
@@ -481,19 +527,37 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     {
         spec.info.license = None;
     }
-    // Response models from the generated client have the same wire schema as finance.
-    let upstream: utoipa::openapi::OpenApi =
+    let components = spec.components.get_or_insert_with(Default::default);
+    use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
+    components.add_security_scheme(
+        "adminBearer",
+        SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+    );
+    components.add_security_scheme(
+        "adminSession",
+        SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new(auth::SESSION_COOKIE_NAME))),
+    );
+    let mut spec = serde_json::to_value(spec).expect("web OpenAPI is serializable");
+    // Retain JSON Schema keywords such as const and unevaluatedProperties on
+    // upstream F1 components. Utoipa's schema abstraction cannot round-trip them.
+    let upstream: serde_json::Value =
         serde_json::from_str(include_str!("../openapi/finance.openapi.json"))
             .expect("checked-in finance OpenAPI is valid");
-    let schemas = upstream
-        .components
-        .expect("finance declares model schemas")
-        .schemas;
-    let components = spec.components.get_or_insert_with(Default::default);
+    market_reads::register_openapi(&mut spec, &upstream);
+    let schemas = upstream["components"]["schemas"]
+        .as_object()
+        .expect("finance schemas");
+    let web_schemas = spec["components"]["schemas"]
+        .as_object_mut()
+        .expect("web schemas");
     for name in [
         "BacktestSummary",
         "Accepted",
+        "AcceptedSource",
+        "BundleRequestView",
+        "BundleStrategy",
         "JobRequest",
+        "JobRequestView",
         "StrategyParams",
         "Job",
         "JobStatus",
@@ -511,19 +575,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         "Fill",
         "BlockedOrder",
     ] {
-        components
-            .schemas
-            .insert(name.into(), schemas[name].clone());
+        web_schemas.insert(name.into(), schemas[name].clone());
     }
-    use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
-    components.add_security_scheme(
-        "adminBearer",
-        SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
-    );
-    components.add_security_scheme(
-        "adminSession",
-        SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new(auth::SESSION_COOKIE_NAME))),
-    );
     spec
 }
 

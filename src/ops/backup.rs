@@ -9,9 +9,9 @@ const REMOTE_STATUS_MAX_BYTES: u64 = 16 * 1024;
 const POINT_FORMAT: &str = "%Y%m%dT%H%M%S%.6fZ";
 const RECOVERY_POINT_OBJECTIVE: TimeDelta = TimeDelta::hours(1);
 
-#[derive(Debug, PartialEq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-enum BackupState {
+pub(crate) enum BackupState {
     Disabled,
     Unavailable,
     NoVerifiedPoint,
@@ -34,6 +34,36 @@ pub(crate) struct BackupStatus {
     /// The latest T2b producer observation reported an error or invalid recovery chain.
     degraded: bool,
     last_isolated_restore: Option<IsolatedRestore>,
+}
+
+/// Stable fields from backup status for operational change notifications.
+#[derive(Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub(crate) struct BackupUpdate {
+    state: BackupState,
+    observed_at: Option<DateTime<Utc>>,
+    last_recoverable_at: Option<DateTime<Utc>>,
+    last_full_at: Option<DateTime<Utc>>,
+    last_hourly_at: Option<DateTime<Utc>>,
+    last_isolated_restore_at: Option<DateTime<Utc>>,
+    alert: bool,
+    degraded: bool,
+}
+
+impl From<BackupStatus> for BackupUpdate {
+    fn from(status: BackupStatus) -> Self {
+        Self {
+            state: status.state,
+            observed_at: status.observed_at,
+            last_recoverable_at: status.last_recoverable_at,
+            last_full_at: status.last_full_at,
+            last_hourly_at: status.last_hourly_at,
+            last_isolated_restore_at: status
+                .last_isolated_restore
+                .map(|restore| restore.restored_at),
+            alert: status.alert,
+            degraded: status.degraded,
+        }
+    }
 }
 
 #[derive(Serialize, ToSchema)]

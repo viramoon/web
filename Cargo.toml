@@ -8,6 +8,7 @@ default-run = "web"
 [dependencies]
 finance-client = { path = "crates/finance-client", default-features = false }
 fastrand = "2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 sha2 = "0.10"
 subtle = "2"
 libc = "0.2"

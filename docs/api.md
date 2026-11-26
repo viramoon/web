@@ -16,7 +16,7 @@ OpenAPI 由 handler 注解和输出类型生成。执行下列命令可在不启
 
 CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.openapi.json)逐字节比对。正式集成时将本提交的生成物交给 fertile/contracts/web.openapi.json，再由 frontend 使用 Hey API 生成客户端。生成物只能经导出流程更新。
 
-本仓 CI 在临时目录校验导出内容，校验结果只显示状态。OpenAPI 中的 example、examples 和生成客户端的样例须登记合成来源。生成快照与客户端仍使用各自的既有导出和再生成流程。
+本仓 CI 在临时目录校验导出内容，校验结果只显示状态。web 导出使用排序键和单空格缩进，保留 F10a 的 JSON Schema 关键字并为 WG 的文件上限留出余量。OpenAPI 中的 example、examples 和生成客户端的样例须登记合成来源。生成快照与客户端仍使用各自的既有导出和再生成流程。
 
 路由未命中时，解码后首段为 `api` 或 `healthz` 的路径返回 JSON 404，判断时忽略空段和 `.` 段。错误结构为 `error.code`、`error.message`，日志由 `X-Request-Id` 关联。
 
@@ -57,7 +57,29 @@ GET /api/v1/backtests/datasets 返回标的日历、来源和首尾日期。SmaC
 
 Cookie 使用 `HttpOnly; Secure; SameSite=Strict; Path=/`，作用域为当前主机。所有 Cookie 管理写入都需 Origin 精确匹配，并发送会话的 CSRF token；新集成写接口收到显式 Bearer 和 Origin 时也校验 Origin。脚本可仅发送 Bearer。权限失败为 401 或 403，管理员登录及写入共享限流。会话、能力及集成接口返回 `Cache-Control: no-store`。
 
-匿名可见 `system`、`backtests`、`market_status`。管理员额外可见 `backtest_submission`、`integrations`、`restricted_market_data` 和 `notifications`。回测按原键查询、集成读取和通知读取使用同一产品权限检查。受限行情产品权限已定义，数据端点、流、缓存和深链由后续 W2/U 系列接入。
+匿名可见 `system`、`backtests`、`market_status`。管理员额外可见 `backtest_submission`、`integrations`、`restricted_market_data` 和 `notifications`。回测按原键查询、集成读取、通知读取和 W2a 行情网关使用 W1 管理员身份。
+
+## 行情、自选与推送
+
+以下路径使用 `/api/v1` 前缀。W2a 读取与流只允许管理员会话或 bearer，响应含 `Cache-Control: no-store`。浏览器会话的跨源请求被拒绝，WebSocket 会话握手还要求明确的同源 `Origin`。REST 行情和自选读取每分钟共享 120 次额度，超额返回 429 和 `Retry-After`。自选和 focus 写入沿用 W1 写额度，浏览器会话必须提供同源 `Origin` 和 `X-CSRF-Token`。
+
+| 路径 | F10a 读取语义 |
+| --- | --- |
+| `GET /market/products` | 分页查询可记录产品和许可。来源可筛选。 |
+| `GET /market/wal` | 以 `source` 和 `product` 读取已提交 WAL。使用 `after` 排除已读位置，使用 `through` 固定翻页上界。 |
+| `GET /market/projection/latest` | 按 `source`、`product`、`channel`、`instrument_id`、`epoch` 和 `seq` 精确读取投影事件或修订。 |
+| `GET /market/watermarks` | 按源和产品读取 WAL 与投影水位。 |
+| `GET /quality/finance-gaps` | finance F3 授权产品的缺口、覆盖和分页。按源、产品及可选频道、标的和窗口筛选。F10a 接受 UTC Unix 纳秒的半开窗口 `[from_ts, to_ts)`。 |
+
+响应沿用对应的 finance 结构。许可标签、源和产品、`as_of`、部分覆盖、可空字段、精确十进制值及大整数文本保留其上游语义。WAL 和投影事件需通过本机记录与显示许可检查。F10a 不提供调度额度，预留的 `GET /market/subscriptions` 返回 503 及 `finance_contract_pending`。部署预算 9/16/45/30 行及深度 2 + 1 属于 finance 调度设计，不能当作当前实测配额。既有 `GET /quality/gaps` 仍从 web 的获准质量快照读取。
+
+自选用 `GET /watchlists/{id}` 读取，用 `PUT /watchlists/{id}` 以 `{revision, instrument_ids}` 替换有序列表。未保存的自选返回 revision 0 和空列表。每次成功提交增加 revision，陈旧 revision 返回 409。接受最多 64 个不重复的 F1 标的 ID，ID 校验限规范语法。标的发现和向 finance 提交订阅需求需后续契约。
+
+`GET /market/instruments`、`/market/bars`、`/market/quotes`、`/market/book`、`/market/trades`、`/market/derivatives`、`/market/subscriptions`、`/indicators`、`/indicators/values`、`/options/chain`、`/options/flow`、`/options/exposure` 和 `PUT /market/depth-focus` 已定义类型化请求，返回 `finance_contract_pending`。focus 接受 `action: set` 加 F1 标的 ID，或 `action: clear`。有效请求在本批次不分配行或深度。预留时间窗为带时区的 `[from, until)`。后续接入时由 finance 返回实际额度、许可、覆盖、OI 日期和未知值。
+
+`GET /events` 返回 `text/event-stream`。事件数据为含 `schema_version: "1.0"` 和 `kind` 的 JSON，事件名称为 `job`、`alert`、`backup`、`permissions`、`reset`。作业、告警和备份来自现有只读来源，流只给最小状态字段。首次订阅收到权限状态与 `snapshot_required`；客户端通过 REST 取得初始快照。使用 `Last-Event-ID` 接续最近 128 个保留事件，ID 格式为 `<UUID>:<十进制序号>`。游标超出保留窗、进程代际变化、慢端掉队时返回 `cursor_unavailable`，告警窗口溢出返回 `alert_window_overrun`。收到重置后重取快照。流每秒检查空闲会话且在发送数据前重新鉴权，最多同时 16 条连接。
+
+`GET /stream/market` 使用同一权限及来源校验，当前返回 503 `market_stream_unavailable`。仓内类型化 WAL 回放以源、产品、频道、标的及 F1 `epoch`+`seq` 为边界，快照建立基线，掉队、跳号或换代时重置。事件格式沿用 finance F1。当前 F10a 无实时订阅握手或临时显示 feed。
 
 ## 集成配置
 

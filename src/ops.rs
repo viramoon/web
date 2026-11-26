@@ -2,7 +2,7 @@ mod backup;
 mod publish;
 mod quality;
 
-pub(crate) use backup::{__path_backup_status, backup_status};
+pub(crate) use backup::{__path_backup_status, BackupState, BackupUpdate, backup_status};
 pub(crate) use quality::{__path_quality_gaps, quality_gaps};
 
 use crate::{AppState, config::ConfigError};

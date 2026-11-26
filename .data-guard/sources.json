@@ -1,4 +1,17 @@
 {
   "version": 1,
-  "fixtures": {}
+  "fixtures": {
+    "src/market_reads/tests.rs": {
+      "sha256": "ed67cf9431fb2aae20addcff5d84f16ab6576f95a9688a52cbd467f07fe15a7b",
+      "generator": "src/market_reads/tests/synthetic.rs",
+      "seed": "fixed",
+      "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口和未知值。"
+    },
+    "src/market_stream/replay/tests.rs": {
+      "sha256": "9854b024eb2cdd8a4154cfa385836021945ef215a532fb1d0d7fb7dd054a074a",
+      "generator": "src/market_stream/fixture.rs",
+      "seed": "fixed",
+      "source": "运行 cargo test --locked --offline market_stream::replay。用固定时钟、十进制和超出 JavaScript 安全整数的序号构造合成快照、增量、重置和永续合约上下文。"
+    }
+  }
 }

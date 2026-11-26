@@ -48,6 +48,10 @@ W3 迁移 `20261127000000` 在 `app` 下追加以下表。后续迁移 `20261127
 
 成员行的 `summary_id` 指向汇总 outbox 行。读取投递审计时，API 从汇总行的 `event_id` 取得 `summary_alert_id`，并按汇总投递 UUID 读取 `summary_attempts` 和 `summary_deferrals`。替代投递沿用原告警的 `event_id`，并以 `replaces_id` 引用原投递，所以同一告警可以追踪原汇总和替代链。 [接口文档](api.md#告警规则与邮件通知)
 
+## 自选
+
+W2a 迁移 `20261127040000` 创建 `app.market_watchlists`。v1 的单一管理员拥有自选，表只保存自选 ID、正整数 revision 和有序 F1 标的 ID 列表。新自选以 revision 0 条件创建，既有自选以行内 revision 比较更新，两个并发请求最多一个成功。更新超时先重读该行。自选随 PostgreSQL 备份及恢复，行情正文和流游标不保存在该表。
+
 ## 校验与恢复
 
 ```sh

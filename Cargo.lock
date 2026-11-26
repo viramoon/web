@@ -2706,6 +2706,7 @@ dependencies = [
  "chrono",
  "fastrand",
  "finance-client",
+ "futures-util",
  "libc",
  "openssl",
  "percent-encoding",

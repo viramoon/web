@@ -35,6 +35,20 @@ finance_http:
   stable: {connect_timeout_ms: 1000, request_timeout_ms: 2000, backoff_ms: 100, circuit_failure_threshold: 5, circuit_open_ms: 5000}
   max_read_retries: 2
   write_retries: 0
+market_gateway:
+  finance_contract: openapi/finance.commit
+  access: administrator
+  cache_control: no-store
+  rest_reads: {max_requests: 120, window_seconds: 60, identity: single_admin}
+  watchlists: {table: app.market_watchlists, migration: "20261127040000", max_instruments: 64}
+  events:
+    path: /api/v1/events
+    protocol: sse
+    heartbeat_seconds: 15
+    retained_events: 128
+    max_connections: 16
+  market_stream: {path: /api/v1/stream/market, protocol: websocket, state: transport_unavailable}
+  interface: docs/api.md
 maintenance:
   publish_quality:
     command: web publish-quality INPUTS

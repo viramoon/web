@@ -4,3 +4,4 @@ mod notifications;
 mod notifications_ingest;
 mod notifications_worker;
 mod postgres;
+mod watchlists;
