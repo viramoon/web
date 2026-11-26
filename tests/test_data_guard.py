@@ -344,11 +344,40 @@ class DataGuardTests(unittest.TestCase):
                 "fn rules(rule: u64) {\n    let _ = [\n"
                 "        (rule, 1, false),\n        (rule, 2, true),\n    ];\n}\n"
             ),
+            "src/notifications/generic.rs": (
+                "fn set_limits<T>(_: T, _: T) {}\nfn configure() {\n"
+                "    set_limits::<u32>(\n        1,\n        1000,\n    );\n}\n"
+            ),
+            "src/notifications/signed.rs": (
+                "fn set_limits(_: i32, _: i32) {}\nfn configure() {\n"
+                "    set_limits(\n        -1,\n        -2,\n    );\n}\n"
+            ),
         }
         for path, content in cases.items():
             self.write(path, content)
         self.git("add", ".")
-        self.git("commit", "-qm", "Add W3 source")
+        rejected = self.guard("--show-paths", "staged")
+        self.assert_rejected(rejected, "fixture-source-required")
+        for path in cases:
+            self.assertIn(f"fixture-source-required {ascii(path)}".encode(), rejected.stderr)
+
+        generator = "tests/gen_w3_sources.py"
+        encoded = {path: content.encode().hex() for path, content in cases.items()}
+        self.write(generator, f"import sys\nfiles = {encoded!r}\n"
+                   "sys.stdout.buffer.write(bytes.fromhex(files[sys.argv[1]]))\n")
+        sources = {}
+        for path, content in cases.items():
+            generated = self.run_command(sys.executable, generator, path, check=True).stdout
+            self.assertEqual(generated, content.encode())
+            sources[path] = {
+                "sha256": hashlib.sha256(generated).hexdigest(),
+                "generator": generator,
+                "seed": "fixed",
+                "source": "Fixed Rust source emitted by tests/gen_w3_sources.py for this path.",
+            }
+        self.write(".data-guard/sources.json", json.dumps({"version": 1, "fixtures": sources}))
+        self.git("add", ".")
+        self.git("commit", "-qm", "Add registered W3-style source")
 
         path = "src/notifications/capture.rs"
         for table in ("date,price\n2030-01-01,1.25\n", "1,2,\n3,4,\n"):
@@ -357,6 +386,45 @@ class DataGuardTests(unittest.TestCase):
                 self.git("add", path)
                 self.assert_rejected(self.guard("staged"), "fixture-source-required")
                 self.git("rm", "-f", path)
+
+    def test_reviewed_market_source_requires_the_exact_path_and_bytes(self):
+        path = "src/notifications/worker.rs"
+        original = (ROOT / path).read_bytes()
+        self.write(path, original)
+        self.git("add", path)
+        self.git("commit", "-qm", "Add W3 source by reviewed digest")
+        self.write(path, original + b"\n// changed\n")
+        self.git("add", path)
+        self.assert_rejected(self.guard("staged"), "fixture-source-required")
+
+        self.write(path, original)
+        self.git("add", path)
+        copy = "src/copied_notification_worker.rs"
+        self.write(copy, original)
+        self.git("add", copy)
+        self.assert_rejected(self.guard("staged"), "fixture-source-required")
+
+    def test_ci_postgres_credentials_are_pinned_to_the_service_workflow(self):
+        path = ".github/workflows/service.yml"
+        fixture = (ROOT / path).read_text()
+        self.write(path, fixture)
+        self.git("add", path)
+        self.git("commit", "-qm", "Restore the approved CI database settings")
+        for key in ("POSTGRES_PASSWORD", "DATABASE_URL"):
+            with self.subTest(key=key):
+                lines = fixture.splitlines(keepends=True)
+                changed = [line.replace("local-ci-only", MARKER) if line.lstrip().startswith(key + ": ")
+                           else line for line in lines]
+                self.assertNotEqual(changed, lines)
+                self.write(path, "".join(changed))
+                self.git("add", path)
+                self.assert_rejected(self.guard("staged"), "credential-material")
+        self.write(path, fixture)
+        self.git("add", path)
+        copy = ".github/workflows/copy.yml"
+        self.write(copy, fixture)
+        self.git("add", copy)
+        self.assert_rejected(self.guard("staged"), "credential-material")
 
     def test_reviewed_w3_credentials_require_the_exact_path_and_source_bytes(self):
         path = "src/notifications/channel/tests.rs"

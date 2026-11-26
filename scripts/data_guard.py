@@ -23,6 +23,29 @@ REGULAR_MODES = {b"100644", b"100755"}
 REVIEWED_CREDENTIAL_TESTS = {
     "src/notifications/channel/tests.rs": "beb37680e9a5e9f82e7c5d6533c563b61cd467f1928c2803d668162f263f7bb3",
 }
+# Exact CI-only credential lines from the approved W3 main workflow (4c966be).
+REVIEWED_CI_CREDENTIAL_LINES = frozenset({
+    "66c575c9155029b263d5552e89d8d2b621007abbca514d531962962ba811c93f",
+    "2fbdc8279a5926dbcd673a32e8a49c4fb7c78c7a726d8a6c35a5f56f695d22f4",
+})
+# Established source blobs that match market-data signatures. Each entry is
+# pinned to bytes reviewed in the named commits, never a path-wide exception.
+REVIEWED_MARKET_SOURCE_DIGESTS = {
+    "src/notifications/worker.rs": (  # 4c966be: integer notification policy bounds.
+        "be5d1a3971142d1b2e0a54eab35c4de172c4c0c6dfae00911a5627d7c3a84d9a",
+    ),
+    "src/w1_http_tests.rs": (  # 4992a15 and 7e641b6: fixed OHLC redaction canary.
+        "3ebb7492acdd8dcbfcbb857f0dde425c0b9449896d07b91238ec53176c021352",
+        "e05dac63895d9cb6552d0a5a40a895086b63910af6543d73044646551eb32f4e",
+    ),
+    "tests/api/database.rs": (  # 4c966be and 7e641b6: migration version assertions.
+        "7ecf7e6f8288dbcf90690479fed74283cc9a466e8b08561034c991424cbccb4b",
+        "11e747ad4261b5514426b6dbff552d8a6471c619a794dc875ed6786fc133af4b",
+    ),
+    "tests/api/notifications_worker.rs": (  # 4c966be: synthetic rule state tuples.
+        "c212791b32ff6297be1d1f3b993cd118437bd4d3817e0c1bfc0030c7d0ebdd9d",
+    ),
+}
 # Ordinary tracked files. Other paths require a source record in the same tree.
 ALLOWED_FILES = frozenset({
     ".agents/skills/readme.md", ".data-guard/rules.json", ".data-guard/sources.json",
@@ -67,11 +90,7 @@ MARKET_FIELDS = (
     {"chart", "timestamp", "indicators"},
     {"observations", "observationstart", "value"},
 )
-SOURCE_SUFFIXES = (".java", ".py", ".rs", ".sh")
-RUST_LIST_START = re.compile(r"(?:\b[A-Za-z_]\w*!?\(|\b[A-Za-z_]\w*!\[|\bin[ \t]+\[|=[ \t]*\[)$")
-RUST_LIST_ROW = re.compile(
-    r"(?:[0-9][0-9_]*|\([A-Za-z_]\w*,[ \t]*[0-9][0-9_]*,[ \t]*(?:true|false)\)),"
-)
+SOURCE_SUFFIXES = (".java", ".py", ".sh")
 DATA_LINE = re.compile(r"""^\s*(?:[\[{\x60]|["']?[\w-]+["']?\s*[:=])""")
 FIELD_VALUE = re.compile(
     r"""(?ix)
@@ -103,7 +122,7 @@ PRIVATE_KEY = re.compile(
 )
 SECRET_FIELD = (
     r"(?:web[-_]admin[-_]token|api[-_]token|api[-_]key|access[-_]token|refresh[-_]token|"
-    r"client[-_]secret|x[-_]csrf[-_]token|csrf[-_]token|__host-web_admin_session|password)"
+    r"client[-_]secret|x[-_]csrf[-_]token|csrf[-_]token|__host-web_admin_session|postgres[-_]password|password)"
 )
 TOKEN_PREFIX = r"(?:gh[pousr]_[a-z0-9]{24,}|github_pat_[a-z0-9_]{24,}|eyj[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+)"
 CREDENTIAL = re.compile(
@@ -318,35 +337,13 @@ def load_sources(tree, required):
     return raw["fixtures"]
 
 
-def rust_list_rows(lines):
-    """Find integer and test tuple literals inside a closed Rust call or array."""
-    pending = []
-    rows = set()
-    for index, line in enumerate(lines):
-        content = line.lstrip(" \t")
-        stripped = content.rstrip()
-        if not stripped:
-            continue
-        indent = len(line) - len(content)
-        while pending and indent <= pending[-1][0]:
-            opening_indent, closing, literals = pending.pop()
-            if indent == opening_indent and stripped.startswith(closing):
-                rows.update(literals)
-        if pending and RUST_LIST_ROW.fullmatch(stripped):
-            pending[-1][2].append(index)
-        if not stripped.startswith("//") and RUST_LIST_START.search(stripped):
-            pending.append((indent, ")" if stripped.endswith("(") else "]", []))
-    return rows
-
-
-def looks_like_table(text, *, rust_source=False):
+def looks_like_table(text):
     # Two consecutive records with the same delimiter/width and numeric fields
     # catch common renamed CSV/TSV exports without treating prose as a table.
     lines = text.splitlines()
-    code_rows = rust_list_rows(lines) if rust_source else set()
     for delimiter in (",", "\t", ";", "|"):
         previous_width = 0
-        for index, line in enumerate(lines):
+        for line in lines:
             row = ()
             if delimiter in line:
                 try:
@@ -357,9 +354,8 @@ def looks_like_table(text, *, rust_source=False):
             columns = {normal_field(field.strip("\x60")) for field in fields}
             if any(group <= columns for group in (*TABLE_HEADERS, *MARKET_FIELDS)):
                 return True
-            source_literal = delimiter == "," and index in code_rows
             numeric = any(VALUE.fullmatch(field) for field in fields)
-            if len(fields) >= 2 and not source_literal and numeric and any(
+            if len(fields) >= 2 and numeric and any(
                 VALUE.fullmatch(field) or DATE.fullmatch(field) for field in fields[:2]
             ):
                 if previous_width == len(fields):
@@ -377,6 +373,20 @@ def normal_field(field):
 def credential_in_path(path):
     decoded = unquote(path)
     return CREDENTIAL.search(decoded) or PATH_CREDENTIAL.search(decoded)
+
+
+def normalize_payload(text):
+    return BLOCK_QUOTE.sub("", unescape(text)).replace(r'\"', '"')
+
+
+def has_credential(path, text, content):
+    if path == ".github/workflows/service.yml":
+        # Only these exact non-production settings are excluded from this check.
+        content = normalize_payload("\n".join(
+            line for line in text.splitlines()
+            if hashlib.sha256(line.encode()).hexdigest() not in REVIEWED_CI_CREDENTIAL_LINES
+        ))
+    return CREDENTIAL.search(content.replace(r"\n", "\n")) is not None
 
 
 def allowed_file_type(path):
@@ -486,10 +496,10 @@ def inspect_blob(path, entry, rules, source):
     if CONTROL.search(text):
         return "non-text"
     # Recognize field shapes in plain text and in quoted or escaped payloads.
-    content = BLOCK_QUOTE.sub("", unescape(text)).replace(r'\"', '"')
+    content = normalize_payload(text)
     if PRIVATE_KEY.search(text):
         return "credential-material"
-    if CREDENTIAL.search(content.replace(r"\n", "\n")):
+    if has_credential(path, text, content):
         reviewed = REVIEWED_CREDENTIAL_TESTS.get(path)
         if reviewed is None or hashlib.sha256(data).hexdigest() != reviewed:
             return "credential-material"
@@ -515,16 +525,17 @@ def inspect_blob(path, entry, rules, source):
             or normalized.endswith(rules.fixture_suffixes)
             or any(fnmatchcase(normalized, pattern) for pattern in rules.fixture_paths)
             or HTTP_DUMP.search(text)
-            or json_content_reason(text, openapi=normalized.startswith("openapi/"))
-            or looks_like_table(text, rust_source=normalized.endswith(".rs"))):
+            or json_content_reason(text, openapi=normalized.startswith("openapi/"))):
         return "fixture-source-required"
-    # In implementation files, check lines shaped like data instead of
-    # interpreting strings passed as arguments or declared as code constants.
+    # For the selected non-Rust source formats, inspect data-shaped lines
+    # for standalone key-value payloads.
     if source_code:
         content = "\n".join(line for line in content.splitlines() if DATA_LINE.match(line))
     fields = {normal_field(match["field"]) for match in FIELD_VALUE.finditer(content.replace(r"\n", "\n"))}
-    if any(group <= fields for group in MARKET_FIELDS):
-        return "fixture-source-required"
+    if looks_like_table(text) or any(group <= fields for group in MARKET_FIELDS):
+        reviewed = REVIEWED_MARKET_SOURCE_DIGESTS.get(path, ())
+        if not reviewed or hashlib.sha256(data).hexdigest() not in reviewed:
+            return "fixture-source-required"
     return None
 
 

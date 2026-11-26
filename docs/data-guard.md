@@ -16,7 +16,7 @@ web 对标准错误输出 JSON。请求完成事件只记录 UUID 请求 ID、�
 | pre-push | 检查每个非删除 ref 引入的提交。已有远端 ref 使用 Git 提供的原 SHA，新 ref 使用远端跟踪 HEAD 或 main 为基准，缺失时检查完整历史。 |
 | CI | 以 PR 基础 SHA 或 push 的先前 SHA 为基准。新分支优先用远端 main 为基准。每个新提交与第一父提交比对，覆盖合并分支以及后来被删除的对象。CI 先扫描再执行服务、文档和客户端校验。 |
 
-Web service 的 core 作业在完整检出后直接执行[共享检查入口](../scripts/ci-data-guard.sh)。文档和客户端工作流通过可复用的 data-guard 作业调用同一入口。core 的 PostgreSQL 容器使用 GitHub Actions 的动态主机端口映射，迁移和 SQLx 校验使用作业内的回环地址。可使用文档工作流已有的 PyYAML 运行 `python3 -B -m unittest discover -s tests -p test_ci_workflow.py -v`，检查作业结构和检查顺序。
+Web service 的 data-guard 作业在完整检出后执行[共享检查入口](../scripts/ci-data-guard.sh)，通过后才运行 core。文档和客户端工作流通过可复用的 data-guard 作业调用同一入口。core 的 PostgreSQL 容器沿用 main 的密码认证和 `5432:5432` 映射，迁移和 SQLx 校验使用作业内的回环地址。可使用文档工作流已有的 PyYAML 运行 `python3 -B -m unittest discover -s tests -p test_ci_workflow.py -v`，检查作业结构和检查顺序。
 
 [安装脚本](../scripts/install-data-guard-hooks.sh)可重复运行并保留现有钩子。如需把检查接入自定义钩子，分别调用 [.githooks/pre-commit](../.githooks/pre-commit) 和 [.githooks/pre-push](../.githooks/pre-push)。pre-push 须接收 Git 传来的参数和完整 stdin ref 列表，原钩子有需要时也须收到同一输入。浅克隆或缺少已知基准对象时，补齐本地历史和跟踪 ref 后再检查。
 
@@ -48,12 +48,14 @@ Web service 的 core 作业在完整检出后直接执行[共享检查入口](..
 
 普通文件须为 UTF-8 文本，允许 BOM、制表符和换行。禁止路径、后缀、大小、Git 对象类型和魔数仍按硬规则检查。可识别的凭据、Cargo/libtest 文本或 JSON 报告、JUnit、异常转储及带时间戳和级别的日志均属硬拒绝项。报告和日志专用目录也被禁止。Markdown 代码块、引用及其他文本内嵌记录仍执行相同检查。
 
-fixture、回放、原始 HTTP 转储和生成客户端样例须登记合成来源。内容检查识别行情表，以及 OHLC、报价、成交和盘口的字段组合与值，覆盖独立 JSON、嵌入文本和转义字符串。命名为源码的文件仍检查独立的数据行，包含空末列的 CSV 也需要来源登记。仅闭合的 Rust 调用或数组内符合语法的整数参数和测试元组按源码处理，普通实现中的常量和内联构造由代码审查核对。
+fixture、回放、原始 HTTP 转储和生成客户端样例须登记合成来源。内容检查识别行情表，以及 OHLC、报价、成交和盘口的字段组合与值，覆盖独立 JSON、嵌入文本和转义字符串。Rust 源码使用相同的表格与行情特征检查。含空末列的 CSV 即使改名为 `.rs` 也会触发检查。合法源码命中特征时，须按确切路径与字节摘要登记，由代码审查核对来源。
 
 ## 合成来源
 
 `sources.json` 的 `fixtures` 以精确相对路径为键。每项包含 `sha256`（原始文件字节的 64 位小写十六进制摘要）、`generator`（同一 Git 树中的生成器）、`seed`（固定生成可用 `fixed`）和非空 `source`（生成命令、方法和覆盖场景）。清单与生成器随样本一起提交，PR 审阅者按说明重建并核对。登记不能覆盖硬拒绝规则。真实样本经变换后仍属于原来源。
 
 W3 的 [SMTP 测试源码](../src/notifications/channel/tests.rs) 已审查，固定值仅用于在临时目录构造合成凭据。检查器以该文件的确切路径和 W3 已合并源码的 SHA-256 固定这一凭据特征例外，并继续执行其他扫描。改动字节或复制到其他路径都会重新触发凭据检查。
+
+检查器还按路径和 SHA-256 固定四个 Rust 源文件的已审查版本，来源为 W3 main 提交 `4c966be` 和 WG 的 `4992a15`、`7e641b6`。匹配内容包括策略整数边界、迁移编号、合成状态元组和 OHLC 脱敏探针。该清单只豁免对应字节的行情特征，凭据和其他硬拒绝规则仍执行。Web service 中从 `4c966be` 恢复的两行 CI 专用合成数据库配置单独按工作流路径及行摘要核对，值被改动或复制到其他文件时恢复凭据检查。
 
 当前没有独立持久化的行情 fixture。现有 API 与传输测试从源码常量构造带固定时钟、价格和数量的合成响应。WG 的防护测试以固定常量现场构造行情、违规正文、改名签名和报告，临时仓库中的正例由固定十进制字符串生成并核对原始字节摘要。会话和凭据测试只使用临时生成的随机令牌或测试密钥。测试运行于内存路由、临时 PostgreSQL 或本地 finance 桩，IBKR 保持 paper 只读，web 无下单入口。[API 测试](../tests/api/README.md) · [防护测试](../tests/test_data_guard.py)

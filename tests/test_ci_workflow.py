@@ -10,6 +10,8 @@ import yaml
 
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github/workflows"
+TEST_PASS = "local-ci-only"
+CI_DATABASE_URL = "postgresql://" + f"postgres:{TEST_PASS}@127.0.0.1:5432/web_ci"
 
 
 def load(name):
@@ -23,24 +25,31 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("pull_request", workflow["on"])
         core = workflow["jobs"]["core"]
         self.assertNotIn("uses", core)
-        self.assertNotIn("needs", core)
-        self.assertEqual(core["services"]["postgres"]["ports"], ["5432/tcp"])
+        self.assertEqual(core["needs"], "data-guard")
+        postgres = core["services"]["postgres"]
+        self.assertEqual(postgres["ports"], ["5432:5432"])
+        self.assertEqual(postgres["env"], {"POSTGRES_DB": "web_ci", "POSTGRES_PASSWORD": TEST_PASS})
+        self.assertEqual(core["env"]["DATABASE_URL"], CI_DATABASE_URL)
         migrate = next(step for step in core["steps"] if "sqlx migrate run" in step.get("run", ""))
-        self.assertEqual(migrate["env"]["TEST_PG_PORT"], "${{ job.services.postgres.ports['5432'] }}")
-        self.assertIn("127.0.0.1:$TEST_PG_PORT/web_ci", migrate["run"])
+        self.assertNotIn("TEST_PG_PORT", migrate.get("env", {}))
+        self.assertNotIn("DATABASE_URL=", migrate["run"])
         self.assertIn('"$GITHUB_ENV"', migrate["run"])
         for scope in (workflow, core, *core["steps"], *core["services"].values()):
             keys = list(scope.get("env", {}))
             self.assertEqual(len(keys), len({key.casefold() for key in keys}))
 
     def test_core_checks_incoming_git_objects_before_the_complete_service_suite(self):
-        steps = load("service.yml")["jobs"]["core"]["steps"]
+        jobs = load("service.yml")["jobs"]
+        self.assertEqual(jobs["core"]["needs"], "data-guard")
+        self.assertNotIn("uses", jobs["data-guard"])
+        self.assertIn("runs-on", jobs["data-guard"])
+        steps = jobs["data-guard"]["steps"]
         self.assertEqual(steps[0]["uses"], "actions/checkout@v4")
         self.assertEqual(steps[0]["with"]["fetch-depth"], "0")
         self.assertEqual(steps[0]["with"]["persist-credentials"], "false")
         self.assertEqual(steps[1]["run"], 'sh scripts/ci-data-guard.sh "$BASE_SHA"')
         self.assertEqual(steps[1]["env"]["BASE_SHA"], "${{ github.event.pull_request.base.sha || github.event.before }}")
-        commands = "\n".join(step.get("run", "") for step in steps[2:])
+        commands = "\n".join(step.get("run", "") for step in jobs["core"]["steps"])
         checks = (
             "cargo sqlx migrate run",
             "cargo fmt --all -- --check",
@@ -57,31 +66,34 @@ class WorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(min(positions), 0)
         self.assertEqual(positions, sorted(positions))
 
-    def test_migration_uses_the_allocated_service_port(self):
-        steps = load("service.yml")["jobs"]["core"]["steps"]
-        migrate = next(step["run"] for step in steps if "sqlx migrate run" in step.get("run", ""))
+    def test_migration_uses_the_authenticated_service_url(self):
+        core = load("service.yml")["jobs"]["core"]
+        migrate = next(step["run"] for step in core["steps"] if "sqlx migrate run" in step.get("run", ""))
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
             root = Path(directory)
             cargo = root / "cargo"
             cargo.write_text(
                 '#!/bin/sh\nset -eu\ntest "$*" = "sqlx migrate run"\n'
-                'test "$DATABASE_URL" = "postgresql://postgres@127.0.0.1:43105/web_ci?password="\n'
+                'test "$DATABASE_URL" = "$EXPECTED_DATABASE_URL"\n'
                 'printf "%s\n" "$DATABASE_URL" > "$RUNNER_TEMP/migrated"\n'
             )
             cargo.chmod(0o700)
             env_file = root / "job.env"
             env = {"PATH": str(root) + os.pathsep + os.defpath, "GITHUB_ENV": str(env_file),
-                   "RUNNER_TEMP": str(root), "TEST_PG_PORT": ""}
+                   "RUNNER_TEMP": str(root), "EXPECTED_DATABASE_URL": CI_DATABASE_URL}
             result = subprocess.run(["sh", "-eu", "-c", migrate], cwd=WORKFLOWS.parents[1],
                                     env=env, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
-            self.assertFalse(env_file.exists())
-            env["TEST_PG_PORT"] = "43105"
+            self.assertFalse((root / "migrated").exists())
+            env.update(core["env"])
             result = subprocess.run(["sh", "-eu", "-c", migrate], cwd=WORKFLOWS.parents[1],
                                     env=env, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             url = (root / "migrated").read_text().strip()
-            self.assertIn("DATABASE_URL=" + url, env_file.read_text().splitlines())
+            self.assertEqual(url, CI_DATABASE_URL)
+            self.assertIn("WEB_ADMIN_TOKEN_FILE=" + str(root / "web-ci-absent-admin.env"),
+                          env_file.read_text().splitlines())
+            self.assertNotIn("DATABASE_URL=", env_file.read_text())
 
     def test_reusable_guard_for_docs_and_finance_has_compatible_permissions(self):
         guard = load("data-guard.yml")
