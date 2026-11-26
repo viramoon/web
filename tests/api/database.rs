@@ -8,81 +8,9 @@ use std::{
 };
 use tempfile::TempDir;
 
-fn checked(command: &mut Command) -> String {
-    let output = command.output().expect("test executable must be installed");
-    assert!(
-        output.status.success(),
-        "{command:?}\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
+pub(super) use super::postgres::{Cluster, checked};
 
-struct Cluster {
-    dir: TempDir,
-}
-
-impl Cluster {
-    fn create() -> Self {
-        let dir = tempfile::tempdir().unwrap();
-        checked(
-            Command::new("initdb")
-                .args([
-                    "--username=web_test",
-                    "--auth-local=trust",
-                    "--auth-host=reject",
-                    "--encoding=UTF8",
-                    "--no-locale",
-                    "-D",
-                ])
-                .arg(dir.path().join("data")),
-        );
-        let pg = Self { dir };
-        pg.start();
-        checked(pg.client("createdb").arg("web_test_db"));
-        pg
-    }
-    fn ctl(&self) -> Command {
-        let mut c = Command::new("pg_ctl");
-        c.arg("-D")
-            .arg(self.dir.path().join("data"))
-            .args(["-w", "-t", "15"]);
-        c
-    }
-    fn start(&self) {
-        checked(
-            self.ctl()
-                .arg("-l")
-                .arg(self.dir.path().join("postgres.log"))
-                .args(["start", "-o"])
-                .arg(format!("-h '' -k '{}' -p 55453", self.dir.path().display())),
-        );
-    }
-    fn stop(&self) {
-        checked(self.ctl().args(["-m", "fast", "stop"]));
-    }
-    fn url(&self) -> String {
-        format!(
-            "postgresql://web_test@localhost/web_test_db?host={}&port=55453",
-            self.dir.path().display()
-        )
-    }
-    fn client(&self, bin: &str) -> Command {
-        let mut command = Command::new(bin);
-        command
-            .env("PGHOST", self.dir.path())
-            .env("PGPORT", "55453")
-            .env("PGUSER", "web_test");
-        command
-    }
-}
-
-impl Drop for Cluster {
-    fn drop(&mut self) {
-        let _ = self.ctl().args(["-m", "immediate", "stop"]).output();
-    }
-}
-struct Server(Child);
+pub(super) struct Server(pub(super) Child);
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -90,12 +18,16 @@ impl Drop for Server {
     }
 }
 
-fn web(pg: &Cluster, static_root: &Path, port: u16) -> Command {
+pub(super) fn web(pg: &Cluster, static_root: &Path, port: u16) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_web"));
     command
         .env("DATABASE_URL", pg.url())
         .env("RUST_LOG", "warn")
         .env("WEB_STATIC_ROOT", static_root)
+        .env(
+            "WEB_ADMIN_TOKEN_FILE",
+            static_root.join("unused-admin-token"),
+        )
         .env("WEB_PORT", port.to_string())
         .env("WEB_BIND_HOST", "127.0.0.1")
         .env("WEB_AUTO_MIGRATE", "false")
@@ -109,7 +41,11 @@ fn web(pg: &Cluster, static_root: &Path, port: u16) -> Command {
     command
 }
 
-async fn expect_http(client: &reqwest::Client, url: &str, code: u16) -> serde_json::Value {
+pub(super) async fn expect_http(
+    client: &reqwest::Client,
+    url: &str,
+    code: u16,
+) -> serde_json::Value {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         if let Ok(r) = client.get(url).send().await
@@ -124,7 +60,7 @@ async fn expect_http(client: &reqwest::Client, url: &str, code: u16) -> serde_js
     }
 }
 
-fn http_fixture() -> (TempDir, u16, String, reqwest::Client) {
+pub(super) fn http_fixture() -> (TempDir, u16, String, reqwest::Client) {
     let public = tempfile::tempdir().unwrap();
     fs::write(public.path().join("index.html"), "<!doctype html>").unwrap();
     let port = TcpListener::bind("127.0.0.1:0")
@@ -218,4 +154,68 @@ async fn postgres_unavailable_on_startup_is_migrated_on_reconnect() {
         "same web pid {}, startup outage recovered with automatic migration to schema version 1",
         server.0.id()
     );
+}
+
+#[tokio::test]
+async fn postgres_integration_migration_upgrades_existing_schema() {
+    let pg = Cluster::create();
+    let baseline = tempfile::tempdir().unwrap();
+    fs::write(
+        baseline.path().join("20261122000000_initial_schemas.sql"),
+        include_str!("../../migrations/20261122000000_initial_schemas.sql"),
+    )
+    .unwrap();
+    let pool = sqlx::PgPool::connect(&pg.url()).await.unwrap();
+    sqlx::migrate::Migrator::new(baseline.path())
+        .await
+        .unwrap()
+        .run(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO app.schema_info (component, version) VALUES ('fixture', 9)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let baseline_versions: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(baseline_versions, vec![20261122000000]);
+
+    let public = tempfile::tempdir().unwrap();
+    checked(web(&pg, public.path(), 8090).arg("migrate"));
+    checked(web(&pg, public.path(), 8090).arg("migrate"));
+
+    let versions: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(versions, vec![20261122000000, 20261126000000]);
+    let components: Vec<(String, i32)> =
+        sqlx::query_as("SELECT component, version FROM app.schema_info ORDER BY component")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(components, vec![("fixture".into(), 9), ("web".into(), 1)]);
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT tablename FROM pg_tables
+         WHERE schemaname = 'app' AND starts_with(tablename, 'integration_') ORDER BY tablename",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        tables,
+        [
+            "integration_audit",
+            "integration_configs",
+            "integration_credentials",
+            "integration_tests",
+            "integration_versions"
+        ]
+    );
+    pool.close().await;
+    pg.stop();
 }

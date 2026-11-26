@@ -2,18 +2,22 @@ pub mod auth;
 mod backtests;
 mod circuit;
 pub mod config;
+pub mod credentials;
 pub mod database;
 pub mod finance;
+mod integrations;
 mod market;
 mod spa;
+#[cfg(test)]
+mod w1_http_tests;
 
 use axum::{
     Json, Router,
-    extract::{Request, State},
-    http::{HeaderValue, StatusCode},
+    extract::{MatchedPath, Request, State},
+    http::{HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use chrono::{DateTime, Utc};
 use config::Settings;
@@ -35,6 +39,7 @@ pub struct AppState {
     pub db: Database,
     pub finance: Finance,
     pub write_access: auth::WriteAccess,
+    pub credential_store: Option<credentials::CredentialStore>,
     pub started_at: DateTime<Utc>,
 }
 
@@ -180,17 +185,61 @@ fn is_submission(req: &Request) -> bool {
     req.method() == axum::http::Method::POST && req.uri().path() == "/api/v1/backtests"
 }
 
-fn is_key_lookup(req: &Request) -> bool {
-    req.method() == axum::http::Method::GET && req.uri().path() == "/api/v1/backtests/by-key"
+fn matched_path(req: &Request) -> Option<&str> {
+    req.extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
 }
 
-async fn check_write_access(State(s): State<AppState>, req: Request, next: Next) -> Response {
-    let access = if is_submission(&req) {
-        s.write_access.authorize(req.headers())
-    } else if is_key_lookup(&req) {
-        s.write_access.authenticate(req.headers())
-    } else {
-        Ok(())
+fn is_integration_route(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/v1/integrations"
+            | "/api/v1/integrations/catalog"
+            | "/api/v1/integrations/{id}"
+            | "/api/v1/integrations/{id}/credential"
+            | "/api/v1/integrations/{id}/tests"
+            | "/api/v1/integration-tests/{id}"
+    )
+}
+
+fn read_product(path: &str) -> Option<auth::Product> {
+    use auth::Product;
+
+    let product = match path {
+        "/api/v1/system/status" => Product::System,
+        "/api/v1/backtests/by-key" => Product::BacktestSubmission,
+        "/api/v1/backtests"
+        | "/api/v1/backtests/sample"
+        | "/api/v1/backtests/datasets"
+        | "/api/v1/backtests/{id}" => Product::Backtests,
+        "/api/v1/market/status" => Product::MarketStatus,
+        "/api/v1/integrations"
+        | "/api/v1/integrations/catalog"
+        | "/api/v1/integration-tests/{id}" => Product::Integrations,
+        _ => return None,
+    };
+    Some(product)
+}
+
+async fn check_access(State(s): State<AppState>, req: Request, next: Next) -> Response {
+    let path = matched_path(&req).unwrap_or_default();
+    let headers = req.headers();
+    let access = match (req.method(), path) {
+        (&Method::GET | &Method::HEAD, path) => read_product(path).map_or(Ok(()), |product| {
+            s.write_access.check_read(headers, product)
+        }),
+        (&Method::POST, "/api/v1/backtests") => s.write_access.authorize(headers),
+        (&Method::POST, "/api/v1/admin/session") => s.write_access.check_session_creation(headers),
+        (&Method::DELETE, "/api/v1/admin/session") => {
+            s.write_access.check_session_deletion(headers)
+        }
+        (&Method::POST, "/api/v1/integrations" | "/api/v1/integrations/{id}/tests")
+        | (&Method::PATCH, "/api/v1/integrations/{id}")
+        | (&Method::PUT | &Method::DELETE, "/api/v1/integrations/{id}/credential") => {
+            s.write_access.authorize_same_origin(headers)
+        }
+        _ => Ok(()),
     };
     if let Err(denied) = access {
         return denied.into_response();
@@ -205,14 +254,19 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         .and_then(|h| h.to_str().ok())
         .and_then(|id| Uuid::parse_str(id).ok())
         .unwrap_or_else(Uuid::new_v4);
-    let span = tracing::info_span!("http", request_id = %id, method = %req.method(), path = %req.uri().path());
+    let path = matched_path(&req).unwrap_or("<unmatched>");
+    let no_store = is_integration_route(path)
+        || matches!(
+            path,
+            "/api/v1/backtests/by-key" | "/api/v1/admin/session" | "/api/v1/me/capabilities"
+        );
+    let span = tracing::info_span!("http", request_id = %id, method = %req.method(), path);
     let id = HeaderValue::from_str(&id.to_string()).expect("UUID is valid ASCII");
     req.headers_mut().insert("x-request-id", id.clone());
     async move {
         let start = Instant::now();
         let timeout = Duration::from_millis(s.config.server.request_timeout_ms);
         let submission = is_submission(&req);
-        let key_lookup = is_key_lookup(&req);
         let mut response = match tokio::time::timeout(timeout, next.run(req)).await {
             Ok(r) => r,
             Err(_) if submission => api_error(
@@ -239,11 +293,10 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
             "request complete"
         );
         response.headers_mut().insert("x-request-id", id);
-        if key_lookup {
-            response.headers_mut().insert(
-                axum::http::header::CACHE_CONTROL,
-                HeaderValue::from_static("no-store"),
-            );
+        if no_store {
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         }
         response
     }
@@ -265,6 +318,12 @@ pub fn router(s: AppState) -> Router {
         .route("/api/v1/backtests/by-key", get(backtests::by_key))
         .route("/api/v1/backtests/datasets", get(backtests::datasets))
         .route("/api/v1/market/status", get(market::status))
+        .route(
+            "/api/v1/admin/session",
+            post(auth::create_session).delete(auth::delete_session),
+        )
+        .route("/api/v1/me/capabilities", get(auth::capabilities))
+        .merge(integrations::routes())
         .fallback(spa::serve);
     with_controls(routes, s)
 }
@@ -272,10 +331,7 @@ pub fn router(s: AppState) -> Router {
 fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
     routes
         .layer(RequestBodyLimitLayer::new(s.config.server.max_body_bytes))
-        .layer(middleware::from_fn_with_state(
-            s.clone(),
-            check_write_access,
-        ))
+        .layer(middleware::from_fn_with_state(s.clone(), check_access))
         .layer(CatchPanicLayer::custom(|_| {
             api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -299,7 +355,18 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
         backtests::list,
         backtests::by_key,
         backtests::datasets,
-        market::status
+        market::status,
+        auth::create_session,
+        auth::delete_session,
+        auth::capabilities,
+        integrations::catalog,
+        integrations::list,
+        integrations::create,
+        integrations::update,
+        integrations::put_credential,
+        integrations::delete_credential,
+        integrations::start_test,
+        integrations::get_test
     ),
     components(schemas(
         ErrorBody,
@@ -360,10 +427,14 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
             .schemas
             .insert(name.into(), schemas[name].clone());
     }
-    use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
+    use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
     components.add_security_scheme(
         "adminBearer",
         SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+    );
+    components.add_security_scheme(
+        "adminSession",
+        SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new(auth::SESSION_COOKIE_NAME))),
     );
     spec
 }
@@ -392,6 +463,7 @@ mod tests {
                 Duration::from_secs(1),
             )
             .unwrap(),
+            credential_store: None,
             db: Database::new(
                 &cfg.database.url,
                 Duration::from_secs(1),
