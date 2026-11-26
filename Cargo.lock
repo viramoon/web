@@ -2708,6 +2708,7 @@ dependencies = [
  "finance-client",
  "libc",
  "openssl",
+ "percent-encoding",
  "reqwest",
  "rustix",
  "serde",

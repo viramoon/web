@@ -5,6 +5,7 @@ use axum::{
     http::{HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use percent_encoding::percent_decode_str;
 use std::path::Path;
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
@@ -13,6 +14,21 @@ pub fn reserved(path: &str) -> bool {
     matches!(path, "/api" | "/healthz")
         || path.starts_with("/api/")
         || path.starts_with("/healthz/")
+}
+
+fn allows_spa_fallback(path: &str) -> bool {
+    // Classify the decoded path as ServeDir does when looking up files.
+    let Ok(path) = percent_decode_str(path).decode_utf8() else {
+        return false;
+    };
+    let mut segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".");
+    let first = segments.next().unwrap_or_default();
+    let filename = segments.next_back().unwrap_or(first);
+    !matches!(first, "assets" | "static" | "third-party")
+        && !filename.contains('.')
+        && !matches!(filename, "LICENSE" | "NOTICE")
 }
 
 fn hashed_asset(path: &str) -> bool {
@@ -50,10 +66,7 @@ pub async fn serve(State(state): State<AppState>, req: Request) -> Response {
         .await
         .expect("ServeDir is infallible")
         .into_response();
-    if resp.status() == StatusCode::NOT_FOUND
-        && method == Method::GET
-        && path != "/assets"
-        && !path.starts_with("/assets/")
+    if resp.status() == StatusCode::NOT_FOUND && method == Method::GET && allows_spa_fallback(&path)
     {
         let request = Request::new(Body::empty());
         resp = ServeFile::new(root.join("index.html"))

@@ -72,6 +72,14 @@ def run(root, finance):
     static = root / "dist"
     assets = static / "assets"
     assets.mkdir(parents=True)
+    notices = static / "third-party" / "lightweight-charts"
+    notices.mkdir(parents=True)
+    license_files = {
+        "LICENSE": b"Apache License\nVersion 2.0, January 2004\n",
+        "NOTICE": b"Lightweight Charts\nCopyright TradingView, Inc.\n",
+    }
+    for name, content in license_files.items():
+        (notices / name).write_bytes(content)
     index = b"<!doctype html><title>SPA fallback</title>"
     (static / "index.html").write_bytes(index)
     (assets / "app-4da7eb55.js").write_bytes(b"export default 42;")
@@ -91,15 +99,37 @@ def run(root, finance):
         first, second = (get(port, "/healthz/live") for _ in range(2))
         assert first[0] == second[0] == 200
         assert first[1]["X-Request-ID"] and first[1]["X-Request-ID"] != second[1]["X-Request-ID"]
-        for path in ("/", "/index.html", "/dashboard/deep-link"):
+        for path in ("/", "/index.html", "/dashboard/deep-link", "/dashboard", "/trading",
+                     "/backtests", "/backtests/v1.2/details", "/static-notes"):
             code, headers, body = get(port, path)
             assert code == 200 and body == index, (path, code, body[:100])
             assert "no-cache" in headers["Cache-Control"], (path, headers)
         code, headers, body = get(port, "/assets/app-4da7eb55.js")
         assert code == 200 and b"export default" in body and "immutable" in headers["Cache-Control"]
+        assert headers["Cache-Control"] == "public, max-age=31536000, immutable"
         assert get(port, "/assets/missing.js")[0] == 404
+        for name, content in license_files.items():
+            path = f"/third-party/lightweight-charts/{name}"
+            code, headers, body = get(port, path)
+            assert code == 200 and body == content, (path, code, body[:100])
+            assert headers["Cache-Control"] == "no-cache", (path, headers)
+        for path in (
+            "/static/third-party/lightweight-charts/LICENSE",
+            "/static/third-party/lightweight-charts/NOTICE",
+            "/static", "/static/unknown", "/%73tatic/unknown",
+            "/assets/", "/assets/unknown", "/third-party/", "/third-party/lightweight-charts/missing",
+            "/missing.js", "/theme.css", "/bundle.js.map", "/favicon.ico", "/images/logo.PNG",
+            "/fonts/app.woff2", "/missing%2ejs", "/docs/LICENSE", "/docs/NOTICE/",
+        ):
+            code, headers, body = get(port, path)
+            assert code == 404 and body != index, (path, code, body[:100])
+            assert headers["Cache-Control"] == "no-cache", (path, headers)
         code, headers, body = get(port, "/api/unknown-path")
         assert code == 404 and headers.get_content_type() == "application/json" and isinstance(json.loads(body), dict)
+        for path in ("/api", "/healthz", "/healthz/unknown-path"):
+            code, headers, body = get(port, path)
+            assert code == 404 and headers.get_content_type() == "application/json", (path, code, body[:100])
+            assert json.loads(body)["error"]["code"] == "not_found", (path, body[:100])
         code, _, body = get(port, "/api/v1/system/status")
         assert code == 200
         good = json.loads(body)
@@ -126,7 +156,8 @@ def run(root, finance):
             client.join(timeout=10)
         assert len(result) == 1 and result[0][0] == 200
         assert proc.wait(10) == 0
-        print("PASS request IDs, SPA fallback, cache, API/assets 404, SIGTERM drained in-flight 200", flush=True)
+        print("PASS request IDs, SPA fallback, static license files, cache, API/health/assets 404, "
+              "SIGTERM drained in-flight 200", flush=True)
     finally:
         finance.release.set()
         if proc.poll() is None:
