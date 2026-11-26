@@ -7,11 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  data-guard:
-    name: Service data guard
-    uses: ./.github/workflows/data-guard.yml
   core:
-    needs: data-guard
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
@@ -21,7 +17,7 @@ jobs:
           POSTGRES_DB: web_ci
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
-          - "127.0.0.1::5432"
+          - "5432/tcp"
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -31,11 +27,16 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_INCREMENTAL: "0"
       NO_PROXY: "*"
-      no_proxy: "*"
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
+          submodules: false
+      - name: Check incoming commits and run guard tests
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: sh scripts/ci-data-guard.sh "$BASE_SHA"
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
@@ -61,9 +62,12 @@ jobs:
           fi
       - name: Migrate the isolated test database
         env:
-          TEST_PG_PORT: ${{ job.services.postgres.ports[5432] }}
+          TEST_PG_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
-          export DATABASE_URL="postgresql://postgres@127.0.0.1:$TEST_PG_PORT/web_ci"
+          case "$TEST_PG_PORT" in
+            ''|*[!0-9]*) echo 'PostgreSQL service port is missing or invalid' >&2; exit 1 ;;
+          esac
+          export DATABASE_URL="postgresql://postgres@127.0.0.1:$TEST_PG_PORT/web_ci?password="
           printf 'DATABASE_URL=%s\n' "$DATABASE_URL" >> "$GITHUB_ENV"
           printf 'WEB_ADMIN_TOKEN_FILE=%s/web-ci-absent-admin.env\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           sh scripts/ci-check.sh sqlx-migrate cargo sqlx migrate run

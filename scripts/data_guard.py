@@ -68,6 +68,10 @@ MARKET_FIELDS = (
     {"observations", "observationstart", "value"},
 )
 SOURCE_SUFFIXES = (".java", ".py", ".rs", ".sh")
+RUST_LIST_START = re.compile(r"(?:\b[A-Za-z_]\w*!?\(|\b[A-Za-z_]\w*!\[|\bin[ \t]+\[|=[ \t]*\[)$")
+RUST_LIST_ROW = re.compile(
+    r"(?:[0-9][0-9_]*|\([A-Za-z_]\w*,[ \t]*[0-9][0-9_]*,[ \t]*(?:true|false)\)),"
+)
 DATA_LINE = re.compile(r"""^\s*(?:[\[{\x60]|["']?[\w-]+["']?\s*[:=])""")
 FIELD_VALUE = re.compile(
     r"""(?ix)
@@ -314,13 +318,35 @@ def load_sources(tree, required):
     return raw["fixtures"]
 
 
-def looks_like_table(text, *, source_code=False):
+def rust_list_rows(lines):
+    """Find integer and test tuple literals inside a closed Rust call or array."""
+    pending = []
+    rows = set()
+    for index, line in enumerate(lines):
+        content = line.lstrip(" \t")
+        stripped = content.rstrip()
+        if not stripped:
+            continue
+        indent = len(line) - len(content)
+        while pending and indent <= pending[-1][0]:
+            opening_indent, closing, literals = pending.pop()
+            if indent == opening_indent and stripped.startswith(closing):
+                rows.update(literals)
+        if pending and RUST_LIST_ROW.fullmatch(stripped):
+            pending[-1][2].append(index)
+        if not stripped.startswith("//") and RUST_LIST_START.search(stripped):
+            pending.append((indent, ")" if stripped.endswith("(") else "]", []))
+    return rows
+
+
+def looks_like_table(text, *, rust_source=False):
     # Two consecutive records with the same delimiter/width and numeric fields
     # catch common renamed CSV/TSV exports without treating prose as a table.
     lines = text.splitlines()
+    code_rows = rust_list_rows(lines) if rust_source else set()
     for delimiter in (",", "\t", ";", "|"):
         previous_width = 0
-        for line in lines:
+        for index, line in enumerate(lines):
             row = ()
             if delimiter in line:
                 try:
@@ -331,12 +357,7 @@ def looks_like_table(text, *, source_code=False):
             columns = {normal_field(field.strip("\x60")) for field in fields}
             if any(group <= columns for group in (*TABLE_HEADERS, *MARKET_FIELDS)):
                 return True
-            # A comma-terminated argument or tuple in source is not a table row.
-            stripped = line.strip()
-            source_literal = source_code and delimiter == "," and (
-                (len(fields) == 2 and fields[-1] == "")
-                or (stripped.startswith("(") and stripped.endswith("),"))
-            )
+            source_literal = delimiter == "," and index in code_rows
             numeric = any(VALUE.fullmatch(field) for field in fields)
             if len(fields) >= 2 and not source_literal and numeric and any(
                 VALUE.fullmatch(field) or DATE.fullmatch(field) for field in fields[:2]
@@ -495,7 +516,7 @@ def inspect_blob(path, entry, rules, source):
             or any(fnmatchcase(normalized, pattern) for pattern in rules.fixture_paths)
             or HTTP_DUMP.search(text)
             or json_content_reason(text, openapi=normalized.startswith("openapi/"))
-            or looks_like_table(text, source_code=source_code)):
+            or looks_like_table(text, rust_source=normalized.endswith(".rs"))):
         return "fixture-source-required"
     # In implementation files, check lines shaped like data instead of
     # interpreting strings passed as arguments or declared as code constants.

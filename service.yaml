@@ -62,7 +62,7 @@ telemetry:
   format: json_stderr
   request_metadata: [request_id, method, path, status, latency_ms]
   event_targets: [web, "web::*", web_notifier, "web_notifier::*"]
-  failure_details: 固定阶段或错误类别，panic 使用固定事件
+  failure_details: web 记录固定阶段，web-notifier 记录固定阶段与原因，panic 使用固定事件
   repository_data_guard: docs/data-guard.md
 static:
   hosted_by: web

@@ -126,7 +126,7 @@ W1 catalog 允许按标的创建草稿。连接测试记录失败或不可用，
 
 先在同一个 web 数据库上执行 `web migrate`，再交由 fertile 的进程管理器启动 `target/release/web-notifier`。进程读取专用的部署环境并使用同一 `DATABASE_URL`。它没有监听端口和额外的持久化目录，依赖 Linux `/proc`、系统 CA 和 `/usr/bin/curl` 的 SMTP/SMTPS 支持。SMTP 使用 TLS 1.2 或更高版本，证书与主机名由系统 CA 验证。SIGINT 或 SIGTERM 停止领取新任务，并给当前发送和结算留出配置的 SMTP 时限再加 11 秒。部署管理器宜保留 75 秒停止宽限，以涵盖最高时限和连接池清理。
 
-web-notifier 与 web 共用日志过滤器。启动失败显示固定的配置错误，提高 RUST_LOG 级别仍会过滤第三方追踪。
+web-notifier 与 web 共用日志过滤器。启动失败时，标准错误的 JSON 事件记录固定的 `stage` 和 `reason`，进程以状态码 1 退出。提高 RUST_LOG 级别仍会过滤第三方追踪。
 
 | notifier 环境变量 | 含义及默认值 |
 | --- | --- |

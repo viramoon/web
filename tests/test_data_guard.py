@@ -375,6 +375,24 @@ class DataGuardTests(unittest.TestCase):
         self.git("add", copy)
         self.assert_rejected(self.guard("staged"), "credential-material")
 
+    def test_headerless_csv_with_empty_second_column_is_rejected_in_rust_paths(self):
+        path = "src/notifications/capture.rs"
+        for data in (
+            "1.2500,\n1.3000,\n",
+            "1,\n2,\n",
+            "fn configure() {}\n\n    1,\n    2,\n",
+            "fn configure() {\n    set_limit(\n        1,\n        2,\n",
+            "fn configure() {\n    set_limit(\n        1.2500,\n        1.3000,\n    );\n}\n",
+        ):
+            with self.subTest(data=data):
+                self.write(path, data)
+                self.git("add", path)
+                result = self.git("commit", "-qm", "Add unregistered CSV", check=False)
+                self.assert_rejected(result, "fixture-source-required")
+                self.assertNotIn(b"1.2500", result.stdout + result.stderr)
+                self.assertEqual(self.git("rev-parse", "HEAD").stdout.decode().strip(), self.base)
+                self.git("rm", "-f", path)
+
     def test_ci_check_hides_success_and_failure_output(self):
         for status in (0, 5):
             with self.subTest(status=status):

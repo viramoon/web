@@ -28,6 +28,8 @@ jobs:
           python-version: "3.12"
       - name: 准备 YAML 解析器
         run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+      - name: 检查 Web service 工作流结构
+        run: sh scripts/ci-check.sh workflow-structure python3 -B -m unittest discover -s tests -p test_ci_workflow.py -v
       - name: 检查文档与 PR 描述
         run: |
           sh scripts/ci-check.sh documentation python3 - <<'PY'
