@@ -232,6 +232,74 @@ async fn smtp_timeout_retries_with_same_id_and_outage_recovery_is_audited() {
 }
 
 #[tokio::test]
+async fn smtp_digest_retry_reports_a_new_outage_with_its_own_digest() {
+    let fixture = Fixture::create().await;
+    let mail = FakeSmtp::with_outcomes([
+        DeliveryOutcome::Timeout,
+        DeliveryOutcome::Accepted,
+        DeliveryOutcome::Timeout,
+        DeliveryOutcome::Rejected,
+        DeliveryOutcome::Accepted,
+        DeliveryOutcome::Accepted,
+    ]);
+    let start = at("2026-11-27T01:00:00Z");
+    let initial_rule = fixture.rule(false).await;
+    let failing_rule = fixture.rule(false).await;
+    let initial = fixture
+        .queue_event(initial_rule, Uuid::new_v4(), "alert", start)
+        .await;
+    let failing = fixture
+        .queue_event(failing_rule, Uuid::new_v4(), "alert", later(start, 32))
+        .await;
+
+    assert!(fixture.next(&mail, start).await);
+    assert!(fixture.next(&mail, later(start, 30)).await);
+    assert!(fixture.next(&mail, later(start, 31)).await);
+    assert!(fixture.next(&mail, later(start, 32)).await);
+    assert!(!fixture.next(&mail, later(start, 60)).await);
+    assert!(fixture.next(&mail, later(start, 61)).await);
+    assert_eq!(health(&fixture.db).await.state, NotificationState::Healthy);
+
+    let digests: Vec<(Uuid, i64, String)> = sqlx::query_as(
+        "SELECT d.id, d.digest_count, d.status FROM app.notification_outbox d
+         JOIN app.alert_events a ON a.id = d.event_id
+         WHERE d.kind = 'outage_digest' AND a.condition = 'smtp_unavailable' AND a.phase = 'recovered'
+         ORDER BY a.sequence",
+    )
+    .fetch_all(&fixture.pool)
+    .await
+    .unwrap();
+    let [(first, 1, settled), (second, 2, pending)] = digests.as_slice() else {
+        panic!("expected separate digest snapshots for both outages, got {digests:?}");
+    };
+    assert_eq!(settled, "accepted");
+    assert_eq!(pending, "pending");
+    assert_ne!(first, second);
+    assert_eq!(
+        fixture.attempts(*first).await,
+        [AttemptOutcome::Timeout, AttemptOutcome::Accepted]
+    );
+    assert_eq!(fixture.attempts(failing).await, [AttemptOutcome::Rejected]);
+
+    assert!(fixture.next(&mail, later(start, 62)).await);
+    assert!(!fixture.next(&mail, later(start, 63)).await);
+    let calls = mail.sent.lock().unwrap();
+    assert_eq!(calls.len(), 6);
+    assert_eq!(calls[0].0, initial);
+    assert_eq!(calls[0], calls[1]);
+    assert_eq!(
+        calls[2],
+        (*first, Some(MailKind::TransportRecovered { count: 1 }))
+    );
+    assert_eq!(calls[2], calls[4]);
+    assert_eq!(calls[3].0, failing);
+    assert_eq!(
+        calls[5],
+        (*second, Some(MailKind::TransportRecovered { count: 2 }))
+    );
+}
+
+#[tokio::test]
 async fn quiet_hours_audit_digest_and_urgent_bypass() {
     let fixture = Fixture::create().await;
     let mail = FakeSmtp::default();
@@ -290,6 +358,140 @@ async fn quiet_hours_audit_digest_and_urgent_bypass() {
             .await
             .unwrap();
     assert_eq!(summary, ("summarized".into(), Some(first)));
+}
+
+#[tokio::test]
+async fn disabling_a_retrying_summary_requeues_only_enabled_members() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
+    use tower::ServiceExt;
+    use web::{AppState, auth::WriteAccess, config::Settings, finance::Finance, router};
+
+    let fixture = Fixture::create().await;
+    let quiet = at("2026-11-27T15:00:00Z");
+    let morning = at("2026-11-28T00:00:00Z");
+    let mail = FakeSmtp::with_outcomes([DeliveryOutcome::Transient]);
+    let first_rule = fixture.rule(false).await;
+    let active_rule = fixture.rule(false).await;
+    let changed_rule = fixture.rule(false).await;
+    let incident = Uuid::new_v4();
+    let summary = fixture
+        .queue_event(first_rule, Uuid::new_v4(), "alert", quiet)
+        .await;
+    let active = fixture
+        .queue_event(active_rule, incident, "alert", later(quiet, 1))
+        .await;
+    let changed = fixture
+        .queue_event(changed_rule, Uuid::new_v4(), "alert", later(quiet, 2))
+        .await;
+    assert!(!fixture.next(&mail, later(quiet, 2)).await);
+    assert!(fixture.next(&mail, morning).await);
+    assert_eq!(fixture.attempts(summary).await, [AttemptOutcome::Transient]);
+
+    let local = tempfile::tempdir_in("/tmp").unwrap();
+    let token = Uuid::new_v4().to_string();
+    let token_path = local.path().join("admin-token");
+    fs::write(&token_path, format!("WEB_ADMIN_TOKEN={token}\n")).unwrap();
+    fs::set_permissions(&token_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let settings = Settings::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("config"),
+        |_| None,
+    )
+    .unwrap();
+    let app = router(AppState {
+        db: fixture.db.clone(),
+        finance: Finance::new(&settings.finance).unwrap(),
+        config: Arc::new(settings),
+        write_access: WriteAccess::load(&token_path, 10, Duration::from_secs(60)).unwrap(),
+        credential_store: None,
+        started_at: morning,
+    });
+    for (rule, revision, enabled) in [
+        (changed_rule, 1, false),
+        (changed_rule, 2, true),
+        (first_rule, 1, false),
+    ] {
+        let update = Request::put(format!("/api/v1/notification-rules/{rule}"))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("If-Match", format!("\"{revision}\""))
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "condition": "source_unavailable",
+                    "severity": "important",
+                    "enabled": enabled,
+                    "email_enabled": true
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(update).await.unwrap().status(),
+            StatusCode::OK
+        );
+    }
+
+    // The only work is the still-enabled member of a now-suppressed summary.
+    assert!(!fixture.next(&mail, later(morning, 29)).await);
+    let (replacement, status, available_at): (Uuid, String, DateTime<Utc>) = sqlx::query_as(
+        "SELECT id, status, available_at FROM app.notification_outbox WHERE replaces_id = $1",
+    )
+    .bind(active)
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "pending");
+    assert_eq!(available_at, later(morning, 30));
+    let history: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, status, suppression_reason FROM app.notification_outbox
+         WHERE summary_id = $1 ORDER BY created_at",
+    )
+    .bind(summary)
+    .fetch_all(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        history,
+        [
+            (active, "summarized".into(), None),
+            (changed, "summarized".into(), Some("rule_disabled".into())),
+        ]
+    );
+
+    let recovery = fixture
+        .queue_event(active_rule, incident, "recovery", later(morning, 29))
+        .await;
+    assert!(!fixture.next(&mail, later(morning, 30)).await);
+    assert!(!fixture.next(&mail, later(morning, 899)).await);
+    assert!(fixture.next(&mail, later(morning, 900)).await);
+    assert!(fixture.next(&mail, later(morning, 900)).await);
+    assert!(fixture.next(&mail, later(morning, 901)).await);
+    assert!(!fixture.next(&mail, later(morning, 902)).await);
+    let calls = mail.sent.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0], (summary, Some(MailKind::Digest { count: 3 })));
+    assert_eq!(
+        calls[1],
+        (
+            replacement,
+            Some(MailKind::Alert {
+                condition: Condition::SourceUnavailable,
+            })
+        )
+    );
+    assert_eq!(
+        calls[2],
+        (
+            recovery,
+            Some(MailKind::Recovery {
+                condition: Condition::SourceUnavailable,
+            })
+        )
+    );
+    assert_eq!(calls[3].1, Some(MailKind::TransportRecovered { count: 1 }));
 }
 
 #[tokio::test]

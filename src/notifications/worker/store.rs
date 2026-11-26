@@ -11,6 +11,16 @@ use uuid::Uuid;
 // SMTP and completion, with no SQL transaction held over the network request.
 const SENDER_LOCK: i64 = 6_758_026_211_706_146_534;
 
+const REQUEUEABLE_SUMMARY_MEMBERS: &str = "
+    FROM app.notification_outbox member
+    JOIN app.notification_outbox summary ON summary.id = member.summary_id
+    JOIN app.alert_events event ON event.id = member.event_id
+    JOIN app.notification_rules rule ON rule.id = member.rule_id
+    WHERE member.status = 'summarized' AND summary.status = 'suppressed'
+      AND member.suppression_reason IS NULL AND rule.enabled AND rule.email_enabled
+      AND rule.condition = event.condition
+      AND NOT EXISTS (SELECT FROM app.notification_outbox retry WHERE retry.replaces_id = member.id)";
+
 pub(super) struct Job {
     pub(super) id: Uuid,
     pub(super) kind: DeliveryKind,
@@ -53,10 +63,11 @@ pub(super) async fn claim(
 ) -> Result<Option<(PoolConnection<Postgres>, Job)>, sqlx::Error> {
     let has_work = {
         let mut read_conn = db.connection().await?;
-        sqlx::query_scalar::<_, bool>(
+        sqlx::query_scalar::<_, bool>(&format!(
             "SELECT EXISTS (SELECT FROM app.notification_outbox
-             WHERE (status = 'pending' AND available_at <= $1) OR status = 'sending')",
-        )
+             WHERE (status = 'pending' AND available_at <= $1) OR status = 'sending')
+             OR EXISTS (SELECT 1 {REQUEUEABLE_SUMMARY_MEMBERS})",
+        ))
         .bind(clock())
         .fetch_one(&mut *read_conn)
         .await?
@@ -95,6 +106,7 @@ pub(super) async fn claim(
         };
         settle(&mut tx, &job, AttemptOutcome::Interrupted, now).await?;
     }
+    requeue_suppressed_summary_members(&mut tx, now).await?;
     apply_policy(&mut tx, policy, now).await?;
     let Some(pending) = sqlx::query_as::<_, Pending>(
         "SELECT job.id, job.kind, event.condition, job.priority, job.attempts, job.digest_count, job.defer_reason
@@ -108,7 +120,12 @@ pub(super) async fn claim(
                WHERE prior.rule_id = job.rule_id AND prior.kind = 'alert'
                  AND previous.incident_key = event.incident_key
                  AND previous.condition = event.condition AND previous.sequence < event.sequence
-                 AND coalesce(summary.status, prior.status) IN ('pending', 'sending')
+                 AND (coalesce(summary.status, prior.status) IN ('pending', 'sending') OR (
+                     prior.status = 'summarized' AND summary.status = 'suppressed'
+                     AND prior.suppression_reason IS NULL AND NOT EXISTS (
+                         SELECT FROM app.notification_outbox retry WHERE retry.replaces_id = prior.id
+                     )
+                 ))
            ))
          ORDER BY job.priority DESC, job.available_at, job.created_at, job.id
          LIMIT 1 FOR UPDATE OF job SKIP LOCKED",
@@ -160,6 +177,28 @@ pub(super) async fn claim(
             attempt,
         },
     )))
+}
+
+async fn requeue_suppressed_summary_members(
+    db: &mut PgConnection,
+    now: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    // Keep the attempted summary and its membership intact. Each eligible member
+    // gets one fresh outbox entry, with a fresh Message-ID for a different payload.
+    // Skip rules being edited so eligibility and the replacement cannot race the edit.
+    sqlx::query(&format!(
+        "INSERT INTO app.notification_outbox (id, event_id, rule_id, kind, priority,
+             created_at, available_at, updated_at, defer_reason, replaces_id)
+         SELECT gen_random_uuid(), member.event_id, member.rule_id, member.kind, member.priority,
+                $1, greatest(member.available_at, summary.available_at), $1, member.defer_reason, member.id
+         {REQUEUEABLE_SUMMARY_MEMBERS}
+         FOR SHARE OF rule SKIP LOCKED
+         ON CONFLICT (replaces_id) DO NOTHING"
+    ))
+    .bind(now)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 async fn summarize(
@@ -360,12 +399,11 @@ async fn settle(
     .bind(next_attempt)
     .execute(&mut *db)
     .await?;
-    track_health(db, job.kind, outcome, now).await
+    track_health(db, outcome, now).await
 }
 
 async fn track_health(
     db: &mut PgConnection,
-    kind: DeliveryKind,
     outcome: AttemptOutcome,
     now: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
@@ -397,20 +435,20 @@ async fn track_health(
     .execute(&mut *db)
     .await?;
     if failure_count > 0 {
+        // An older digest can confirm recovery from a new failure streak. Its
+        // payload stays unchanged, so this streak always gets its own digest.
         let event_id = health_event(db, "recovered", now).await?;
-        if kind != DeliveryKind::OutageDigest {
-            sqlx::query(
-                "INSERT INTO app.notification_outbox
-                     (id, event_id, kind, priority, created_at, available_at, updated_at, digest_count)
-                 VALUES ($1, $2, 'outage_digest', 'normal', $3, $3, $3, $4)",
-            )
-            .bind(Uuid::new_v4())
-            .bind(event_id)
-            .bind(now)
-            .bind(failure_count)
-            .execute(&mut *db)
-            .await?;
-        }
+        sqlx::query(
+            "INSERT INTO app.notification_outbox
+                 (id, event_id, kind, priority, created_at, available_at, updated_at, digest_count)
+             VALUES ($1, $2, 'outage_digest', 'normal', $3, $3, $3, $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(event_id)
+        .bind(now)
+        .bind(failure_count)
+        .execute(&mut *db)
+        .await?;
     }
     Ok(())
 }

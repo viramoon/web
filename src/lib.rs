@@ -153,26 +153,23 @@ async fn ready(State(s): State<AppState>) -> (StatusCode, Json<Health>) {
 
 #[utoipa::path(get, path="/api/v1/system/status", responses((status=200, body=SystemStatus)))]
 async fn status(State(s): State<AppState>) -> Json<SystemStatus> {
-    let finance_status = async {
-        let (mut finance, reachable) = s.finance.probe().await;
-        let market = if reachable {
-            market::read(&s.finance).await.ok()
-        } else {
-            None
-        };
-        finance.circuit = s.finance.circuit_state().into();
-        (finance, market::MarketSummary::from_status(market))
+    let (mut finance, reachable) = s.finance.probe().await;
+    let market = if reachable {
+        market::read(&s.finance).await.ok()
+    } else {
+        None
     };
-    let ((finance, market), notifications) = tokio::join!(finance_status, worker::health(&s.db));
+    finance.circuit = s.finance.circuit_state().into();
+    let (database, notifications) = s.db.status_snapshot();
     Json(SystemStatus {
         web: WebStatus {
             version: env!("CARGO_PKG_VERSION").into(),
             commit: env!("WEB_GIT_SHA").into(),
             started_at: s.started_at,
         },
-        database: s.db.status(),
+        database,
         finance,
-        market,
+        market: market::MarketSummary::from_status(market),
         notifications,
     })
 }
@@ -488,7 +485,82 @@ mod tests {
         routing::post,
     };
     use std::path::Path;
+    use tokio::sync::Notify;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn system_status_returns_while_a_half_open_finance_trial_is_held_and_db_is_unavailable() {
+        let fixture = tempfile::tempdir_in("/tmp").unwrap();
+        let mut cfg = Settings::load(Path::new("config"), |_| None).unwrap();
+        cfg.finance.base_url = "http://127.0.0.1:1".into();
+        cfg.finance.circuit_failure_threshold = 1;
+        cfg.finance.circuit_open_ms = 0;
+        cfg.finance.max_retries = 0;
+        cfg.finance.request_timeout_ms = 1_500;
+        let finance = Finance::new(&cfg.finance).unwrap();
+        let app = router(AppState {
+            finance: finance.clone(),
+            write_access: auth::WriteAccess::load(
+                &fixture.path().join("unused-token"),
+                10,
+                Duration::from_secs(1),
+            )
+            .unwrap(),
+            credential_store: None,
+            db: Database::new(
+                &format!(
+                    "postgresql://localhost/test?host={}",
+                    fixture.path().display()
+                ),
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+            )
+            .unwrap()
+            .with_stalled_connections(),
+            config: Arc::new(cfg),
+            started_at: Utc::now(),
+        });
+
+        let opened = finance
+            .read::<(), (), _, _>(|_| async {
+                let invalid = serde_json::from_str::<u64>("fixture").unwrap_err();
+                Err(finance_client::apis::Error::Serde(invalid))
+            })
+            .await;
+        assert!(opened.is_err());
+        assert_eq!(finance.circuit_state(), "open");
+        let ready = Notify::new();
+        let release = Notify::new();
+        let trial = finance.read(|_| async {
+            ready.notify_one();
+            release.notified().await;
+            Ok::<(), finance_client::apis::Error<()>>(())
+        });
+        tokio::pin!(trial);
+        tokio::select! {
+            _ = ready.notified() => {}
+            _ = &mut trial => panic!("fixture trial completed before it was held"),
+        }
+
+        let request = Request::get("/api/v1/system/status")
+            .body(Body::empty())
+            .unwrap();
+        let response = tokio::select! {
+            response = tokio::time::timeout(Duration::from_millis(500), app.oneshot(request)) => {
+                response.expect("system status must return while the trial is held").unwrap()
+            }
+            _ = &mut trial => panic!("system status waited for the finance trial to finish"),
+        };
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["finance"]["circuit"], "half_open");
+        assert_eq!(body["finance"]["ok"], false);
+        assert_eq!(body["database"]["ok"], false);
+        assert_eq!(body["notifications"]["state"], "unavailable");
+        release.notify_one();
+        assert!(trial.await.is_ok());
+    }
 
     #[tokio::test]
     async fn bounds_panics_deadlines_and_payloads_without_losing_request_id() {

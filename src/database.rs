@@ -1,3 +1,4 @@
+use crate::notifications::worker::{self, NotificationHealth};
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, pool::PoolConnection, postgres::PgPoolOptions};
 use std::time::{Duration, Instant};
@@ -17,7 +18,9 @@ pub struct DbStatus {
 pub struct Database {
     pool: PgPool,
     connect_timeout: Duration,
-    status: watch::Sender<DbStatus>,
+    status: watch::Sender<(DbStatus, NotificationHealth)>,
+    #[cfg(test)]
+    stall_connections: bool,
 }
 
 impl Database {
@@ -35,11 +38,23 @@ impl Database {
         Ok(Self {
             pool,
             connect_timeout,
-            status: watch::channel(DbStatus::default()).0,
+            status: watch::channel(Default::default()).0,
+            #[cfg(test)]
+            stall_connections: false,
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_stalled_connections(mut self) -> Self {
+        self.stall_connections = true;
+        self
+    }
+
     pub(crate) async fn connection(&self) -> Result<PoolConnection<Postgres>, sqlx::Error> {
+        #[cfg(test)]
+        if self.stall_connections {
+            return std::future::pending().await;
+        }
         // A stale idle connection can be replaced during any acquire, so the
         // handshake deadline applies to warm pools as well as cold startups.
         timeout(self.connect_timeout, self.pool.acquire())
@@ -76,7 +91,12 @@ impl Database {
             }
             sqlx::query_scalar(
                 "SELECT to_regclass('app.integration_configs') IS NOT NULL
-                    AND to_regclass('app.notification_health') IS NOT NULL",
+                    AND to_regclass('app.notification_health') IS NOT NULL
+                    AND EXISTS (
+                        SELECT FROM pg_catalog.pg_attribute
+                        WHERE attrelid = to_regclass('app.notification_outbox')
+                          AND attname = 'replaces_id' AND NOT attisdropped
+                    )",
             )
             .fetch_one(&mut *connection)
             .await
@@ -86,6 +106,10 @@ impl Database {
     }
 
     pub fn status(&self) -> DbStatus {
+        self.status.borrow().0.clone()
+    }
+
+    pub(crate) fn status_snapshot(&self) -> (DbStatus, NotificationHealth) {
         self.status.borrow().clone()
     }
 
@@ -106,24 +130,31 @@ impl Database {
                     Ok(true) => Ok(()),
                     Ok(false) => Err("required schemas or migrations missing"),
                     Err(_) => Err("database or schema metadata unavailable"),
-                }
+                }?;
+                let readiness = DbStatus {
+                    ok: true,
+                    latency_ms: Some(start.elapsed().as_millis() as u64),
+                };
+                // System status reads this snapshot without a database round trip.
+                Ok::<_, &str>((readiness, worker::health(&self).await))
             };
             let result = tokio::select! {
                 res = probe => res,
                 _ = shutdown.wait_for(|v| *v) => break,
             };
-            let ok = result.is_ok();
-            if Some(result) != previous_probe {
-                match result {
+            let (probe, status) = match result {
+                Ok(status) => (Ok(()), status),
+                Err(reason) => (Err(reason), Default::default()),
+            };
+            let ok = probe.is_ok();
+            if Some(probe) != previous_probe {
+                match probe {
                     Ok(()) => tracing::info!("database ready"),
                     Err(reason) => tracing::warn!(reason, "database unavailable"),
                 }
-                previous_probe = Some(result);
+                previous_probe = Some(probe);
             }
-            self.status.send_replace(DbStatus {
-                ok,
-                latency_ms: ok.then(|| start.elapsed().as_millis() as u64),
-            });
+            self.status.send_replace(status);
             migrate = auto_migrate && !ok;
             let interval = if ok {
                 delay = Duration::from_millis(250);

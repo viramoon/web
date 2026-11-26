@@ -194,7 +194,12 @@ async fn postgres_integration_migration_upgrades_existing_schema() {
             .unwrap();
     assert_eq!(
         versions,
-        vec![20261122000000, 20261126000000, 20261127000000]
+        vec![
+            20261122000000,
+            20261126000000,
+            20261127000000,
+            20261127010000
+        ]
     );
     let components: Vec<(String, i32)> =
         sqlx::query_as("SELECT component, version FROM app.schema_info ORDER BY component")
@@ -239,6 +244,14 @@ async fn postgres_integration_migration_upgrades_existing_schema() {
             "notification_rules",
         ]
     );
+    let replaces_id_type: String = sqlx::query_scalar(
+        "SELECT data_type FROM information_schema.columns
+         WHERE table_schema = 'app' AND table_name = 'notification_outbox' AND column_name = 'replaces_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(replaces_id_type, "uuid");
     pool.close().await;
     pg.stop();
 }

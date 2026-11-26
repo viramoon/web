@@ -4,7 +4,9 @@ web 拥有 `app`（业务）和 `blog`（博客）两个 PostgreSQL schema。初
 
 从仓库根运行 `web migrate`，以 `DATABASE_URL` 指定目标库。部署时由运行环境注入连接串并限制配置文件权限。运行角色需读取 `app.schema_info`，并具有集成和通知表所需的 SELECT、INSERT、UPDATE 权限及审计序列的使用权限。迁移角色另需建 schema、表、索引及约束的权限。自动迁移默认启用；使用独立迁移角色时先 `web migrate`，再设置 `WEB_AUTO_MIGRATE=false`。
 
-服务启动时先监听 HTTP。后台从连接池获取连接，检查 `app.schema_info` 的 web 版本、blog schema、`app.integration_configs` 和 `app.notification_health`。缺少迁移、标记不匹配或连接中断时 live 仍为 200，ready 为 503。探测失败从 250ms 退避至最多 4s，恢复后每秒检查一次。`acquire_timeout_ms` 限制池内等待时间，`connect_timeout_ms` 限制获取可用连接（包括新建和重连）与执行探测语句各自的时间。`/api/v1/system/status` 的 `database.ok` 和 `latency_ms` 为最近一次探测结果，失败时延迟为空。数据库连接串不写入 HTTP 响应。
+服务启动时先监听 HTTP。后台从连接池获取连接，检查 `app.schema_info` 的 web 版本、`blog` schema、`app.integration_configs`、`app.notification_health` 和 `app.notification_outbox.replaces_id`。缺少迁移、标记不匹配或连接中断时 live 仍为 200，ready 为 503。探测失败从 250ms 退避至最多 4s，恢复后每秒检查一次。`acquire_timeout_ms` 限制池内等待时间，`connect_timeout_ms` 限制获取可用连接（包括新建和重连）与执行探测语句各自的时间。`/api/v1/system/status` 的 `database.ok` 和 `latency_ms` 为最近一次探测结果，失败时延迟为空。数据库连接串不写入 HTTP 响应。
+
+数据库就绪后，后台轮询同时刷新通知健康快照。读取失败时，快照中的通知状态为 `unavailable`，数据库就绪继续按连接和迁移探测判定。`/api/v1/system/status` 直接读取后台发布的快照，避免请求等待数据库连接或查询。
 
 ## 集成配置与审计
 
@@ -20,19 +22,21 @@ web 拥有 `app`（业务）和 `blog`（博客）两个 PostgreSQL schema。初
 
 ## 通知规则、事务 outbox 和审计
 
-W3 迁移 `20261127000000` 在 `app` 下追加以下表。web API 与独立 notifier 共用此库。运维备份需保留这些表，以便恢复告警历史、幂等证据和投递队列。
+W3 迁移 `20261127000000` 在 `app` 下追加以下表。后续迁移 `20261127010000` 在 outbox 中追加可空的 `replaces_id` 唯一引用。web API 与独立 notifier 共用此库。运维备份需保留这些表，以便恢复告警历史、幂等证据和投递队列。
 
 | 表 | 内容 |
 | --- | --- |
 | `app.notification_rules` | revision、类型化条件、级别、邮件开关和冷却/提醒配置 |
 | `app.notification_incidents` | 按规则、条件和不透明主题 UUID 保存最新观察、命中计数与事故状态 |
 | `app.alert_events` | 观察、触发和恢复记录、确认时间、重复次数。规则、条件、主题、窗口起点和阶段组成去重键 |
-| `app.notification_outbox` | 出队状态、计划时间、稳定投递 UUID、优先级、汇总关联和测试幂等键 |
+| `app.notification_outbox` | 出队状态、计划时间、稳定投递 UUID、优先级、汇总关联、替代投递引用和测试幂等键 |
 | `app.notification_attempts` | 每次尝试的开始、完成时间及有限结果。`interrupted` 表示结算丢失后的投递结果未知 |
 | `app.notification_deferrals` | 静默、冷却和额度延迟，保留每次决定的时间及下一次可尝试时间 |
 | `app.notification_health` | 邮件渠道状态、故障区间、尝试与接受时间，用于系统状态和恢复汇总 |
 
 业务事件、事故转移与对应 outbox 同事务写入。同业务键重放累加重复计数，保留原事件 ID。过时观察仍被记录，事故状态按时间向前更新。停用规则或修改条件会抑制待发送任务。事故恢复会抑制旧提醒，已开始的 SMTP 尝试仍记录实际结果。发送事务先占用滚动额度并写尝试记录，再调用 SMTP。进程退出后由下一发送者按超时窗口处理悬挂记录。数据库仅保存投递元数据，邮件原文、收发地址、凭据和行情正文留在各自的来源边界。
+
+汇总主任务被抑制后，notifier 轮询会为仍符合规则的成员创建替代投递，保留原汇总、成员关系和尝试记录。替代行使用新的投递 UUID 和 `Message-ID`，继承汇总的重试等待，并继续接受静默、冷却和额度检查。成员原规则被停用或改换条件时，成员的抑制记录继续生效。
 
 ## 校验与恢复
 

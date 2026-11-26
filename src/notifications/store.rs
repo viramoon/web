@@ -96,10 +96,19 @@ pub(crate) async fn put_rule(
         };
         if let Some(reason) = reason {
             sqlx::query(
-                "UPDATE app.notification_outbox
-                 SET status = CASE WHEN status = 'pending' THEN 'suppressed' ELSE status END,
+                "UPDATE app.notification_outbox AS delivery
+                 SET status = CASE WHEN delivery.status = 'pending' THEN 'suppressed' ELSE delivery.status END,
                      suppression_reason = $2, updated_at = now()
-                 WHERE rule_id = $1 AND status IN ('pending', 'sending')",
+                 WHERE delivery.rule_id = $1 AND (
+                   delivery.status IN ('pending', 'sending') OR (
+                     delivery.status = 'summarized' AND EXISTS (
+                       SELECT FROM app.notification_outbox summary WHERE summary.id = delivery.summary_id
+                         AND summary.status IN ('pending', 'sending', 'suppressed')
+                     ) AND NOT EXISTS (
+                       SELECT FROM app.notification_outbox retry WHERE retry.replaces_id = delivery.id
+                     )
+                   )
+                 )",
             )
             .bind(id)
             .bind(reason)
