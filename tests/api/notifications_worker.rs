@@ -1,18 +1,37 @@
 //! Synthetic alert metadata with a process-local SMTP substitute and isolated PostgreSQL.
 
 use super::postgres::Cluster;
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+};
 use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::PgPool;
-use std::{collections::VecDeque, sync::Mutex, time::Duration};
+use std::{
+    collections::VecDeque,
+    fs::OpenOptions,
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::sync::Notify;
+use tower::ServiceExt;
 use uuid::Uuid;
 use web::{
+    AppState,
+    auth::WriteAccess,
+    config::Settings,
     database::Database,
+    finance::Finance,
     notifications::{
         channel::{ChannelConfigError, DeliveryOutcome, MailKind, NotificationChannel},
         model::{AttemptOutcome, Condition},
         worker::{NotificationPolicy, NotificationState, dispatch_one, health},
     },
+    router,
 };
 
 fn at(value: &str) -> DateTime<Utc> {
@@ -138,6 +157,64 @@ impl Fixture {
 struct FakeSmtp {
     outcomes: Mutex<VecDeque<DeliveryOutcome>>,
     sent: Mutex<Vec<(Uuid, Option<MailKind>)>>,
+}
+
+struct RuleEditor {
+    app: Router,
+    token: String,
+}
+
+impl RuleEditor {
+    fn new(db: &Database, started_at: DateTime<Utc>) -> Self {
+        let local = tempfile::tempdir_in("/tmp").unwrap();
+        let token = Uuid::new_v4().to_string();
+        let token_path = local.path().join("admin-token");
+        writeln!(
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&token_path)
+                .unwrap(),
+            "WEB_ADMIN_TOKEN={token}"
+        )
+        .unwrap();
+        let settings = Settings::load(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("config"),
+            |_| None,
+        )
+        .unwrap();
+        let app = router(AppState {
+            db: db.clone(),
+            finance: Finance::new(&settings.finance).unwrap(),
+            config: Arc::new(settings),
+            write_access: WriteAccess::load(&token_path, 10, Duration::from_secs(60)).unwrap(),
+            credential_store: None,
+            started_at,
+        });
+        Self { app, token }
+    }
+
+    async fn set_enabled(&self, rule: Uuid, revision: i64, enabled: bool) {
+        let update = Request::put(format!("/api/v1/notification-rules/{rule}"))
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("If-Match", format!("\"{revision}\""))
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "condition": "source_unavailable",
+                    "severity": "important",
+                    "enabled": enabled,
+                    "email_enabled": true
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            self.app.clone().oneshot(update).await.unwrap().status(),
+            StatusCode::OK
+        );
+    }
 }
 
 impl FakeSmtp {
@@ -362,14 +439,6 @@ async fn quiet_hours_audit_digest_and_urgent_bypass() {
 
 #[tokio::test]
 async fn disabling_a_retrying_summary_requeues_only_enabled_members() {
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
-    use tower::ServiceExt;
-    use web::{AppState, auth::WriteAccess, config::Settings, finance::Finance, router};
-
     let fixture = Fixture::create().await;
     let quiet = at("2026-11-27T15:00:00Z");
     let morning = at("2026-11-28T00:00:00Z");
@@ -391,47 +460,13 @@ async fn disabling_a_retrying_summary_requeues_only_enabled_members() {
     assert!(fixture.next(&mail, morning).await);
     assert_eq!(fixture.attempts(summary).await, [AttemptOutcome::Transient]);
 
-    let local = tempfile::tempdir_in("/tmp").unwrap();
-    let token = Uuid::new_v4().to_string();
-    let token_path = local.path().join("admin-token");
-    fs::write(&token_path, format!("WEB_ADMIN_TOKEN={token}\n")).unwrap();
-    fs::set_permissions(&token_path, fs::Permissions::from_mode(0o600)).unwrap();
-    let settings = Settings::load(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("config"),
-        |_| None,
-    )
-    .unwrap();
-    let app = router(AppState {
-        db: fixture.db.clone(),
-        finance: Finance::new(&settings.finance).unwrap(),
-        config: Arc::new(settings),
-        write_access: WriteAccess::load(&token_path, 10, Duration::from_secs(60)).unwrap(),
-        credential_store: None,
-        started_at: morning,
-    });
+    let editor = RuleEditor::new(&fixture.db, morning);
     for (rule, revision, enabled) in [
         (changed_rule, 1, false),
         (changed_rule, 2, true),
         (first_rule, 1, false),
     ] {
-        let update = Request::put(format!("/api/v1/notification-rules/{rule}"))
-            .header("Authorization", format!("Bearer {token}"))
-            .header("If-Match", format!("\"{revision}\""))
-            .header("Content-Type", "application/json")
-            .body(Body::from(
-                serde_json::json!({
-                    "condition": "source_unavailable",
-                    "severity": "important",
-                    "enabled": enabled,
-                    "email_enabled": true
-                })
-                .to_string(),
-            ))
-            .unwrap();
-        assert_eq!(
-            app.clone().oneshot(update).await.unwrap().status(),
-            StatusCode::OK
-        );
+        editor.set_enabled(rule, revision, enabled).await;
     }
 
     // The only work is the still-enabled member of a now-suppressed summary.
@@ -492,6 +527,160 @@ async fn disabling_a_retrying_summary_requeues_only_enabled_members() {
         )
     );
     assert_eq!(calls[3].1, Some(MailKind::TransportRecovered { count: 1 }));
+}
+
+#[tokio::test]
+async fn disabling_only_a_summary_member_removes_it_from_later_sends() {
+    let fixture = Fixture::create().await;
+    let quiet = at("2026-11-27T15:00:00Z");
+    let morning = at("2026-11-28T00:00:00Z");
+    let mail = FakeSmtp::with_outcomes([DeliveryOutcome::Transient]);
+    let main_rule = fixture.rule(false).await;
+    let other_rule = fixture.rule(false).await;
+    let summary = fixture
+        .queue_event(main_rule, Uuid::new_v4(), "alert", quiet)
+        .await;
+    let member = fixture
+        .queue_event(other_rule, Uuid::new_v4(), "alert", later(quiet, 1))
+        .await;
+    assert!(!fixture.next(&mail, later(quiet, 1)).await);
+    assert!(fixture.next(&mail, morning).await);
+    assert_eq!(
+        *mail.sent.lock().unwrap(),
+        [(summary, Some(MailKind::Digest { count: 2 }))]
+    );
+    assert_eq!(fixture.attempts(summary).await, [AttemptOutcome::Transient]);
+
+    // Leave the summary's main rule enabled for the entire test.
+    RuleEditor::new(&fixture.db, morning)
+        .set_enabled(other_rule, 1, false)
+        .await;
+
+    assert!(!fixture.next(&mail, later(morning, 29)).await);
+    assert!(!fixture.next(&mail, later(morning, 30)).await);
+    assert!(fixture.next(&mail, later(morning, 900)).await);
+    assert!(fixture.next(&mail, later(morning, 901)).await);
+    assert!(!fixture.next(&mail, later(morning, 902)).await);
+
+    let replacement: Uuid = sqlx::query_scalar(
+        "SELECT id FROM app.notification_outbox WHERE replaces_id = $1 AND rule_id = $2",
+    )
+    .bind(summary)
+    .bind(main_rule)
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_ne!(replacement, summary);
+    assert_eq!(
+        fixture.attempts(replacement).await,
+        [AttemptOutcome::Accepted]
+    );
+    assert_eq!(fixture.attempts(summary).await, [AttemptOutcome::Transient]);
+    let history: (String, Option<Uuid>, Option<String>, bool) = sqlx::query_as(
+        "SELECT status, summary_id, suppression_reason,
+                EXISTS (SELECT FROM app.notification_outbox WHERE replaces_id = $1)
+         FROM app.notification_outbox WHERE id = $1",
+    )
+    .bind(member)
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        history,
+        (
+            "summarized".into(),
+            Some(summary),
+            Some("rule_disabled".into()),
+            false
+        )
+    );
+
+    let calls = mail.sent.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(
+        calls[1],
+        (
+            replacement,
+            Some(MailKind::Alert {
+                condition: Condition::SourceUnavailable,
+            })
+        )
+    );
+    assert_eq!(calls[2].1, Some(MailKind::TransportRecovered { count: 1 }));
+}
+
+#[derive(Default)]
+struct HeldSummarySmtp {
+    sent: Mutex<Option<(Uuid, MailKind)>>,
+    started: Notify,
+    accept: Notify,
+}
+
+impl NotificationChannel for HeldSummarySmtp {
+    fn validate(&self) -> Result<(), ChannelConfigError> {
+        Ok(())
+    }
+
+    async fn test(&self, _id: Uuid) -> DeliveryOutcome {
+        unreachable!("fixture sends only an alert digest")
+    }
+
+    async fn send(&self, id: Uuid, mail: MailKind) -> DeliveryOutcome {
+        *self.sent.lock().unwrap() = Some((id, mail));
+        self.started.notify_one();
+        self.accept.notified().await;
+        DeliveryOutcome::Accepted
+    }
+}
+
+#[tokio::test]
+async fn disabling_a_summary_member_during_an_accepted_attempt_does_not_resend() {
+    let fixture = Fixture::create().await;
+    let quiet = at("2026-11-27T15:00:00Z");
+    let morning = at("2026-11-28T00:00:00Z");
+    let mail = HeldSummarySmtp::default();
+    let subsequent_mail = FakeSmtp::default();
+    let main_rule = fixture.rule(false).await;
+    let other_rule = fixture.rule(false).await;
+    let summary = fixture
+        .queue_event(main_rule, Uuid::new_v4(), "alert", quiet)
+        .await;
+    let member = fixture
+        .queue_event(other_rule, Uuid::new_v4(), "alert", later(quiet, 1))
+        .await;
+    assert!(!fixture.next(&subsequent_mail, later(quiet, 1)).await);
+
+    let worker = fixture.next(&mail, morning);
+    tokio::pin!(worker);
+    tokio::select! {
+        () = mail.started.notified() => {},
+        _ = &mut worker => panic!("the fake SMTP attempt should be in flight"),
+    }
+    assert_eq!(
+        *mail.sent.lock().unwrap(),
+        Some((summary, MailKind::Digest { count: 2 }))
+    );
+    assert_eq!(fixture.attempts(summary).await, [AttemptOutcome::Sending]);
+    RuleEditor::new(&fixture.db, morning)
+        .set_enabled(other_rule, 1, false)
+        .await;
+    mail.accept.notify_one();
+    assert!(worker.await);
+
+    assert!(!fixture.next(&subsequent_mail, later(morning, 900)).await);
+    assert_eq!(fixture.attempts(summary).await, [AttemptOutcome::Accepted]);
+    let state: (String, i64) = sqlx::query_as(
+        "SELECT status, (SELECT count(*) FROM app.notification_outbox
+                          WHERE replaces_id IN ($1, $2))
+         FROM app.notification_outbox WHERE id = $1",
+    )
+    .bind(summary)
+    .bind(member)
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(state, ("accepted".into(), 0));
+    assert!(subsequent_mail.sent.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

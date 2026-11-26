@@ -1,7 +1,10 @@
 use super::{ABANDONED_AFTER, NotificationHealth, NotificationPolicy};
 use crate::{
     database::Database,
-    notifications::model::{AttemptOutcome, Condition, DeliveryKind},
+    notifications::{
+        model::{AttemptOutcome, Condition, DeliveryKind},
+        store::lock_rule_updates,
+    },
 };
 use chrono::{DateTime, Utc};
 use sqlx::{Acquire, PgConnection, Postgres, pool::PoolConnection};
@@ -11,12 +14,18 @@ use uuid::Uuid;
 // SMTP and completion, with no SQL transaction held over the network request.
 const SENDER_LOCK: i64 = 6_758_026_211_706_146_534;
 
-const REQUEUEABLE_SUMMARY_MEMBERS: &str = "
+const RETIRABLE_SUMMARIES: &str = "
+    summary.status = 'pending' AND summary.kind = 'alert' AND EXISTS (
+        SELECT FROM app.notification_outbox member
+        WHERE member.summary_id = summary.id AND member.suppression_reason IS NOT NULL
+    )";
+
+const REQUEUEABLE_ALERTS: &str = "
     FROM app.notification_outbox member
-    JOIN app.notification_outbox summary ON summary.id = member.summary_id
+    LEFT JOIN app.notification_outbox summary ON summary.id = member.summary_id
     JOIN app.alert_events event ON event.id = member.event_id
     JOIN app.notification_rules rule ON rule.id = member.rule_id
-    WHERE member.status = 'summarized' AND summary.status = 'suppressed'
+    WHERE (member.status = 'suppressed' OR (member.status = 'summarized' AND summary.status = 'suppressed'))
       AND member.suppression_reason IS NULL AND rule.enabled AND rule.email_enabled
       AND rule.condition = event.condition
       AND NOT EXISTS (SELECT FROM app.notification_outbox retry WHERE retry.replaces_id = member.id)";
@@ -66,7 +75,8 @@ pub(super) async fn claim(
         sqlx::query_scalar::<_, bool>(&format!(
             "SELECT EXISTS (SELECT FROM app.notification_outbox
              WHERE (status = 'pending' AND available_at <= $1) OR status = 'sending')
-             OR EXISTS (SELECT 1 {REQUEUEABLE_SUMMARY_MEMBERS})",
+             OR EXISTS (SELECT 1 FROM app.notification_outbox summary WHERE {RETIRABLE_SUMMARIES})
+             OR EXISTS (SELECT 1 {REQUEUEABLE_ALERTS})",
         ))
         .bind(clock())
         .fetch_one(&mut *read_conn)
@@ -83,8 +93,9 @@ pub(super) async fn claim(
     if !locked {
         return Ok(None);
     }
-    let now = clock();
     let mut tx = lock.begin().await?;
+    lock_rule_updates(&mut tx).await?;
+    let now = clock();
     if let Some(active) = sqlx::query_as::<_, Sending>(
         "SELECT id, kind, attempts, send_started_at FROM app.notification_outbox
          WHERE status = 'sending' FOR UPDATE",
@@ -106,7 +117,7 @@ pub(super) async fn claim(
         };
         settle(&mut tx, &job, AttemptOutcome::Interrupted, now).await?;
     }
-    requeue_suppressed_summary_members(&mut tx, now).await?;
+    replace_suppressed_summaries(&mut tx, now).await?;
     apply_policy(&mut tx, policy, now).await?;
     let Some(pending) = sqlx::query_as::<_, Pending>(
         "SELECT job.id, job.kind, event.condition, job.priority, job.attempts, job.digest_count, job.defer_reason
@@ -121,7 +132,7 @@ pub(super) async fn claim(
                  AND previous.incident_key = event.incident_key
                  AND previous.condition = event.condition AND previous.sequence < event.sequence
                  AND (coalesce(summary.status, prior.status) IN ('pending', 'sending') OR (
-                     prior.status = 'summarized' AND summary.status = 'suppressed'
+                     (prior.status = 'suppressed' OR (prior.status = 'summarized' AND summary.status = 'suppressed'))
                      AND prior.suppression_reason IS NULL AND NOT EXISTS (
                          SELECT FROM app.notification_outbox retry WHERE retry.replaces_id = prior.id
                      )
@@ -179,19 +190,28 @@ pub(super) async fn claim(
     )))
 }
 
-async fn requeue_suppressed_summary_members(
+async fn replace_suppressed_summaries(
     db: &mut PgConnection,
     now: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
-    // Keep the attempted summary and its membership intact. Each eligible member
-    // gets one fresh outbox entry, with a fresh Message-ID for a different payload.
-    // Skip rules being edited so eligibility and the replacement cannot race the edit.
+    // Retire a pending summary if an edit suppressed a member. The primary
+    // alert can still be eligible, so don't give it a rule suppression reason.
+    sqlx::query(&format!(
+        "UPDATE app.notification_outbox summary SET status = 'suppressed', updated_at = $1
+         WHERE {RETIRABLE_SUMMARIES}"
+    ))
+    .bind(now)
+    .execute(&mut *db)
+    .await?;
+
+    // Preserve the membership and attempts under the old Message-ID. Each
+    // eligible alert can join a new summary using a fresh outbox entry.
     sqlx::query(&format!(
         "INSERT INTO app.notification_outbox (id, event_id, rule_id, kind, priority,
              created_at, available_at, updated_at, defer_reason, replaces_id)
          SELECT gen_random_uuid(), member.event_id, member.rule_id, member.kind, member.priority,
                 $1, greatest(member.available_at, summary.available_at), $1, member.defer_reason, member.id
-         {REQUEUEABLE_SUMMARY_MEMBERS}
+         {REQUEUEABLE_ALERTS}
          FOR SHARE OF rule SKIP LOCKED
          ON CONFLICT (replaces_id) DO NOTHING"
     ))

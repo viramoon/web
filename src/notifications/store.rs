@@ -23,6 +23,17 @@ impl From<sqlx::Error> for StoreError {
 const RULE_COLUMNS: &str = "id::text AS id, revision, condition, severity, enabled,
     email_enabled, cooldown_seconds, reminder_seconds, min_occurrences";
 
+// Rule edits and the worker's reservation must see a consistent set of summary members.
+// This lock ends with the transaction, before the worker contacts SMTP.
+pub(super) async fn lock_rule_updates(tx: &mut PgConnection) -> Result<(), sqlx::Error> {
+    const RULE_UPDATE_LOCK: i64 = 6_758_026_211_706_146_535;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(RULE_UPDATE_LOCK)
+        .execute(tx)
+        .await?;
+    Ok(())
+}
+
 pub(crate) async fn list_rules(
     db: &Database,
     limit: i64,
@@ -79,6 +90,7 @@ pub(crate) async fn put_rule(
         .await?
         .ok_or(StoreError::Conflict)?
     } else {
+        lock_rule_updates(&mut tx).await?;
         let old = sqlx::query_as::<_, RuleConfig>(
             "SELECT * FROM app.notification_rules WHERE id = $1 AND revision = $2 FOR UPDATE",
         )
@@ -101,11 +113,15 @@ pub(crate) async fn put_rule(
                      suppression_reason = $2, updated_at = now()
                  WHERE delivery.rule_id = $1 AND (
                    delivery.status IN ('pending', 'sending') OR (
-                     delivery.status = 'summarized' AND EXISTS (
-                       SELECT FROM app.notification_outbox summary WHERE summary.id = delivery.summary_id
-                         AND summary.status IN ('pending', 'sending', 'suppressed')
-                     ) AND NOT EXISTS (
+                     delivery.suppression_reason IS NULL AND NOT EXISTS (
                        SELECT FROM app.notification_outbox retry WHERE retry.replaces_id = delivery.id
+                     ) AND (
+                       delivery.status = 'suppressed' OR (
+                         delivery.status = 'summarized' AND EXISTS (
+                           SELECT FROM app.notification_outbox summary WHERE summary.id = delivery.summary_id
+                             AND summary.status IN ('pending', 'sending', 'suppressed')
+                         )
+                       )
                      )
                    )
                  )",
