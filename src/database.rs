@@ -92,11 +92,11 @@ impl Database {
             sqlx::query_scalar(
                 "SELECT to_regclass('app.integration_configs') IS NOT NULL
                     AND to_regclass('app.notification_health') IS NOT NULL
-                    AND EXISTS (
-                        SELECT FROM pg_catalog.pg_attribute
+                    AND (
+                        SELECT count(*) FROM pg_catalog.pg_attribute
                         WHERE attrelid = to_regclass('app.notification_outbox')
-                          AND attname = 'replaces_id' AND NOT attisdropped
-                    )",
+                          AND attname IN ('replaces_id', 'integration_test_id') AND NOT attisdropped
+                    ) = 2",
             )
             .fetch_one(&mut *connection)
             .await

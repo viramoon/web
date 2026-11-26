@@ -466,6 +466,46 @@ async fn integration_patch_rejects_fields_outside_the_selected_action() {
 }
 
 #[tokio::test]
+async fn versioned_integration_routes_require_admin_origin_and_revision() {
+    let (app, admin, _fixture) = test_app();
+    let path = format!("{INTEGRATIONS}/{}", Uuid::new_v4());
+    let test_id = Uuid::new_v4();
+    for path in [&path, &format!("{path}/tests/{test_id}")] {
+        let response = send(&app, Request::get(path), Body::empty()).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_no_store(&response);
+    }
+    for (action, body) in [
+        ("activate", json!({"test_id": test_id.to_string()})),
+        ("rollback", json!({"version": 1})),
+    ] {
+        let action = format!("{path}/{action}");
+        let response = send(
+            &app,
+            Request::post(&action)
+                .header(header::AUTHORIZATION, admin.clone())
+                .header(header::ORIGIN, "https://other.example.invalid")
+                .header(header::CONTENT_TYPE, "application/json"),
+            body.to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_no_store(&response);
+        let response = send(
+            &app,
+            Request::post(action)
+                .header(header::AUTHORIZATION, admin.clone())
+                .header(header::ORIGIN, ORIGIN)
+                .header(header::CONTENT_TYPE, "application/json"),
+            body.to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
+        assert_no_store(&response);
+    }
+}
+
+#[tokio::test]
 async fn credential_upload_rejects_path_dotenv_and_pem_token_forms() {
     let (app, admin, _fixture) = test_app();
     let path = format!("{INTEGRATIONS}/{}/credential", Uuid::new_v4());

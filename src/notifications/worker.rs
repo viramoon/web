@@ -225,7 +225,7 @@ pub async fn dispatch_one(
 
 async fn send(channel: &impl NotificationChannel, job: &Job) -> AttemptOutcome {
     let kind = match (job.kind, job.condition) {
-        (DeliveryKind::Test, _) => return channel.test(job.id).await.into(),
+        (DeliveryKind::Test, _) => return channel.test_profile(job.id, job.profile).await.into(),
         (DeliveryKind::OutageDigest, _) => MailKind::TransportRecovered { count: job.count },
         (DeliveryKind::Alert, _) if job.count > 1 => MailKind::Digest { count: job.count },
         (DeliveryKind::Alert, Some(condition)) => MailKind::Alert { condition },
@@ -233,7 +233,7 @@ async fn send(channel: &impl NotificationChannel, job: &Job) -> AttemptOutcome {
         (DeliveryKind::Recovery, Some(condition)) => MailKind::Recovery { condition },
         _ => return AttemptOutcome::ConfigurationError,
     };
-    channel.send(job.id, kind).await.into()
+    channel.send_profile(job.id, kind, job.profile).await.into()
 }
 
 #[cfg(test)]

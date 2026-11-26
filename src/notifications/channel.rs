@@ -44,6 +44,13 @@ pub enum DeliveryOutcome {
     ConfigurationError,
 }
 
+#[derive(Clone, Copy, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum SmtpProfile {
+    Primary,
+    Secondary,
+}
+
 /// The entire input to the alert template. Market data and producer strings have no path into it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MailKind {
@@ -58,6 +65,33 @@ pub trait NotificationChannel: Sync + Send {
     fn validate(&self) -> Result<(), ChannelConfigError>;
     fn test(&self, id: Uuid) -> impl Future<Output = DeliveryOutcome> + Send;
     fn send(&self, id: Uuid, mail: MailKind) -> impl Future<Output = DeliveryOutcome> + Send;
+
+    fn test_profile(
+        &self,
+        id: Uuid,
+        profile: SmtpProfile,
+    ) -> impl Future<Output = DeliveryOutcome> + Send {
+        async move {
+            match profile {
+                SmtpProfile::Primary => self.test(id).await,
+                SmtpProfile::Secondary => DeliveryOutcome::ConfigurationError,
+            }
+        }
+    }
+
+    fn send_profile(
+        &self,
+        id: Uuid,
+        mail: MailKind,
+        profile: SmtpProfile,
+    ) -> impl Future<Output = DeliveryOutcome> + Send {
+        async move {
+            match profile {
+                SmtpProfile::Primary => self.send(id, mail).await,
+                SmtpProfile::Secondary => DeliveryOutcome::ConfigurationError,
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -373,6 +407,80 @@ impl NotificationChannel for EmailChannel {
 
     async fn send(&self, id: Uuid, mail: MailKind) -> DeliveryOutcome {
         self.deliver(id, MessageKind::Notification(mail)).await
+    }
+}
+
+pub struct EmailChannels {
+    primary: EmailChannel,
+    secondary: Option<EmailChannel>,
+}
+
+impl EmailChannels {
+    pub fn from_environment(
+        get: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, ChannelConfigError> {
+        let primary = EmailChannel::from_environment(&get)?
+            .ok_or(ChannelConfigError("SMTP configuration is required"))?;
+        let secondary =
+            match EmailChannel::from_environment(|name| match name.strip_prefix("WEB_SMTP_") {
+                Some(suffix) => get(&format!("WEB_SMTP_SECONDARY_{suffix}")),
+                None => get(name),
+            }) {
+                Ok(channel) => channel,
+                Err(_) => {
+                    tracing::warn!("secondary SMTP profile is unavailable");
+                    None
+                }
+            };
+        Ok(Self { primary, secondary })
+    }
+
+    pub fn timeout(&self) -> Duration {
+        self.secondary
+            .as_ref()
+            .map_or(self.primary.timeout(), |channel| {
+                self.primary.timeout().max(channel.timeout())
+            })
+    }
+
+    fn channel(&self, profile: SmtpProfile) -> Option<&EmailChannel> {
+        match profile {
+            SmtpProfile::Primary => Some(&self.primary),
+            SmtpProfile::Secondary => self.secondary.as_ref(),
+        }
+    }
+}
+
+impl NotificationChannel for EmailChannels {
+    fn validate(&self) -> Result<(), ChannelConfigError> {
+        self.primary.validate()
+    }
+
+    async fn test(&self, id: Uuid) -> DeliveryOutcome {
+        self.primary.test(id).await
+    }
+
+    async fn send(&self, id: Uuid, mail: MailKind) -> DeliveryOutcome {
+        self.primary.send(id, mail).await
+    }
+
+    async fn test_profile(&self, id: Uuid, profile: SmtpProfile) -> DeliveryOutcome {
+        match self.channel(profile) {
+            Some(channel) => channel.test(id).await,
+            None => DeliveryOutcome::ConfigurationError,
+        }
+    }
+
+    async fn send_profile(
+        &self,
+        id: Uuid,
+        mail: MailKind,
+        profile: SmtpProfile,
+    ) -> DeliveryOutcome {
+        match self.channel(profile) {
+            Some(channel) => channel.send(id, mail).await,
+            None => DeliveryOutcome::ConfigurationError,
+        }
     }
 }
 

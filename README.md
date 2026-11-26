@@ -2,7 +2,7 @@
 
 fertile 的后端网关与 submodule。使用 axum 提供浏览器 API、通过 HTTP 连接 finance、托管 frontend 静态文件，管理业务与博客的 PostgreSQL schema 及迁移。
 
-本仓库按 [issue #1 方案 v2](https://github.com/viramoon/web/issues/1#issuecomment-6834604360) 初始化。axum 服务提供健康检查、带行情新鲜度的系统状态、静态托管与 PostgreSQL 迁移，并经 finance 客户端提供只读查询和管理员回测作业提交。管理接口支持短期同源会话、产品权限查询、集成配置版本、加密凭据录入、告警和测试邮件。`web-notifier` 独立消费 PostgreSQL outbox 并记录 SMTP 投递结果。运行方式见[运行手册](RUNBOOK.md)，开发从 [AGENTS.md](AGENTS.md) 开始。
+本仓库按 issue #1 方案 v2 初始化。axum 服务提供健康检查、带行情新鲜度的系统状态、静态托管与 PostgreSQL 迁移，并经 finance 客户端提供只读查询和管理员回测作业提交。管理接口支持短期同源会话、产品权限查询、加密凭据录入和集成候选测试、启用与回滚。运维页面可读取备份恢复点和授权的采集缺口。`web-notifier` 消费 PostgreSQL outbox，按活动 SMTP 配置投递邮件，也处理待启用的候选测试。见 [issue #1 方案 v2](https://github.com/viramoon/web/issues/1#issuecomment-6834604360)、[运行手册](RUNBOOK.md) 和 [AGENTS.md](AGENTS.md)。
 
 ## 系统中的位置
 
@@ -28,6 +28,8 @@ web/
 │   ├── routes/             trading / backtest / dashboard / blog / health
 │   ├── domain/ / blog/ / auth/ / idempotency/
 │   ├── notifications/       告警规则、事件、事务 outbox 和邮件投递
+│   ├── integrations/        版本事务与集成测试适配
+│   ├── ops/                 T2b 备份与采集质量只读状态
 │   ├── finance_client/     从 finance 快照生成
 │   ├── static/ / openapi/  静态托管与接口导出
 │   └── startup/ / telemetry/

@@ -16,6 +16,10 @@
 | WEB_ADMIN_SESSION_TTL_SECONDS | security.session_ttl_seconds | 900 秒，允许 1 至 900 |
 | WEB_CREDENTIAL_DIR | credentials.directory | 空，与公钥路径成对配置 |
 | WEB_CREDENTIAL_RECIPIENT_PUBLIC_KEY_FILE | credentials.recipient_public_key_file | 空，与密文目录成对配置 |
+| WEB_BINANCE_PROBES_ENABLED | binance_probes_enabled | false |
+| WEB_BACKUP_STATUS_FILE | ops.backup_status_file | 空 |
+| WEB_BACKUP_RESTORE_FILE | ops.backup_restore_file | 空，需同时配置状态文件 |
+| WEB_QUALITY_STATUS_FILE | ops.quality_status_file | 空 |
 
 YAML 还配置请求时限 server.request_timeout_ms（默认 15000）、请求体上限 server.max_body_bytes（1 MiB）、退出宽限 server.shutdown_timeout_ms（20000）。数据库连接与连接池获取时限均为 2000ms；finance 就绪探测时限 2000ms。可在 profile 文件仅写需要覆盖的键。
 
@@ -26,3 +30,5 @@ web 自行读取这个 0600 普通文件中的 WEB_ADMIN_TOKEN。文件缺失将
 WEB_PUBLIC_ORIGIN 须与浏览器 Origin 完全相同，例如 `https://fertile.viramoon.com`，省略尾部斜杠和默认端口。凭据目录与公钥须使用绝对路径。目录和 PEM 的权限以及备份要求见[运行手册](../RUNBOOK.md)。
 
 `web-notifier` 从独立进程环境读取 SMTP 和投递策略，与 web 使用同一 `DATABASE_URL`。配置键、默认值和 SMTP 认证文件要求见[告警与邮件进程](../RUNBOOK.md#告警与邮件进程)。
+
+策略、研究和 Drive 配置位于 `local_probes`，默认未配置。环境覆盖、工具和槽位说明见[本机探测配置](../docs/local-integration-probes.md)。

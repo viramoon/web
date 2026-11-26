@@ -30,3 +30,13 @@ security:
 credentials:
   directory: null
   recipient_public_key_file: null
+binance_probes_enabled: false
+local_probes:
+  primary:
+    drive_test_root: null
+  secondary:
+    drive_test_root: null
+ops:
+  backup_status_file: null
+  backup_restore_file: null
+  quality_status_file: null

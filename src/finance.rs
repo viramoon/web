@@ -118,35 +118,45 @@ impl IntoResponse for Fault {
 #[derive(Clone)]
 pub struct Finance {
     connection: Arc<Configuration>,
+    probe_client: Option<reqwest::Client>,
     policy: FinanceConfig,
     circuit: Circuit,
 }
 
 impl Finance {
     pub fn new(config: &FinanceConfig) -> Result<Self, ConfigError> {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
-            .timeout(Duration::from_millis(config.request_timeout_ms))
-            .build()?;
+        let client_builder = || {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
+                .timeout(Duration::from_millis(config.request_timeout_ms))
+        };
         let connection = Configuration {
             base_path: config.base_url.trim_end_matches('/').into(),
-            client,
+            client: client_builder().build()?,
             user_agent: Some(concat!("web/", env!("CARGO_PKG_VERSION")).into()),
             basic_auth: None,
             oauth_access_token: None,
             bearer_access_token: None,
             api_key: None,
         };
+        let probe_client = loopback_endpoint(&config.base_url)
+            .then(|| client_builder().no_proxy().build())
+            .transpose()?;
         Ok(Self {
             connection: Arc::new(connection),
+            probe_client,
             policy: config.clone(),
             circuit: Circuit::new(
                 config.circuit_failure_threshold,
                 Duration::from_millis(config.circuit_open_ms),
             ),
         })
+    }
+
+    pub(crate) fn integration_probe_client(&self) -> Option<(&reqwest::Client, &str)> {
+        Some((self.probe_client.as_ref()?, &self.connection.base_path))
     }
 
     /// Idempotent reads may back off and retry. Mutations always make at most one attempt.
@@ -244,4 +254,19 @@ impl Finance {
             reachable,
         )
     }
+}
+
+fn loopback_endpoint(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && match url.host() {
+                Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                _ => false,
+            }
+    })
 }

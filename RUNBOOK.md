@@ -103,7 +103,28 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 
 密文先写入持久目录，再提交 PostgreSQL 引用。数据库事务取消或提交结果不明后可能留下无引用密文。备份时保留配套的 PostgreSQL、密文目录及对应接收方私钥。轮换接收方公钥后，新录入的凭据使用新密钥，旧密文继续依赖其 `kid` 对应的私钥。清理时暂停凭据写入，与 PostgreSQL 中的全部引用、历史保留和备份核对后，再删除确认无引用的文件。接口吊销凭据会更新 PostgreSQL 中的可用状态，并保留历史密文供审计和备份。
 
-W1 catalog 允许按标的创建草稿。连接测试记录失败或不可用，保留原活动版本。更新请求超时后先读配置 revision 和最近测试 ID。W1 不需要修改端口或新增守护进程。部署前执行 `web migrate`，再启动新 web 进程。需要回到 W1 前的二进制时，保留已迁移的数据库和密文，并设置 `WEB_AUTO_MIGRATE=false`。
+管理员创建草稿并发起版本化测试，通过后显式启用。失败、不可用或候选变化时保留活动版本。超时先读配置 revision、活动版本和最近测试 ID。进程中断留下未结算的本机测试时，可从最新 revision 发起一次新测试，使原测试失效。回滚复用曾启用且凭据仍有效的配置，生成更高版本。
+
+部署先执行 `web migrate`，再同步更新 web 与 web-notifier。保持部署端配置槽的目标及内容固定，直到对应活动和回滚版本退出保留范围。轮换时把新配置放在另一槽并验证。回退二进制前核对并结算或停用待处理的 W4 SMTP 候选，避免旧 notifier 把候选按默认渠道发送。保留前向迁移及密文，旧 web 设置 `WEB_AUTO_MIGRATE=false`。
+
+| 集成 | 部署侧设置及测试行为 |
+| --- | --- |
+| IBKR paper 和加密源 | 本机 finance 行情所有者通过数字回环 `FINANCE_BASE_URL` 提供只读观察。在已锁定 finance 版本上探测报告适配器不可用。Binance Spot 和 USDⓈ-M 仅在部署显式设置 `WEB_BINANCE_PROBES_ENABLED=true` 后发请求。IBKR 由 vira 按券商流程完成 paper 登录与 2FA。见[本机行情契约](docs/market-probes.md) |
+| 策略文件、研究文件 | 由部署预置文件并绑定 finance 工具。策略返回编译计划摘要，研究文件在一次性本机目录预演导入。见[配置及文件格式](docs/local-integration-probes.md) |
+| SMTP | `primary` 复用 notifier 的 `WEB_SMTP_*`，`secondary` 使用独立可选的 `WEB_SMTP_SECONDARY_*`。候选测试通过同一 outbox、TLS 与限流策略，投递失败只结算候选证据。启用前沿用 W3 默认主槽，停用后保留队列，重新启用后恢复分发 |
+| Google Drive | 默认关闭。配置 web 用户所有、权限 0700 的专用本机临时根后，以 rclone `crypt(local)` 校验合成对象的文件名加密、内容加密、读回及清理。见[本机测试配置](docs/local-integration-probes.md#google-drive-配置占位) |
+
+文件与测试根使用静态根以外的绝对路径。Google Drive 的账户、OAuth 和长期 crypt 密钥由 vira 另行配置于 fertile，Web 的 Drive 卡只验证本机加密链路。
+
+## 备份与采集缺口
+
+| 环境变量 | 本机固定文件 |
+| --- | --- |
+| `WEB_BACKUP_STATUS_FILE` | 可选。指向 T2b 发布的 `run/backup-remote-status.json`。未配置时状态为 `disabled` |
+| `WEB_BACKUP_RESTORE_FILE` | 可选。指向同一实例的 `run/backup-remote-restore.json`，需同时配置状态文件 |
+| `WEB_QUALITY_STATUS_FILE` | 可选。指向授权质量发布者原子替换的本机 JSON 快照 |
+
+文件必须为静态根之外的绝对路径和普通文件，末级禁止符号链接。切换备份目标时由 fertile 刷新状态和隔离恢复凭据。查询读取状态文件，不执行备份、恢复或补采。T2b 的恢复截点由清单验证推进，失败后可保留最后合格水位，并更新观测时间。查看 `alert` 可识别已启用备份的缺失、降级和超过一小时的恢复点。质量快照生产者随 finance 数据质量接入。见[运维状态接口](docs/api.md#备份与采集质量)。
 
 ## 告警与邮件进程
 

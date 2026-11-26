@@ -77,6 +77,20 @@ fn smtp_environment_rejects_partial_configuration_and_injection() {
 }
 
 #[test]
+fn invalid_secondary_slot_leaves_the_primary_channel_usable() {
+    let channels = EmailChannels::from_environment(|name| match name {
+        "WEB_SMTP_SECONDARY_HOST" => Some("invalid/path".into()),
+        _ => configured(name),
+    })
+    .unwrap();
+    assert_eq!(
+        channels.channel(SmtpProfile::Primary).unwrap().relay,
+        "smtps://relay.example.invalid:465"
+    );
+    assert!(channels.channel(SmtpProfile::Secondary).is_none());
+}
+
+#[test]
 fn smtp_secret_requires_owned_regular_0600_file_and_strict_format() {
     let directory = tempfile::TempDir::new_in("/tmp").unwrap();
     let path = directory.path().join("synthetic-credentials");

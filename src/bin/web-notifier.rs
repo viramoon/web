@@ -9,7 +9,7 @@ use web::{
     config::ConfigError,
     database::Database,
     notifications::{
-        channel::EmailChannel,
+        channel::EmailChannels,
         worker::{self, NotificationPolicy},
     },
 };
@@ -29,7 +29,7 @@ async fn main() -> Result<(), ConfigError> {
 
     let get = |key: &str| std::env::var(key).ok();
     let policy = NotificationPolicy::from_environment(get)?;
-    let channel = EmailChannel::from_environment(get)?.ok_or("SMTP configuration is required")?;
+    let channel = EmailChannels::from_environment(get)?;
     let database_url = get("DATABASE_URL").ok_or("DATABASE_URL is required")?;
     let db = Database::new(
         &database_url,

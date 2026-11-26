@@ -17,6 +17,15 @@ fn test_id(run: &TestInput) -> Uuid {
     Uuid::parse_str(&run.test.id).unwrap()
 }
 
+fn fixture(outcome: Outcome) -> (Outcome, TestEvidence) {
+    let evidence = match outcome {
+        Outcome::Passed => AttemptOutcome::Accepted,
+        Outcome::Failed => AttemptOutcome::Rejected,
+        Outcome::Unavailable => AttemptOutcome::ConfigurationError,
+    };
+    (outcome, TestEvidence::Smtp(evidence))
+}
+
 #[tokio::test]
 async fn postgres_rotation_preserves_active_and_supersedes_stale_attempts() {
     let pg = postgres::Cluster::create();
@@ -35,11 +44,15 @@ async fn postgres_rotation_preserves_active_and_supersedes_stale_attempts() {
     assert!(matches!(pending.latest.state, VersionState::Candidate));
     assert!(pending.active.is_none());
     assert_eq!(pending.last_test_id.as_deref(), Some(run.test.id.as_str()));
-    let passed = finish_test(&db, id, test_id(&run), Outcome::Passed)
+    let passed = finish_test(&db, id, test_id(&run), fixture(Outcome::Passed))
         .await
         .unwrap();
     assert!(matches!(passed.status, TestStatus::Passed));
-    let active = get(&db, id).await.unwrap();
+    let tested = get(&db, id).await.unwrap();
+    assert!(tested.active.is_none());
+    let active = activate(&db, id, tested.revision, test_id(&run), false)
+        .await
+        .unwrap();
     let active_version = active.active.unwrap().version;
     assert_eq!(active_version, first.latest.version);
 
@@ -48,7 +61,7 @@ async fn postgres_rotation_preserves_active_and_supersedes_stale_attempts() {
         .unwrap();
     assert!(matches!(staged.latest.state, VersionState::Draft));
     let run = begin_test(&db, id, staged.revision).await.unwrap();
-    let failed = finish_test(&db, id, test_id(&run), Outcome::Failed)
+    let failed = finish_test(&db, id, test_id(&run), fixture(Outcome::Failed))
         .await
         .unwrap();
     assert!(matches!(failed.status, TestStatus::Failed));
@@ -64,7 +77,7 @@ async fn postgres_rotation_preserves_active_and_supersedes_stale_attempts() {
     let stale = begin_test(&db, id, after_failure.revision).await.unwrap();
     let pending = get(&db, id).await.unwrap();
     let retry = begin_test(&db, id, pending.revision).await.unwrap();
-    let stale_result = finish_test(&db, id, test_id(&stale), Outcome::Passed)
+    let stale_result = finish_test(&db, id, test_id(&stale), fixture(Outcome::Passed))
         .await
         .unwrap();
     assert!(matches!(stale_result.status, TestStatus::Superseded));
@@ -74,11 +87,15 @@ async fn postgres_rotation_preserves_active_and_supersedes_stale_attempts() {
         before_retry.last_test_id.as_deref(),
         Some(retry.test.id.as_str())
     );
-    let retry_result = finish_test(&db, id, test_id(&retry), Outcome::Passed)
+    let retry_result = finish_test(&db, id, test_id(&retry), fixture(Outcome::Passed))
         .await
         .unwrap();
     assert!(matches!(retry_result.status, TestStatus::Passed));
-    let rotated = get(&db, id).await.unwrap();
+    let tested = get(&db, id).await.unwrap();
+    assert_eq!(tested.active.unwrap().version, active_version);
+    let rotated = activate(&db, id, tested.revision, test_id(&retry), false)
+        .await
+        .unwrap();
     assert_eq!(rotated.active.unwrap().version, staged.latest.version);
 
     let (left, right) = tokio::join!(
@@ -99,6 +116,11 @@ async fn postgres_rotation_preserves_active_and_supersedes_stale_attempts() {
         .unwrap();
     assert!(revoke.active.is_none());
     assert!(revoke.latest.credential.is_none());
+    assert!(revoke.rollback_versions.is_empty());
+    assert!(matches!(
+        rollback(&db, id, revoke.revision, active_version, false).await,
+        Err(Error::Conflict)
+    ));
     let audit = postgres::checked(pg.client("psql").args([
         "-XAt",
         "-d",

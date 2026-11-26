@@ -4,7 +4,7 @@ use super::postgres::Cluster;
 use axum::{
     Router,
     body::{Body, to_bytes},
-    http::{Request, StatusCode, header::CACHE_CONTROL},
+    http::{Method, Request, StatusCode, header::CACHE_CONTROL},
 };
 use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::PgPool;
@@ -27,7 +27,9 @@ use web::{
     database::Database,
     finance::Finance,
     notifications::{
-        channel::{ChannelConfigError, DeliveryOutcome, MailKind, NotificationChannel},
+        channel::{
+            ChannelConfigError, DeliveryOutcome, MailKind, NotificationChannel, SmtpProfile,
+        },
         model::{AttemptOutcome, Condition},
         worker::{NotificationPolicy, NotificationState, dispatch_one, health},
     },
@@ -259,6 +261,215 @@ impl NotificationChannel for FakeSmtp {
     async fn send(&self, id: Uuid, mail: MailKind) -> DeliveryOutcome {
         self.record(id, Some(mail))
     }
+}
+
+#[tokio::test]
+async fn versioned_smtp_test_uses_candidate_and_rollback_controls_delivery_profile() {
+    use serde_json::{Value, json};
+
+    struct ProfileMail {
+        primary: FakeSmtp,
+        secondary: FakeSmtp,
+    }
+
+    impl NotificationChannel for ProfileMail {
+        fn validate(&self) -> Result<(), ChannelConfigError> {
+            Ok(())
+        }
+
+        async fn test(&self, id: Uuid) -> DeliveryOutcome {
+            self.primary.test(id).await
+        }
+
+        async fn send(&self, id: Uuid, mail: MailKind) -> DeliveryOutcome {
+            self.primary.send(id, mail).await
+        }
+
+        async fn test_profile(&self, id: Uuid, profile: SmtpProfile) -> DeliveryOutcome {
+            match profile {
+                SmtpProfile::Primary => self.primary.test(id).await,
+                SmtpProfile::Secondary => self.secondary.test(id).await,
+            }
+        }
+
+        async fn send_profile(
+            &self,
+            id: Uuid,
+            mail: MailKind,
+            profile: SmtpProfile,
+        ) -> DeliveryOutcome {
+            match profile {
+                SmtpProfile::Primary => self.primary.send(id, mail).await,
+                SmtpProfile::Secondary => self.secondary.send(id, mail).await,
+            }
+        }
+    }
+
+    let fixture = Fixture::create().await;
+    let start = Utc::now();
+    let admin = RuleEditor::new(&fixture.db, start);
+    let mail = ProfileMail {
+        primary: FakeSmtp::default(),
+        secondary: FakeSmtp::with_outcomes([DeliveryOutcome::Rejected, DeliveryOutcome::Accepted]),
+    };
+    let request =
+        |method: Method, path: String, revision: Option<i64>, body: Option<Value>, expected| {
+            let admin = &admin;
+            async move {
+                let mut req = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("Authorization", format!("Bearer {}", admin.token));
+                if let Some(revision) = revision {
+                    req = req.header("If-Match", format!("\"{revision}\""));
+                }
+                let body = match body {
+                    Some(body) => {
+                        req = req.header("Content-Type", "application/json");
+                        Body::from(body.to_string())
+                    }
+                    None => Body::empty(),
+                };
+                let response = admin
+                    .app
+                    .clone()
+                    .oneshot(req.body(body).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), expected);
+                assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+                (
+                    response.headers().clone(),
+                    serde_json::from_slice::<Value>(
+                        &to_bytes(response.into_body(), 65536).await.unwrap(),
+                    )
+                    .unwrap(),
+                )
+            }
+        };
+    let configs = "/api/v1/integrations";
+    let (_, created) = request(
+        Method::POST,
+        configs.into(),
+        None,
+        Some(json!({"connector": "smtp", "settings": {"profile": "primary"}})),
+        StatusCode::CREATED,
+    )
+    .await;
+    let url = format!("{configs}/{}", created["id"].as_str().unwrap());
+    let activate = format!("{url}/activate");
+    let tests = format!("{url}/tests");
+    let (headers, pending) = request(
+        Method::POST,
+        tests.clone(),
+        Some(1),
+        None,
+        StatusCode::ACCEPTED,
+    )
+    .await;
+    assert_eq!(pending["status"], "pending");
+    let link = headers["location"].to_str().unwrap();
+    assert!(link.starts_with(&tests));
+    assert!(fixture.next(&mail, later(start, 1)).await);
+    let passed = admin.get_json(link).await;
+    assert_eq!(
+        passed["evidence"],
+        json!({"kind": "smtp", "details": "accepted"})
+    );
+    assert_eq!(passed["config_version"], 1);
+    assert_eq!(health(&fixture.db).await.state, NotificationState::Idle);
+    let candidate = admin.get_json(&url).await;
+    assert!(candidate["active"].is_null());
+    let (_, active) = request(
+        Method::POST,
+        activate.clone(),
+        candidate["revision"].as_i64(),
+        Some(json!({"test_id": passed["id"]})),
+        StatusCode::OK,
+    )
+    .await;
+
+    let (_, staged) = request(
+        Method::PATCH,
+        url.clone(),
+        active["revision"].as_i64(),
+        Some(json!({"action": "configure", "settings": {"profile": "secondary"}})),
+        StatusCode::OK,
+    )
+    .await;
+    let (headers, _) = request(
+        Method::POST,
+        tests.clone(),
+        staged["revision"].as_i64(),
+        None,
+        StatusCode::ACCEPTED,
+    )
+    .await;
+    assert!(fixture.next(&mail, later(start, 2)).await);
+    let failed = admin.get_json(headers["location"].to_str().unwrap()).await;
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["config_version"], 2);
+    assert_eq!(
+        failed["evidence"],
+        json!({"kind": "smtp", "details": "rejected"})
+    );
+    let retained = admin.get_json(&url).await;
+    assert_eq!(retained["active"]["version"], 1);
+    assert_eq!(health(&fixture.db).await.state, NotificationState::Idle);
+    request(
+        Method::POST,
+        activate.clone(),
+        retained["revision"].as_i64(),
+        Some(json!({"test_id": passed["id"]})),
+        StatusCode::CONFLICT,
+    )
+    .await;
+
+    let (headers, _) = request(
+        Method::POST,
+        tests,
+        retained["revision"].as_i64(),
+        None,
+        StatusCode::ACCEPTED,
+    )
+    .await;
+    assert!(fixture.next(&mail, later(start, 3)).await);
+    let candidate = admin.get_json(&url).await;
+    let passed = admin.get_json(headers["location"].to_str().unwrap()).await;
+    let (_, active) = request(
+        Method::POST,
+        activate,
+        candidate["revision"].as_i64(),
+        Some(json!({"test_id": passed["id"]})),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(active["active"]["settings"]["profile"], "secondary");
+    assert_eq!(active["rollback_versions"], json!([1]));
+
+    let rule = fixture.rule(true).await;
+    fixture
+        .queue_event(rule, Uuid::new_v4(), "alert", later(start, 4))
+        .await;
+    assert!(fixture.next(&mail, later(start, 4)).await);
+    assert!(mail.secondary.sent.lock().unwrap()[2].1.is_some());
+
+    let (_, restored) = request(
+        Method::POST,
+        format!("{url}/rollback"),
+        active["revision"].as_i64(),
+        Some(json!({"version": 1})),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(restored["active"]["version"], 3);
+    assert_eq!(restored["active"]["settings"]["profile"], "primary");
+    let second_rule = fixture.rule(true).await;
+    fixture
+        .queue_event(second_rule, Uuid::new_v4(), "alert", later(start, 5))
+        .await;
+    assert!(fixture.next(&mail, later(start, 5)).await);
+    assert!(mail.primary.sent.lock().unwrap()[1].1.is_some());
 }
 
 #[tokio::test]

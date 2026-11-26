@@ -8,6 +8,7 @@ pub mod finance;
 mod integrations;
 mod market;
 pub mod notifications;
+mod ops;
 mod spa;
 #[cfg(test)]
 mod w1_http_tests;
@@ -205,6 +206,9 @@ fn is_integration_route(path: &str) -> bool {
             | "/api/v1/integrations/{id}"
             | "/api/v1/integrations/{id}/credential"
             | "/api/v1/integrations/{id}/tests"
+            | "/api/v1/integrations/{id}/tests/{testId}"
+            | "/api/v1/integrations/{id}/activate"
+            | "/api/v1/integrations/{id}/rollback"
             | "/api/v1/integration-tests/{id}"
     )
 }
@@ -222,7 +226,11 @@ fn read_product(path: &str) -> Option<auth::Product> {
         "/api/v1/market/status" => Product::MarketStatus,
         "/api/v1/integrations"
         | "/api/v1/integrations/catalog"
+        | "/api/v1/integrations/{id}"
+        | "/api/v1/integrations/{id}/tests/{testId}"
         | "/api/v1/integration-tests/{id}" => Product::Integrations,
+        ops::BACKUP_STATUS => Product::Integrations,
+        ops::QUALITY_GAPS => Product::RestrictedMarketData,
         notification_http::RULES
         | notification_http::RULE
         | notification_http::ALERTS
@@ -245,7 +253,13 @@ async fn check_access(State(s): State<AppState>, req: Request, next: Next) -> Re
         (&Method::DELETE, "/api/v1/admin/session") => {
             s.write_access.check_session_deletion(headers)
         }
-        (&Method::POST, "/api/v1/integrations" | "/api/v1/integrations/{id}/tests")
+        (
+            &Method::POST,
+            "/api/v1/integrations"
+            | "/api/v1/integrations/{id}/tests"
+            | "/api/v1/integrations/{id}/activate"
+            | "/api/v1/integrations/{id}/rollback",
+        )
         | (&Method::PATCH, "/api/v1/integrations/{id}")
         | (&Method::PUT | &Method::DELETE, "/api/v1/integrations/{id}/credential")
         | (&Method::PUT, notification_http::RULE)
@@ -278,9 +292,19 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         (&Method::POST, notification_http::CHANNEL_TESTS) => {
             Some("Test outcome unknown; look up the original Idempotency-Key before retrying")
         }
+        (&Method::POST, "/api/v1/integrations/{id}/tests") => Some(
+            "Test outcome unknown; read the integration revision and latest test before retrying",
+        ),
+        (
+            &Method::POST,
+            "/api/v1/integrations/{id}/activate" | "/api/v1/integrations/{id}/rollback",
+        ) => Some(
+            "Update outcome unknown; read the integration revision and active version before retrying",
+        ),
         _ => None,
     };
     let no_store = is_integration_route(path)
+        || ops::is_private(path)
         || notification_http::is_private(path)
         || matches!(
             path,
@@ -351,6 +375,7 @@ pub fn router(s: AppState) -> Router {
         .route("/api/v1/me/capabilities", get(auth::capabilities))
         .merge(integrations::routes())
         .merge(notification_http::routes())
+        .merge(ops::routes())
         .fallback(spa::serve);
     with_controls(routes, s)
 }
@@ -388,12 +413,18 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
         auth::capabilities,
         integrations::catalog,
         integrations::list,
+        integrations::get_integration,
         integrations::create,
         integrations::update,
         integrations::put_credential,
         integrations::delete_credential,
         integrations::start_test,
         integrations::get_test,
+        integrations::get_scoped_test,
+        integrations::activate,
+        integrations::rollback,
+        ops::backup_status,
+        ops::quality_gaps,
         notification_http::list_rules,
         notification_http::get_rule,
         notification_http::put_rule,
