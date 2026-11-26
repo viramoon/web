@@ -57,6 +57,8 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 遇到 `fixture-source-required` 时，合成样本可按[来源登记说明](docs/data-guard.md#合成来源)补全生成器与摘要。Cargo 报告和运行日志留在工作树外，代码块与改名文件也会被检查。
 
+待审的规则放宽须进入对应入口的受信版本后才生效。遇到 `missing-remote-default` 或 `missing-trusted-rules` 时，补齐目标远端的默认分支跟踪 ref 和完整提交历史再检查。 [各入口的规则来源](docs/data-guard.md#检查入口)
+
 本地 HTTP 验证使用自身的临时配置、数据库 socket 和 finance 桩。运行命令及 PostgreSQL 工具要求见[API 集成测试](tests/api/README.md)。
 
 ## finance 转发及恢复

@@ -16,6 +16,8 @@ from urllib.parse import unquote
 
 RULES = ".data-guard/rules.json"
 SOURCES = ".data-guard/sources.json"
+# The reviewed v1 rules for branches predating this policy file, including W3 main.
+BOOTSTRAP_RULES_COMMIT = "e663bbd3fe64abf75f62925f2170e2cb58506e4f"
 MAX_POLICY_BYTES = 256 * 1024
 REGULAR_MODES = {b"100644", b"100755"}
 # Reviewed W3 source writes fixed synthetic credentials to temporary fixtures.
@@ -316,6 +318,15 @@ def load_rules(tree):
     )
 
 
+def load_trusted_rules(tree):
+    if RULES in tree:
+        return load_rules(tree)
+    bootstrap = commit_id(BOOTSTRAP_RULES_COMMIT, optional=True)
+    if bootstrap is None:
+        raise GuardError("missing-trusted-rules")
+    return load_rules(read_tree(bootstrap))
+
+
 def load_sources(tree, required):
     error = "invalid-sources"
     if SOURCES not in tree and not required:
@@ -540,6 +551,9 @@ def inspect_blob(path, entry, rules, source):
 
 
 def inspect_tree(tree, before, paths, rules, report, require_sources=False):
+    # Candidate rule changes are schema-checked without replacing the policy.
+    if require_sources or tree.get(RULES) != before.get(RULES):
+        load_rules(tree)
     csv.field_size_limit(rules.max_blob_bytes)
     sources = load_sources(tree, require_sources)
     for path, record in sources.items():
@@ -566,9 +580,16 @@ def inspect_range(base, tip, rules, report):
         inspect_tree(tree, before, changed_paths(before, tree), rules, report, require_sources=commit == tip)
 
 
+def remote_default_commit(remote):
+    for ref in ("HEAD", "main"):
+        revision = commit_id(f"refs/remotes/{remote}/{ref}", optional=True)
+        if revision:
+            return revision
+    raise GuardError("missing-remote-default")
+
+
 def inspect_push(remote, report):
-    tracking = [commit_id(f"refs/remotes/{remote}/{ref}", optional=True) for ref in ("HEAD", "main")]
-    default_base = next((oid for oid in tracking if oid), None)
+    rules = None
     for line in sys.stdin.buffer:
         fields = line.split()
         if len(fields) != 4 or not all(OID.fullmatch(fields[i]) for i in (1, 3)):
@@ -576,9 +597,11 @@ def inspect_push(remote, report):
         local, remote_oid = fields[1], fields[3]
         if not local.strip(b"0"):
             continue  # Ref deletion publishes no objects.
+        if rules is None:
+            default_base = remote_default_commit(remote)
+            rules = load_trusted_rules(read_tree(default_base))
         tip = commit_id(local.decode("ascii"))
         base = commit_id(remote_oid.decode("ascii")) if remote_oid.strip(b"0") else default_base
-        rules = load_rules(read_tree(tip))
         inspect_range(base, tip, rules, report)
 
 
@@ -609,17 +632,17 @@ def main():
             changed = git("diff", "--cached", "--ita-invisible-in-index",
                           "--name-only", "--no-ext-diff", "--no-renames", "-z")
             paths = [os.fsdecode(path) for path in changed.split(b"\0")[:-1]]
-            head = commit_id("HEAD", optional=True) if SOURCES in paths else None
+            head = commit_id("HEAD", optional=True)
             before = read_tree(head) if head else {}
-            inspect_tree(tree, before, paths, load_rules(tree), report, require_sources=True)
+            inspect_tree(tree, before, paths, load_trusted_rules(before), report, require_sources=True)
         else:
             if git("rev-parse", "--is-shallow-repository").strip() != b"false":
                 raise GuardError("incomplete-history")
             if args.mode == "range":
                 tip = commit_id(args.tip)
-                tree = read_tree(tip)
                 base = None if args.base == "-" else commit_id(args.base)
-                inspect_range(base, tip, load_rules(tree), report)
+                before = read_tree(base) if base else {}
+                inspect_range(base, tip, load_trusted_rules(before), report)
             else:
                 inspect_push(args.remote, report)
     except GuardError as error:

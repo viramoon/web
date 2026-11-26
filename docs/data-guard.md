@@ -10,11 +10,15 @@ web 对标准错误输出 JSON。请求完成事件只记录 UUID 请求 ID、�
 
 ## 检查入口
 
-| 入口 | 检查范围和输出 |
-| --- | --- |
-| pre-commit | 检查实际暂存 blob 和来源清单。部分暂存时以 Git 索引为准。 |
-| pre-push | 检查每个非删除 ref 引入的提交。已有远端 ref 使用 Git 提供的原 SHA，新 ref 使用远端跟踪 HEAD 或 main 为基准，缺失时检查完整历史。 |
-| CI | 以 PR 基础 SHA 或 push 的先前 SHA 为基准。新分支优先用远端 main 为基准。每个新提交与第一父提交比对，覆盖合并分支以及后来被删除的对象。CI 先扫描再执行服务、文档和客户端校验。 |
+| 入口 | 硬规则来源 | 检查范围 |
+| --- | --- | --- |
+| pre-commit | 本地 HEAD 已提交的版本 | 检查实际暂存 blob 和来源清单，部分暂存时以 Git 索引为准。 |
+| pre-push | 远端跟踪默认分支，优先使用 `refs/remotes/<remote>/HEAD`，缺失时查 `refs/remotes/<remote>/main` | 检查每个非删除 ref 引入的提交。已有 ref 以 Git 提供的远端原 SHA 划定范围，新 ref 以远端跟踪默认分支划定范围。 |
+| CI | PR 基分支 SHA。push 使用先前 SHA，新分支优先使用远端 main | 每个新提交与第一父提交比对，覆盖合并分支以及后来被删除的对象。 |
+
+规则文件的候选改动仍执行 v1 格式校验。本次扫描始终使用入口选定的硬规则，待审规则放宽对同一次扫描中的文件和后续候选提交均不生效。来源登记继续按每个候选 Git 树读取，可随合成样本一起提交。
+
+基线早于规则文件引入时，例如本 PR 的 W3 main，检查器从固定的已审查提交 `e663bbd3fe64abf75f62925f2170e2cb58506e4f` 读取初始 v1 规则。缺少该提交时返回 `missing-trusted-rules`。pre-push 缺少远端跟踪默认分支时返回 `missing-remote-default`，只删除 ref 的推送不需要读取规则。
 
 Web service 的 data-guard 作业在完整检出后执行[共享检查入口](../scripts/ci-data-guard.sh)，通过后才运行 core。文档和客户端工作流通过可复用的 data-guard 作业调用同一入口。core 的 PostgreSQL 容器沿用 main 的密码认证和 `5432:5432` 映射，迁移和 SQLx 校验使用作业内的回环地址。可使用文档工作流已有的 PyYAML 运行 `python3 -B -m unittest discover -s tests -p test_ci_workflow.py -v`，检查作业结构和检查顺序。
 

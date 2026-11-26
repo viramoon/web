@@ -61,6 +61,24 @@ class DataGuardTests(unittest.TestCase):
         self.assertIn(reason.encode(), output)
         self.assertNotIn(MARKER.encode(), output)
 
+    def stage_relaxed_rules(self):
+        path = ".data-guard/rules.json"
+        rules = json.loads((self.repo / path).read_text())
+        original_limit = rules["max_blob_bytes"]
+        rules["max_blob_bytes"] += 1
+        rules["blocked_path_components"].remove("logs")
+        self.write(path, json.dumps(rules))
+        self.git("add", path)
+        return original_limit
+
+    def stage_rule_violations(self, original_limit):
+        # These are plain synthetic documents with otherwise allowed file types.
+        oversized = "docs/oversized.md"
+        blocked = "docs/logs/fixture.md"
+        self.write(oversized, MARKER.ljust(original_limit + 1, "x"))
+        self.write(blocked, MARKER)
+        self.git("add", oversized, blocked)
+
     def test_pre_commit_rejects_staged_violation_with_clean_worktree(self):
         self.write("quoted.txt", "Authorization: Bearer " + MARKER)
         self.git("add", "quoted.txt")
@@ -158,6 +176,45 @@ class DataGuardTests(unittest.TestCase):
                 self.write(".data-guard/rules.json", text)
                 self.git("add", ".data-guard/rules.json")
                 self.assert_rejected(self.guard("staged"), "invalid-rules")
+
+    def test_pre_commit_uses_head_rules_instead_of_staged_relaxation(self):
+        self.stage_rule_violations(self.stage_relaxed_rules())
+        result = self.git("commit", "-qm", "Add samples while relaxing policy", check=False)
+        self.assert_rejected(result, "oversize")
+        self.assert_rejected(result, "blocked-path")
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.decode().strip(), self.base)
+
+    def test_pre_push_uses_remote_default_rules_for_new_and_existing_refs(self):
+        original_limit = self.stage_relaxed_rules()
+        self.git("commit", "-qm", "Propose schema-valid rule changes")
+        relaxed = self.git("rev-parse", "HEAD").stdout.decode().strip()
+        self.stage_rule_violations(original_limit)
+        self.git("commit", "-qm", "Add files allowed by the local branch policy")
+        tip = self.git("rev-parse", "HEAD").stdout.decode().strip()
+        for old in (ZERO, relaxed):
+            with self.subTest(new_ref=old == ZERO):
+                refs = f"refs/heads/topic {tip} refs/heads/topic {old}\n".encode()
+                result = self.run_command(".git/hooks/pre-push", "origin", "local-only", input=refs)
+                self.assert_rejected(result, "oversize")
+                self.assert_rejected(result, "blocked-path")
+
+    def test_ci_range_uses_pr_base_rules_instead_of_candidate_relaxation(self):
+        self.stage_rule_violations(self.stage_relaxed_rules())
+        self.git("-c", "core.hooksPath=" + os.devnull, "commit", "-qm", "Mock unchecked proposal")
+        result = self.guard("range", self.base, "HEAD")
+        self.assert_rejected(result, "oversize")
+        self.assert_rejected(result, "blocked-path")
+
+    def test_ci_range_validates_rule_schema_in_intermediate_commits(self):
+        path = ".data-guard/rules.json"
+        original = (self.repo / path).read_bytes()
+        self.write(path, '{"version":2}')
+        self.git("add", path)
+        self.git("-c", "core.hooksPath=" + os.devnull, "commit", "-qm", "Mock invalid policy")
+        self.write(path, original)
+        self.git("add", path)
+        self.git("-c", "core.hooksPath=" + os.devnull, "commit", "-qm", "Restore valid policy")
+        self.assert_rejected(self.guard("range", self.base, "HEAD"), "invalid-rules")
 
     def test_pre_commit_recognizes_market_data_inside_text_wrappers(self):
         columns = ("open", "high", "low", "close")
