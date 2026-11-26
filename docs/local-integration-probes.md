@@ -1,6 +1,6 @@
 # 策略、研究文件与本地备份探测
 
-集成的 `settings.profile` 选择部署槽位 `primary` 或 `secondary`。浏览器只能提交槽位名。文件、工具及测试 remote 路径由部署提供，填写绝对路径，并将文件和 remote 置于静态目录之外。保留已测试和活动槽位的原始配置及内容，变更时在另一槽位准备新候选，然后测试和启用。
+集成的 `settings.profile` 选择部署槽位 `primary` 或 `secondary`。浏览器只能提交槽位名。文件、工具及测试 remote 路径由部署提供，填写绝对路径，并将文件和 remote 置于静态目录之外。文件和 Drive 卡的启用及回滚保存控制面的预检选择及其历史证据。实际文件和正式 remote 继续由部署管理。变更预检输入后发起新测试。
 
 | 环境变量 | 配置项 | 默认值与用途 |
 | --- | --- | --- |
@@ -29,11 +29,11 @@ Drive 账户、OAuth 和备份密钥由 vira 后续决定。真实备份配置�
 
 ## 本地验证
 
-`cargo test --lib --locked --offline integrations::local_probe` 运行合成策略与 CSV、导入器替身、路径校验和 rclone 输出屏蔽测试。另用现有的本机 rclone 验证名称及内容加密、读回和清理。
+`cargo test --lib --locked --offline integrations::local_probe` 验证合成文件、导入器和本机 rclone 加密往返。Drive 用例运行真实 rclone，检查临时密码和盐经内存文件传入、写入后的文件名和内容加密、读回、删除及读回失败后的清理。测试子进程会产生含合成凭据的诊断，测试断言返回的证据仅包含预期字段。CI 提前准备 `/usr/bin/rclone`。本地若已安装在其他路径，通过 `WEB_TEST_RCLONE` 指定。
 
 ```sh
 WEB_TEST_RCLONE=/absolute/path/to/rclone \
-  cargo test --lib --locked --offline rclone_local_crypt_round_trip_uses_real_ciphertext_and_cleans_up -- --ignored
+  cargo test --lib --locked --offline integrations::local_probe::drive::tests
 ```
 
 后台调度和水位接口见[运行手册](../RUNBOOK.md)，测试、启用和回滚请求见[接口文档](api.md)。

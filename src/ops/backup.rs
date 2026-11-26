@@ -168,7 +168,8 @@ impl BackupStatus {
 #[utoipa::path(get, path = "/api/v1/backup/status",
     security(("adminBearer" = []), ("adminSession" = [])),
     responses((status = 200, body = BackupStatus), (status = 401, body = ErrorBody),
-        (status = 403, body = ErrorBody)))]
+        (status = 403, body = ErrorBody),
+        (status = 504, description = "Request deadline exceeded (request_timeout)", body = ErrorBody)))]
 pub(crate) async fn backup_status(State(state): State<AppState>) -> Json<BackupStatus> {
     let status =
         tokio::task::spawn_blocking(move || BackupStatus::read(&state.config.ops, Utc::now()))

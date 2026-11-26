@@ -207,12 +207,27 @@ pub async fn dispatch_one(
     channel: &impl NotificationChannel,
     clock: impl Fn() -> DateTime<Utc>,
 ) -> Result<bool, sqlx::Error> {
-    let Some((mut lock, job)) = time::timeout(DB_DEADLINE, store::claim(db, policy, &clock))
+    let Some((mut lock, mut job)) = time::timeout(DB_DEADLINE, store::claim(db, policy, &clock))
         .await
         .map_err(|_| sqlx::Error::PoolTimedOut)??
     else {
         return Ok(false);
     };
+    if let (Some(_), None, Some(profile)) = (
+        job.integration_test_id,
+        job.snapshot_id,
+        job.candidate_profile,
+    ) {
+        job.snapshot_id = time::timeout(DB_DEADLINE, async {
+            let snapshot = channel.capture_profile(profile).await;
+            if let Some(snapshot) = snapshot {
+                store::pin_snapshot(&mut lock, job.id, snapshot).await?;
+            }
+            Ok::<_, sqlx::Error>(snapshot)
+        })
+        .await
+        .map_err(|_| sqlx::Error::PoolTimedOut)??;
+    }
     let outcome = send(channel, &job).await;
     time::timeout(
         DB_DEADLINE,
@@ -225,7 +240,13 @@ pub async fn dispatch_one(
 
 async fn send(channel: &impl NotificationChannel, job: &Job) -> AttemptOutcome {
     let kind = match (job.kind, job.condition) {
-        (DeliveryKind::Test, _) => return channel.test_profile(job.id, job.profile).await.into(),
+        (DeliveryKind::Test, _) => {
+            return match (job.snapshot_id, job.integration_test_id) {
+                (Some(snapshot), _) => channel.test_snapshot(snapshot, job.id).await.into(),
+                (None, None) => channel.test(job.id).await.into(),
+                (None, Some(_)) => AttemptOutcome::ConfigurationError,
+            };
+        }
         (DeliveryKind::OutageDigest, _) => MailKind::TransportRecovered { count: job.count },
         (DeliveryKind::Alert, _) if job.count > 1 => MailKind::Digest { count: job.count },
         (DeliveryKind::Alert, Some(condition)) => MailKind::Alert { condition },
@@ -233,7 +254,10 @@ async fn send(channel: &impl NotificationChannel, job: &Job) -> AttemptOutcome {
         (DeliveryKind::Recovery, Some(condition)) => MailKind::Recovery { condition },
         _ => return AttemptOutcome::ConfigurationError,
     };
-    channel.send_profile(job.id, kind, job.profile).await.into()
+    match job.snapshot_id {
+        Some(snapshot) => channel.send_snapshot(snapshot, job.id, kind).await.into(),
+        None => channel.send(job.id, kind).await.into(),
+    }
 }
 
 #[cfg(test)]

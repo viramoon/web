@@ -257,7 +257,7 @@ async fn receive(request: RequestBuilder) -> Result<Option<ProbeResponse>, Marke
     match response.status() {
         StatusCode::OK => {}
         StatusCode::ACCEPTED => return Ok(None),
-        StatusCode::NOT_FOUND | StatusCode::NOT_IMPLEMENTED => {
+        StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED => {
             return Err(MarketResult::AdapterUnavailable);
         }
         StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => {

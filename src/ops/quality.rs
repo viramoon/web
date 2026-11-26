@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::{cmp::Reverse, collections::HashSet};
 use utoipa::{IntoParams, ToSchema};
 
-const QUALITY_MAX_BYTES: u64 = 1024 * 1024;
-const MAX_STREAMS: usize = 64;
+pub(super) const QUALITY_MAX_BYTES: u64 = 1024 * 1024;
+pub(super) const MAX_STREAMS: usize = 64;
 
 #[derive(Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
@@ -65,7 +65,7 @@ struct QualityCoverage {
 
 #[derive(Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-struct MarketWatermarks {
+pub(super) struct MarketWatermarks {
     source_latest: Option<SourceObservation>,
     local_durable: ExactCount,
     projected: ExactCount,
@@ -154,9 +154,9 @@ fn timestamp(nanos: ExactCount) -> DateTime<Utc> {
     .expect("u64 Unix nanoseconds fit in UTC timestamp")
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct ReportFile {
+pub(super) struct ReportFile {
     channel: String,
     instrument_id: String,
     from_ts: ExactCount,
@@ -166,25 +166,25 @@ struct ReportFile {
     count: Option<ExactCount>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct StreamFile {
-    source: String,
-    product: String,
-    license: String,
-    watermarks: Option<MarketWatermarks>,
-    reports: Vec<ReportFile>,
+pub(super) struct StreamFile {
+    pub(super) source: String,
+    pub(super) product: String,
+    pub(super) license: String,
+    pub(super) watermarks: Option<MarketWatermarks>,
+    pub(super) reports: Vec<ReportFile>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct QualityFile {
-    version: u8,
-    observed_at: DateTime<Utc>,
-    streams: Vec<StreamFile>,
+pub(super) struct QualityFile {
+    pub(super) version: u8,
+    pub(super) observed_at: DateTime<Utc>,
+    pub(super) streams: Vec<StreamFile>,
 }
 
-fn token(value: &str) -> bool {
+pub(super) fn token(value: &str) -> bool {
     let lower_alphanumeric = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
     let mut bytes = value.bytes();
     value.len() <= 64
@@ -205,7 +205,7 @@ fn instrument_id(value: &str) -> bool {
 }
 
 impl QualityFile {
-    fn valid(&self) -> bool {
+    pub(super) fn valid(&self) -> bool {
         let mut keys = HashSet::new();
         self.version == 1
             && self.streams.len() <= MAX_STREAMS
@@ -305,7 +305,8 @@ impl QualityGapsPage {
 #[utoipa::path(get, path = "/api/v1/quality/gaps", params(GapsQuery),
     security(("adminBearer" = []), ("adminSession" = [])),
     responses((status = 200, body = QualityGapsPage), (status = 401, body = ErrorBody),
-        (status = 403, body = ErrorBody), (status = 422, body = ErrorBody)))]
+        (status = 403, body = ErrorBody), (status = 422, body = ErrorBody),
+        (status = 504, description = "Request deadline exceeded (request_timeout)", body = ErrorBody)))]
 pub(crate) async fn quality_gaps(
     State(state): State<AppState>,
     query: Result<Query<GapsQuery>, QueryRejection>,

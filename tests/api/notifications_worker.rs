@@ -285,28 +285,32 @@ async fn versioned_smtp_test_uses_candidate_and_rollback_controls_delivery_profi
             self.primary.send(id, mail).await
         }
 
-        async fn test_profile(&self, id: Uuid, profile: SmtpProfile) -> DeliveryOutcome {
-            match profile {
-                SmtpProfile::Primary => self.primary.test(id).await,
-                SmtpProfile::Secondary => self.secondary.test(id).await,
+        async fn capture_profile(&self, profile: SmtpProfile) -> Option<Uuid> {
+            Some(Uuid::from_u128(match profile {
+                SmtpProfile::Primary => 1,
+                SmtpProfile::Secondary => 2,
+            }))
+        }
+
+        async fn test_snapshot(&self, snapshot: Uuid, id: Uuid) -> DeliveryOutcome {
+            match snapshot.as_u128() {
+                1 => self.primary.test(id).await,
+                2 => self.secondary.test(id).await,
+                _ => DeliveryOutcome::ConfigurationError,
             }
         }
 
-        async fn send_profile(
-            &self,
-            id: Uuid,
-            mail: MailKind,
-            profile: SmtpProfile,
-        ) -> DeliveryOutcome {
-            match profile {
-                SmtpProfile::Primary => self.primary.send(id, mail).await,
-                SmtpProfile::Secondary => self.secondary.send(id, mail).await,
+        async fn send_snapshot(&self, snapshot: Uuid, id: Uuid, mail: MailKind) -> DeliveryOutcome {
+            match snapshot.as_u128() {
+                1 => self.primary.send(id, mail).await,
+                2 => self.secondary.send(id, mail).await,
+                _ => DeliveryOutcome::ConfigurationError,
             }
         }
     }
 
     let fixture = Fixture::create().await;
-    let start = Utc::now();
+    let start = Utc::now() + TimeDelta::minutes(2);
     let admin = RuleEditor::new(&fixture.db, start);
     let mail = ProfileMail {
         primary: FakeSmtp::default(),
@@ -368,6 +372,7 @@ async fn versioned_smtp_test_uses_candidate_and_rollback_controls_delivery_profi
     )
     .await;
     assert_eq!(pending["status"], "pending");
+    assert!(pending.get("smtp_snapshot_id").is_none());
     let link = headers["location"].to_str().unwrap();
     assert!(link.starts_with(&tests));
     assert!(fixture.next(&mail, later(start, 1)).await);
@@ -445,6 +450,7 @@ async fn versioned_smtp_test_uses_candidate_and_rollback_controls_delivery_profi
     )
     .await;
     assert_eq!(active["active"]["settings"]["profile"], "secondary");
+    assert!(active["active"].get("smtp_snapshot_id").is_none());
     assert_eq!(active["rollback_versions"], json!([1]));
 
     let rule = fixture.rule(true).await;

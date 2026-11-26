@@ -48,8 +48,7 @@ async fn main() -> Result<(), ConfigError> {
         _ = async { tokio::select! { _ = term.recv() => {}, _ = int.recv() => {} } } => {
             shutdown.send_replace(true);
             tracing::info!("draining notifier");
-            let drain = channel.timeout() + Duration::from_secs(10);
-            match time::timeout(drain, &mut running).await {
+            match time::timeout(channel.drain_timeout(), &mut running).await {
                 Ok(result) => result?,
                 Err(_) => tracing::warn!("notifier drain deadline reached"),
             }

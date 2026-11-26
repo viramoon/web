@@ -199,7 +199,8 @@ async fn postgres_integration_migration_upgrades_existing_schema() {
             20261126000000,
             20261127000000,
             20261127010000,
-            20261127020000
+            20261127020000,
+            20261127030000
         ]
     );
     let components: Vec<(String, i32)> =

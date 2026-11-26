@@ -292,14 +292,21 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         (&Method::POST, notification_http::CHANNEL_TESTS) => {
             Some("Test outcome unknown; look up the original Idempotency-Key before retrying")
         }
+        (&Method::POST, "/api/v1/integrations") => {
+            Some("Creation outcome unknown. Read the integrations list before retrying")
+        }
+        (&Method::PATCH, "/api/v1/integrations/{id}")
+        | (&Method::PUT | &Method::DELETE, "/api/v1/integrations/{id}/credential") => {
+            Some("Update outcome unknown. Read the integration revision before retrying")
+        }
         (&Method::POST, "/api/v1/integrations/{id}/tests") => Some(
-            "Test outcome unknown; read the integration revision and latest test before retrying",
+            "Test outcome unknown. Read the integration revision and latest test before retrying",
         ),
         (
             &Method::POST,
             "/api/v1/integrations/{id}/activate" | "/api/v1/integrations/{id}/rollback",
         ) => Some(
-            "Update outcome unknown; read the integration revision and active version before retrying",
+            "Update outcome unknown. Read the integration revision and active version before retrying",
         ),
         _ => None,
     };

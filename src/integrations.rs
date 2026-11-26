@@ -517,7 +517,8 @@ pub(crate) async fn catalog(State(s): State<AppState>) -> impl IntoResponse {
 #[utoipa::path(get, path="/api/v1/integrations",
     security(("adminBearer" = []), ("adminSession" = [])),
     responses((status=200,body=[Integration]),(status=401,body=ErrorBody),
-        (status=403,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=403,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout",body=ErrorBody)))]
 pub(crate) async fn list(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(store::list(&s.db).await?))
 }
@@ -527,7 +528,8 @@ pub(crate) async fn list(State(s): State<AppState>) -> Result<impl IntoResponse,
     security(("adminBearer" = []), ("adminSession" = [])),
     responses((status=200,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
-        (status=422,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=422,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout",body=ErrorBody)))]
 pub(crate) async fn get_integration(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -542,7 +544,8 @@ pub(crate) async fn get_integration(
         ("X-CSRF-Token" = Option<String>, Header, description="Required with the session cookie")),
     responses((status=201,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=413,body=ErrorBody),
-        (status=422,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=422,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integrations list before retrying",body=ErrorBody)))]
 pub(crate) async fn create(
     State(s): State<AppState>,
     body: Result<Json<Create>, JsonRejection>,
@@ -565,7 +568,8 @@ pub(crate) async fn create(
     responses((status=200,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
         (status=409,body=ErrorBody),(status=413,body=ErrorBody),(status=422,body=ErrorBody),
-        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision before retrying",body=ErrorBody)))]
 pub(crate) async fn update(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -594,7 +598,8 @@ pub(crate) async fn update(
     responses((status=200,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
         (status=409,body=ErrorBody),(status=413,body=ErrorBody),(status=422,body=ErrorBody),
-        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision before retrying",body=ErrorBody)))]
 pub(crate) async fn put_credential(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -643,7 +648,8 @@ pub(crate) async fn put_credential(
     responses((status=200,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
         (status=409,body=ErrorBody),(status=413,body=ErrorBody),(status=422,body=ErrorBody),
-        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision before retrying",body=ErrorBody)))]
 pub(crate) async fn delete_credential(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -667,7 +673,8 @@ pub(crate) async fn delete_credential(
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),
         (status=404,body=ErrorBody),(status=409,body=ErrorBody),(status=413,body=ErrorBody),
         (status=422,body=ErrorBody),(status=428,body=ErrorBody),(status=429,body=ErrorBody),
-        (status=503,body=ErrorBody)))]
+        (status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision and latest test before retrying",body=ErrorBody)))]
 pub(crate) async fn start_test(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -712,7 +719,8 @@ pub(crate) async fn start_test(
     security(("adminBearer" = []), ("adminSession" = [])),
     params(("id" = String, Path, format = "uuid")),
     responses((status=200,body=TestView),(status=401,body=ErrorBody),(status=403,body=ErrorBody),
-        (status=404,body=ErrorBody),(status=422,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=404,body=ErrorBody),(status=422,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout",body=ErrorBody)))]
 pub(crate) async fn get_test(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -724,7 +732,8 @@ pub(crate) async fn get_test(
     params(("id" = String, Path, format = "uuid"), ("testId" = String, Path, format = "uuid")),
     security(("adminBearer" = []), ("adminSession" = [])),
     responses((status=200,body=TestView),(status=401,body=ErrorBody),(status=403,body=ErrorBody),
-        (status=404,body=ErrorBody),(status=422,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=404,body=ErrorBody),(status=422,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout",body=ErrorBody)))]
 pub(crate) async fn get_scoped_test(
     State(s): State<AppState>,
     path: Result<Path<(String, String)>, PathRejection>,
@@ -753,7 +762,8 @@ pub(crate) struct Activate {
     responses((status=200,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
         (status=409,body=ErrorBody),(status=413,body=ErrorBody),(status=422,body=ErrorBody),
-        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision and active version before retrying",body=ErrorBody)))]
 pub(crate) async fn activate(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -789,7 +799,8 @@ pub(crate) struct Rollback {
     responses((status=200,body=Integration,headers(("ETag" = String))),
         (status=401,body=ErrorBody),(status=403,body=ErrorBody),(status=404,body=ErrorBody),
         (status=409,body=ErrorBody),(status=413,body=ErrorBody),(status=422,body=ErrorBody),
-        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody)))]
+        (status=428,body=ErrorBody),(status=429,body=ErrorBody),(status=503,body=ErrorBody),
+        (status=504,description="request_timeout. Read the integration revision and active version before retrying",body=ErrorBody)))]
 pub(crate) async fn rollback(
     State(s): State<AppState>,
     path: Result<Path<String>, PathRejection>,

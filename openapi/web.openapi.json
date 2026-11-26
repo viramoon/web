@@ -1074,6 +1074,16 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "Request deadline exceeded (request_timeout)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1163,6 +1173,16 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "request_timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1217,6 +1237,16 @@
           },
           "503": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout",
             "content": {
               "application/json": {
                 "schema": {
@@ -1346,6 +1376,16 @@
           },
           "503": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout. Read the integrations list before retrying",
             "content": {
               "application/json": {
                 "schema": {
@@ -1493,6 +1533,16 @@
           },
           "503": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout",
             "content": {
               "application/json": {
                 "schema": {
@@ -1677,6 +1727,16 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision before retrying",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1846,6 +1906,16 @@
           },
           "503": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision and active version before retrying",
             "content": {
               "application/json": {
                 "schema": {
@@ -2032,6 +2102,16 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision before retrying",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2192,6 +2272,16 @@
           },
           "503": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision before retrying",
             "content": {
               "application/json": {
                 "schema": {
@@ -2375,6 +2465,16 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision and active version before retrying",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2544,6 +2644,16 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "request_timeout. Read the integration revision and latest test before retrying",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2635,6 +2745,16 @@
           },
           "503": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "request_timeout",
             "content": {
               "application/json": {
                 "schema": {
@@ -3469,6 +3589,16 @@
           },
           "422": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Request deadline exceeded (request_timeout)",
             "content": {
               "application/json": {
                 "schema": {

@@ -35,6 +35,11 @@ finance_http:
   stable: {connect_timeout_ms: 1000, request_timeout_ms: 2000, backoff_ms: 100, circuit_failure_threshold: 5, circuit_open_ms: 5000}
   max_read_retries: 2
   write_retries: 0
+maintenance:
+  publish_quality:
+    command: web publish-quality INPUTS
+    output_env: WEB_QUALITY_STATUS_FILE
+    instructions: docs/quality-publishing.md
 processes:
   - name: web
     command: web serve
@@ -59,6 +64,7 @@ processes:
       WEB_SMTP_CREDENTIAL_FILE: 可选，仅引用由本机部署提供的 0600 秘密文件绝对路径
       WEB_SMTP_TIMEOUT_SECONDS: 10
       WEB_SMTP_SECONDARY_HOST: 可选，备选 SMTP 槽位。其他 WEB_SMTP_SECONDARY_* 参数与主槽位同名
+      WEB_SMTP_SNAPSHOT_DIR: W4 SMTP 必需，notifier 独占的 0700 持久绝对目录，位于静态资源树外
       WEB_NOTIFIER_QUIET_TIME_ZONE: Asia/Shanghai
       WEB_NOTIFIER_QUIET_START: "23:00"
       WEB_NOTIFIER_QUIET_END: "08:00"
@@ -71,7 +77,7 @@ processes:
       field: notifications.state
     graceful_stop:
       signals: [SIGTERM, SIGINT]
-      deadline_ms: 75000
+      deadline_ms: 85000
 static:
   hosted_by: web
   root_from: paths.static_root

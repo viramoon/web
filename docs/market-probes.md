@@ -1,6 +1,6 @@
 # 行情集成的本机测试契约
 
-Web 将候选 UUID、版本和标的交给 finance 的行情所有者，由该所有者完成只读观察。Web 通过部署配置的 `FINANCE_BASE_URL` 访问此接口，要求数字回环地址，客户端关闭代理、重定向和自动重试。已锁定的 finance 快照尚未提供这组路由。未接通时，连接测试返回 `adapter_unavailable`。启用和回滚记录 web 的活动版本，行情所有者应用该版本的接入点由后续 finance 契约提供。
+Web 将候选 UUID、版本和标的交给 finance 的行情所有者，由该所有者完成只读观察。部署通过数字回环地址 `FINANCE_BASE_URL` 配置适配连接。该客户端关闭代理、重定向和自动重试，探测期限独立于常规 finance 请求的熔断器。锁定的 finance 快照缺少这组路由，探测结果为 `adapter_unavailable`。Web 的启用和回滚记录活动版本。部署端的真实 paper 观察、各源验证及活动版本应用依赖 F10 后续批次。[finance #43](https://github.com/viramoon/finance/issues/43)
 
 | `connector` | `symbol` |
 | --- | --- |
@@ -43,4 +43,4 @@ HTTP 200 使用以下字段。选填字段可省略或返回 `null`。Web 对终
 
 `details.kind` 为 `crypto_market`。验证通过要求 `details.data` 的 `metadata`、`snapshot` 均为 `true`，`price_precision` 为 0 至 38 的整数小数位数，`event_at` 为新事件的 RFC 3339 时间。该事件须在本次探测期间出现，使用与观察时间相同的时钟偏差和年龄上限。价格和数量无需传入此接口。
 
-[本机测试 fixture](../src/integrations/market_probe/tests.rs) 以测试时钟、固定计数以及生成的 UUID 构造响应。paper 会话和已启用的公开行情源在部署端完成独立观察。
+本机测试 fixture 以测试时钟、固定计数以及生成的 UUID 构造响应。HTTP 集成测试发起候选探测，核对 PostgreSQL 持久化与查询读回的同一份证据，然后显式启用。paper 会话和已启用的公开行情源在部署端完成独立观察。[本机行情 fixture](../src/integrations/market_probe/tests.rs) · [HTTP 集成测试](../tests/api/integrations.rs)

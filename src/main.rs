@@ -1,5 +1,9 @@
 use chrono::Utc;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     net::TcpListener,
     signal::unix::{SignalKind, signal},
@@ -22,9 +26,12 @@ async fn main() -> Result<(), ConfigError> {
         println!("{}", openapi().to_pretty_json()?);
         return Ok(());
     }
-    if !args.is_empty() && args != ["serve"] && args != ["migrate"] {
-        return Err("usage: web [serve|migrate|export-openapi]".into());
-    }
+    let publish_inputs = match args.as_slice() {
+        [command, inputs] if command == "publish-quality" => Some(Path::new(inputs)),
+        [] => None,
+        [command] if matches!(command.as_str(), "serve" | "migrate") => None,
+        _ => return Err("usage: web [serve|migrate|export-openapi|publish-quality INPUTS]".into()),
+    };
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -36,6 +43,9 @@ async fn main() -> Result<(), ConfigError> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("config"));
     let s = Settings::load(&dir, |name| std::env::var(name).ok())?;
+    if let Some(inputs) = publish_inputs {
+        return s.ops.publish_quality(inputs, &s.paths.static_root).await;
+    }
     let db = Database::new(
         &s.database.url,
         Duration::from_millis(s.database.acquire_timeout_ms),

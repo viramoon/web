@@ -159,6 +159,7 @@ async fn fetch_integrations(
                     LEFT JOIN app.integration_credentials old ON old.id = history.credential_id
                     WHERE history.integration_id = i.id AND history.state = 'disabled'
                       AND history.activated_at IS NOT NULL AND old.revoked_at IS NULL
+                      AND (i.connector <> 'smtp' OR history.smtp_snapshot_id IS NOT NULL)
                     ORDER BY history.version DESC
                 ) AS rollback_versions
          FROM app.integration_configs i
@@ -346,7 +347,7 @@ pub(crate) async fn change(
         }
     };
     let version = current.latest_version + 1;
-    stage_version(&mut tx, id, version, settings, credential, state).await?;
+    stage_version(&mut tx, id, version, settings, credential, state, None).await?;
     audit(&mut tx, id, version, action, None).await?;
     let result = fetch_integration(&mut tx, id).await?;
     tx.commit().await?;
@@ -385,6 +386,7 @@ pub(crate) async fn set_credential(
         current.settings,
         Some(credential.reference),
         VersionState::Draft,
+        None,
     )
     .await?;
     audit(&mut tx, id, version, "credential_staged", None).await?;
@@ -416,6 +418,7 @@ async fn stage_version(
     settings: Value,
     credential: Option<Uuid>,
     state: VersionState,
+    smtp_snapshot: Option<Uuid>,
 ) -> Result<(), Error> {
     supersede_pending(connection, id).await?;
     sqlx::query(
@@ -427,14 +430,16 @@ async fn stage_version(
     .execute(&mut *connection)
     .await?;
     sqlx::query(
-        "INSERT INTO app.integration_versions (integration_id, version, settings, credential_id, state, activated_at)
-         VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 = 'active' THEN now() END)",
+        "INSERT INTO app.integration_versions
+            (integration_id, version, settings, credential_id, state, activated_at, smtp_snapshot_id)
+         VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 = 'active' THEN now() END, $6)",
     )
     .bind(id)
     .bind(version)
     .bind(settings)
     .bind(credential)
     .bind(state)
+    .bind(smtp_snapshot)
     .execute(&mut *connection)
     .await?;
     sqlx::query(
@@ -644,26 +649,32 @@ pub(crate) async fn activate(
     if current.state != VersionState::Candidate {
         return Err(Error::Conflict);
     }
-    let latest_test: Option<(Uuid, TestStatus)> = sqlx::query_as(
-        "SELECT t.id, t.status
+    let (latest_id, status, snapshot): (Uuid, TestStatus, Option<Uuid>) = sqlx::query_as(
+        "SELECT t.id, t.status, job.smtp_snapshot_id
          FROM app.integration_audit a JOIN app.integration_tests t ON t.id = a.test_id
+         LEFT JOIN app.notification_outbox job ON job.integration_test_id = t.id AND job.status = 'accepted'
          WHERE a.integration_id = $1 AND a.config_version = $2 AND a.action = 'test_started'
          ORDER BY a.sequence DESC LIMIT 1",
     )
     .bind(id)
     .bind(current.latest_version)
     .fetch_optional(&mut *tx)
-    .await?;
-    if latest_test != Some((test_id, TestStatus::Passed)) {
+    .await?
+    .ok_or(Error::Conflict)?;
+    if latest_id != test_id
+        || status != TestStatus::Passed
+        || (current.connector == "smtp" && snapshot.is_none())
+    {
         return Err(Error::Conflict);
     }
     retire_active(&mut tx, id, false).await?;
     sqlx::query(
-        "UPDATE app.integration_versions SET state = 'active', activated_at = now()
+        "UPDATE app.integration_versions SET state = 'active', activated_at = now(), smtp_snapshot_id = $3
          WHERE integration_id = $1 AND version = $2",
     )
     .bind(id)
     .bind(current.latest_version)
+    .bind(snapshot)
     .execute(&mut *tx)
     .await?;
     bump_revision(&mut tx, id).await?;
@@ -691,8 +702,8 @@ pub(crate) async fn rollback(
     let mut tx = connection.begin().await?;
     let current = lock(&mut tx, id, Some(revision)).await?;
     can_apply(&current.connector, binance_enabled)?;
-    let (settings, credential): (Value, Option<Uuid>) = sqlx::query_as(
-        "SELECT v.settings, v.credential_id
+    let (settings, credential, snapshot): (Value, Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT v.settings, v.credential_id, v.smtp_snapshot_id
          FROM app.integration_versions v LEFT JOIN app.integration_credentials c ON c.id = v.credential_id
          WHERE v.integration_id = $1 AND v.version = $2 AND v.state = 'disabled'
            AND v.activated_at IS NOT NULL AND c.revoked_at IS NULL",
@@ -702,6 +713,9 @@ pub(crate) async fn rollback(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::Conflict)?;
+    if current.connector == "smtp" && snapshot.is_none() {
+        return Err(Error::Conflict);
+    }
     let version = current.latest_version + 1;
     retire_active(&mut tx, id, false).await?;
     stage_version(
@@ -711,6 +725,7 @@ pub(crate) async fn rollback(
         settings,
         credential,
         VersionState::Active,
+        snapshot,
     )
     .await?;
     sqlx::query(

@@ -476,3 +476,182 @@ async fn postgres_rejects_untyped_integration_inputs_and_revokes_without_credent
     drop(server);
     pg.stop();
 }
+
+#[tokio::test]
+async fn postgres_market_http_persists_candidate_evidence_and_activates_only_a_pass() {
+    use axum::{Json, Router, extract::Path as RoutePath, routing::post};
+    use chrono::Utc;
+    use tokio::net::TcpListener;
+
+    // This deterministic fixture uses fixed observations and the test clock.
+    // The loopback producer generates no subscriptions or broker requests.
+    let producer = Router::new().route(
+        "/integrations/{id}/tests",
+        post(
+            |RoutePath(id): RoutePath<String>, Json(request): Json<Value>| async move {
+                assert_eq!(request["connector"], "ibkr_paper");
+                let (status, observation) = match request["symbol"].as_str().unwrap() {
+                    "SPY" => (
+                        "verified",
+                        json!({
+                            "origin": "live",
+                            "observed_at": Utc::now(),
+                            "details": {"kind": "ibkr_paper", "data": {
+                                "paper_endpoint": true,
+                                "paper_account": true,
+                                "read_only": true,
+                                "unique_market_data_client": true,
+                                "stock_l1_market_data_type": 1,
+                                "option_l1_market_data_type": 1,
+                                "option_contract_id": 42,
+                                "option_open_interest": true,
+                                "option_greeks": true,
+                                "nasdaq_depth_callback": true,
+                                "remaining_l1_lines": 30,
+                                "remaining_depth_lines": 1
+                            }}
+                        }),
+                    ),
+                    "QQQ" => ("no_permission", Value::Null),
+                    _ => panic!("unexpected synthetic selector"),
+                };
+                Json(json!({
+                    "integration_id": id,
+                    "test_id": request["test_id"],
+                    "config_version": request["config_version"],
+                    "connector": request["connector"],
+                    "symbol": request["symbol"],
+                    "status": status,
+                    "observation": observation
+                }))
+            },
+        ),
+    );
+    let pg = Cluster::create();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let finance_base = format!("http://{}", listener.local_addr().unwrap());
+    let producer_task = tokio::spawn(async move { axum::serve(listener, producer).await.unwrap() });
+    let (public, port, base, client) = http_fixture();
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let fixture = CredentialFixture::new(temp.path());
+    let command = || {
+        let mut command = fixture.command(&pg, public.path(), port);
+        command.env("FINANCE_BASE_URL", &finance_base);
+        command
+    };
+    checked(command().arg("migrate"));
+    let server = Server(
+        command()
+            .arg("serve")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    expect_http(&client, &format!("{base}/healthz/live"), 200).await;
+    let bearer = &fixture.bearer;
+    let configs = format!("{base}/api/v1/integrations");
+    let (created_headers, created) = response(
+        client.post(configs).bearer_auth(bearer).json(&json!({
+            "connector": "ibkr_paper", "settings": {"symbol": "SPY"}
+        })),
+        StatusCode::CREATED,
+        bearer,
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let config = format!("{base}/api/v1/integrations/{id}");
+    let tests = format!("{config}/tests");
+    let activate = format!("{config}/activate");
+    let (test_headers, passed) = response(
+        client
+            .post(&tests)
+            .bearer_auth(bearer)
+            .header(IF_MATCH, &created_headers[ETAG]),
+        StatusCode::ACCEPTED,
+        bearer,
+    )
+    .await;
+    assert_eq!(passed["integration_id"], id);
+    assert_eq!(passed["config_version"], 1);
+    assert_eq!(passed["status"], "passed");
+    assert_eq!(passed["evidence"]["kind"], "market");
+    let evidence = &passed["evidence"]["details"];
+    assert_eq!(evidence["result"], "verified");
+    assert_eq!(
+        evidence["observation"]["details"]["data"]["option_contract_id"],
+        42
+    );
+    let lookup = format!("{base}{}", test_headers["location"].to_str().unwrap());
+    let (_, retrieved) = response(
+        client.get(lookup).bearer_auth(bearer),
+        StatusCode::OK,
+        bearer,
+    )
+    .await;
+    assert_eq!(retrieved, passed);
+    let rows: Value = serde_json::from_str(&persisted_integrations(&pg)).unwrap();
+    assert_eq!(rows["tests"][0]["evidence"], retrieved["evidence"]);
+    let (candidate_headers, candidate) = response(
+        client.get(&config).bearer_auth(bearer),
+        StatusCode::OK,
+        bearer,
+    )
+    .await;
+    assert!(candidate["active"].is_null());
+
+    let (active_headers, active) = response(
+        client
+            .post(&activate)
+            .bearer_auth(bearer)
+            .header(IF_MATCH, &candidate_headers[ETAG])
+            .json(&json!({"test_id": passed["id"]})),
+        StatusCode::OK,
+        bearer,
+    )
+    .await;
+    assert_eq!(active["active"]["version"], 1);
+    let (staged_headers, _) = response(
+        client
+            .patch(&config)
+            .bearer_auth(bearer)
+            .header(IF_MATCH, &active_headers[ETAG])
+            .json(&json!({"action": "configure", "settings": {"symbol": "QQQ"}})),
+        StatusCode::OK,
+        bearer,
+    )
+    .await;
+    let (_, refused) = response(
+        client
+            .post(&tests)
+            .bearer_auth(bearer)
+            .header(IF_MATCH, &staged_headers[ETAG]),
+        StatusCode::ACCEPTED,
+        bearer,
+    )
+    .await;
+    assert_eq!(refused["config_version"], 2);
+    assert_eq!(refused["status"], "failed");
+    assert_eq!(refused["evidence"]["details"]["result"], "no_permission");
+    let (retained_headers, retained) = response(
+        client.get(config).bearer_auth(bearer),
+        StatusCode::OK,
+        bearer,
+    )
+    .await;
+    assert_eq!(retained["active"]["version"], 1);
+    let (_, conflict) = response(
+        client
+            .post(activate)
+            .bearer_auth(bearer)
+            .header(IF_MATCH, &retained_headers[ETAG])
+            .json(&json!({"test_id": refused["id"]})),
+        StatusCode::CONFLICT,
+        bearer,
+    )
+    .await;
+    assert_eq!(conflict["error"]["code"], "integration_conflict");
+    drop(server);
+    producer_task.abort();
+    let _ = producer_task.await;
+    pg.stop();
+}

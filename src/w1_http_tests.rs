@@ -25,6 +25,10 @@ const CSRF_HEADER: &str = "x-csrf-token";
 const MAX_BODY_BYTES: usize = 512;
 
 fn test_app() -> (Router, HeaderValue, tempfile::TempDir) {
+    app_with_deadline(None)
+}
+
+fn app_with_deadline(deadline_ms: Option<u64>) -> (Router, HeaderValue, tempfile::TempDir) {
     let directory = tempfile::tempdir_in("/tmp").unwrap();
     let token_path = directory.path().join("web.env");
     let token = Uuid::new_v4().to_string();
@@ -44,6 +48,9 @@ fn test_app() -> (Router, HeaderValue, tempfile::TempDir) {
     })
     .unwrap();
     config.server.max_body_bytes = MAX_BODY_BYTES;
+    if let Some(deadline_ms) = deadline_ms {
+        config.server.request_timeout_ms = deadline_ms;
+    }
     config.paths.static_root = directory.path().join("static");
     std::fs::create_dir(&config.paths.static_root).unwrap();
     std::fs::write(
@@ -72,6 +79,11 @@ fn test_app() -> (Router, HeaderValue, tempfile::TempDir) {
         Duration::from_secs(1),
     )
     .unwrap();
+    let db = if deadline_ms.is_some() {
+        db.with_stalled_connections()
+    } else {
+        db
+    };
     let app = router(AppState {
         db,
         finance: Finance::new(&config.finance).unwrap(),
@@ -502,6 +514,49 @@ async fn versioned_integration_routes_require_admin_origin_and_revision() {
         .await;
         assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
         assert_no_store(&response);
+    }
+}
+
+#[tokio::test]
+async fn integration_write_timeouts_match_the_exported_contract() {
+    let (app, admin, _fixture) = app_with_deadline(Some(5));
+    let spec = serde_json::to_value(crate::openapi()).unwrap();
+    let id = Uuid::new_v4();
+    let test_id = Uuid::new_v4();
+    for (action, body, hint) in [
+        ("tests", String::new(), "latest test"),
+        (
+            "activate",
+            json!({"test_id": test_id.to_string()}).to_string(),
+            "active version",
+        ),
+        (
+            "rollback",
+            json!({"version": 1}).to_string(),
+            "active version",
+        ),
+    ] {
+        let response = send(
+            &app,
+            Request::post(format!("{INTEGRATIONS}/{id}/{action}"))
+                .header(header::AUTHORIZATION, admin.clone())
+                .header(header::IF_MATCH, "\"1\"")
+                .header(header::CONTENT_TYPE, "application/json"),
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert_no_store(&response);
+        let problem = response_json(response).await;
+        assert_eq!(problem["error"]["code"], "request_timeout");
+        assert!(problem["error"]["message"].as_str().unwrap().contains(hint));
+        let declared =
+            &spec["paths"][format!("{INTEGRATIONS}/{{id}}/{action}")]["post"]["responses"]["504"];
+        assert!(declared["description"].as_str().unwrap().contains(hint));
+        assert_eq!(
+            declared["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/ErrorBody"
+        );
     }
 }
 

@@ -1,4 +1,5 @@
 mod backup;
+mod publish;
 mod quality;
 
 pub(crate) use backup::{__path_backup_status, backup_status};

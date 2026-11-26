@@ -90,6 +90,92 @@ fn invalid_secondary_slot_leaves_the_primary_channel_usable() {
     assert!(channels.channel(SmtpProfile::Secondary).is_none());
 }
 
+#[tokio::test]
+async fn encrypted_smtp_snapshot_keeps_original_transport_and_credentials_after_restart() {
+    let root = tempfile::tempdir_in("/tmp").unwrap();
+    let snapshots = root.path().join("captures");
+    fs::create_dir(&snapshots).unwrap();
+    fs::set_permissions(&snapshots, fs::Permissions::from_mode(0o700)).unwrap();
+    let credential = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+    let old_secret = "test-only-original-password";
+    let old_user = "test-only-original-user";
+    fs::write(
+        credential.path(),
+        serde_json::json!({"username":old_user,"password":old_secret}).to_string(),
+    )
+    .unwrap();
+    let capture = |key: &str| match key {
+        "WEB_SMTP_SNAPSHOT_DIR" => Some(snapshots.to_str().unwrap().into()),
+        "WEB_SMTP_SECONDARY_HOST" => Some("old-secondary.example.invalid".into()),
+        "WEB_SMTP_SECONDARY_PORT" => Some("1587".into()),
+        "WEB_SMTP_SECONDARY_TLS" => Some("starttls".into()),
+        "WEB_SMTP_SECONDARY_FROM" => Some("old-from@example.invalid".into()),
+        "WEB_SMTP_SECONDARY_TO" => Some("old-to@example.invalid".into()),
+        "WEB_SMTP_SECONDARY_CREDENTIAL_FILE" => Some(credential.path().to_str().unwrap().into()),
+        "WEB_SMTP_SECONDARY_TIMEOUT_SECONDS" => Some("23".into()),
+        _ => configured(key),
+    };
+    let first = EmailChannels::from_environment(capture).unwrap();
+    let binding = first.capture_profile(SmtpProfile::Secondary).await.unwrap();
+    drop(first);
+    let encrypted_path = snapshots.join(format!("{binding}.smtp"));
+    let encrypted = fs::read(&encrypted_path).unwrap();
+    for value in [
+        old_secret,
+        old_user,
+        "old-secondary.example.invalid",
+        "old-to@example.invalid",
+    ] {
+        assert!(
+            !encrypted
+                .windows(value.len())
+                .any(|bytes| bytes == value.as_bytes())
+        );
+    }
+    for path in [&encrypted_path, &snapshots.join("snapshot.key")] {
+        assert_eq!(fs::metadata(path).unwrap().mode() & 0o7777, 0o600);
+    }
+    fs::write(
+        credential.path(),
+        br#"{"username":"replacement-user","password":"replacement-password"}"#,
+    )
+    .unwrap();
+
+    for primary in [None, Some("broken/relay".to_owned())] {
+        let restarted = EmailChannels::from_environment(|key| match key {
+            "WEB_SMTP_HOST" => primary.clone(),
+            "WEB_SMTP_FROM" | "WEB_SMTP_TO" => None,
+            "WEB_PUBLIC_ORIGIN" => Some("https://other.example.invalid".into()),
+            "WEB_SMTP_SECONDARY_HOST" => Some("replacement.example.invalid".into()),
+            _ => capture(key),
+        })
+        .unwrap();
+        assert!(restarted.channel(SmtpProfile::Primary).is_none());
+        restarted.validate().unwrap();
+        let current = restarted
+            .capture_profile(SmtpProfile::Secondary)
+            .await
+            .unwrap();
+        assert_ne!(current, binding);
+        let exact = restarted.open_snapshot(binding).await.unwrap();
+        assert_eq!(exact.relay, "smtp://old-secondary.example.invalid:1587");
+        assert_eq!(exact.from, "old-from@example.invalid");
+        assert_eq!(exact.to, "old-to@example.invalid");
+        assert_eq!(
+            exact.alerts_url.as_deref(),
+            Some("https://terminal.example.invalid/alerts")
+        );
+        assert_eq!(exact.transfer_timeout, Duration::from_secs(23));
+        let auth = exact.credentials.unwrap();
+        assert!(auth.username.as_str() == old_user && auth.password.as_str() == old_secret);
+        fs::copy(&encrypted_path, snapshots.join(format!("{current}.smtp"))).unwrap();
+        assert!(restarted.open_snapshot(current).await.is_none());
+    }
+    fs::remove_file(snapshots.join("snapshot.key")).unwrap();
+    assert!(EmailChannels::from_environment(capture).is_err());
+    assert!(!snapshots.join("snapshot.key").exists());
+}
+
 #[test]
 fn smtp_secret_requires_owned_regular_0600_file_and_strict_format() {
     let directory = tempfile::TempDir::new_in("/tmp").unwrap();

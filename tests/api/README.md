@@ -8,4 +8,6 @@
 
 W4 的 SMTP 集成测试使用进程内主、备槽位和临时 PostgreSQL 验证候选失败、显式启用与回滚后选用的投递槽位。行情探测使用固定标的、生成的 UUID、测试时钟和随机回环端口，验证只读证据、禁用 Binance 的零请求和超时后只查原测试。备份与采集缺口测试以合成的 T2b 状态及 F3 计数写入临时目录。文件适配和 rclone 合成往返命令见[本机探测文档](../../docs/local-integration-probes.md#本地验证)。
 
+默认 Rust 测试也执行 rclone 本机加密往返，使用 `/usr/bin/rclone` 或由 `WEB_TEST_RCLONE` 指定的绝对路径。完整行情 HTTP 测试核对落库与读回的候选证据，随后显式启用。质量发布测试运行 Web CLI，使用固定种子的 F3 替身发布合成快照，再通过进程内管理员请求验证查询。
+
 先 `cargo build --locked`，设置 WEB_BIN 为 web 可执行文件的绝对路径，DATABASE_URL 指向专用的可迁移测试数据库，然后从仓库根目录运行 `python3 tests/api/core_http.py`。脚本使用独立静态目录和可控的 finance HTTP 服务，覆盖状态与退化、请求 ID、深链接、缓存、错误路由及 SIGTERM 在途请求完成。测试不依赖真实交易账户。

@@ -45,10 +45,11 @@ pub(super) async fn probe(
         .map(|stats| (u128::from(stats.f_bavail) * u128::from(stats.f_frsize)).to_string());
     let scratch =
         private_tempdir(".web-drive-probe-", root).map_err(|_| LocalProbeResult::RemoteFailed)?;
-    round_trip(binary, scratch.path()).await?;
+    let result = round_trip(binary, scratch.path()).await;
     scratch
         .close()
         .map_err(|_| LocalProbeResult::CleanupFailed)?;
+    result?;
 
     Ok(LocalDrivePreview {
         mode: DriveMode::LocalTest,
