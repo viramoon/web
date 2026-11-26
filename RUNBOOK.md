@@ -111,7 +111,7 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 | --- | --- |
 | IBKR paper 和加密源 | 本机 finance 行情所有者通过数字回环 `FINANCE_BASE_URL` 提供只读观察。真实探测和活动配置应用依赖 F10 后续批次。当前锁定版本的探测结果为 `adapter_unavailable`。Binance Spot 和 USDⓈ-M 仅在部署显式设置 `WEB_BINANCE_PROBES_ENABLED=true` 后发请求。IBKR 由 vira 按券商流程完成 paper 登录与 2FA。见[本机行情契约](docs/market-probes.md) |
 | 策略文件、研究文件 | 由部署预置文件并绑定 finance 工具。策略返回编译计划摘要，研究文件在一次性本机目录预演导入。见[配置及文件格式](docs/local-integration-probes.md) |
-| SMTP | `primary` 读取 notifier 的 `WEB_SMTP_*`，`secondary` 读取 `WEB_SMTP_SECONDARY_*`。首个候选尝试保存并绑定加密配置快照。测试重试、活动投递及回滚使用该引用。候选投递失败只结算其测试证据。启用前沿用 W3 默认主槽，停用后保留队列 |
+| SMTP | `primary` 读取 notifier 的 `WEB_SMTP_*`，`secondary` 读取 `WEB_SMTP_SECONDARY_*`。首个候选尝试保存并绑定加密配置快照。候选重试沿用原快照，启用和回滚绑定对应版本的快照。普通投递每次领取时选用当前活动快照。候选失败只结算其测试证据。启用前沿用 W3 默认主槽，停用后保留队列 |
 | Google Drive | 默认关闭。配置 web 用户所有、权限 0700 的专用本机临时根后，以 rclone `crypt(local)` 校验合成对象的文件名加密、内容加密、读回及清理。见[本机测试配置](docs/local-integration-probes.md#google-drive-配置占位) |
 
 文件与测试根使用静态根以外的绝对路径。Google Drive 的账户、OAuth 和长期 crypt 密钥由 vira 另行配置于 fertile，Web 的 Drive 卡只验证本机加密链路。
@@ -139,6 +139,7 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 | `WEB_SMTP_CREDENTIAL_FILE` | 可选，部署提供的本机秘密文件绝对路径，运行用户所有、0600 普通文件、存放于静态目录之外。仅含 `username` 和 `password` 两个 JSON 字符串字段 |
 | `WEB_SMTP_TIMEOUT_SECONDS` | 单次 SMTP 超时，默认 10 秒，范围 1–60 |
 | `WEB_SMTP_SNAPSHOT_DIR` | W4 候选测试所需。由 notifier 运行用户独占的 0700 持久绝对目录，置于静态资源树之外 |
+| `WEB_STATIC_ROOT` | 配置快照目录时必填。由部署为 Web 和 notifier 传入同一个静态根绝对路径 |
 | `WEB_PUBLIC_ORIGIN` | 可选，与 web API 相同的规范 HTTPS origin。配置后邮件附私有 `/alerts` 绝对链接 |
 | `WEB_NOTIFIER_QUIET_TIME_ZONE` | 默认 `Asia/Shanghai`，从 PostgreSQL 的 IANA 时区表校验 |
 | `WEB_NOTIFIER_QUIET_START`、`WEB_NOTIFIER_QUIET_END` | 默认 `23:00`–`08:00`，当地时间 `HH:MM`。静默开始包含、结束排除，两值相同关闭静默 |
@@ -146,7 +147,9 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 | `WEB_NOTIFIER_NORMAL_HOURLY_LIMIT`、`WEB_NOTIFIER_URGENT_HOURLY_LIMIT` | 滚动一小时各自允许的投递尝试数，默认普通 6、紧急 2，各允许 1–1000 |
 | `WEB_NOTIFIER_URGENT_BYPASS_QUIET` | 默认 `true`，紧急投递可绕过静默，仍计入紧急额度 |
 
-更新 SMTP 部署槽位后重启 notifier，再创建并测试候选版本。现有活动版本仍使用原来的加密快照。目录中的 `snapshot.key` 和快照均为 0600 文件。备份与恢复时保留数据库、全部仍被引用的快照和对应密钥，限制密钥访问。升级时，早期 W4 未绑定快照的测试需要重新运行，未绑定的旧活动配置需在补测通过后重新启用才会投递。运维验证可由管理员通过 W4 集成测试，或用新 UUID 通过邮件渠道发起测试，按各接口返回的路径查询。测试邮件占用普通额度，可在静默窗口执行。[API](docs/api.md#告警规则与邮件通知)
+notifier 在打开或创建快照密钥前核对快照目录与部署给 Web 的静态根及其解析目标。静态根缺失、无效或不可用时，notifier 启动失败。快照路径必须逐级为实际目录，包含符号链接或父目录穿越的路径会被拒绝。静态根可使用部署的 `current` 链接。
+
+更新 SMTP 部署槽位后重启 notifier，再创建并测试候选版本。现有活动版本仍使用绑定的加密快照。目录中的 `snapshot.key` 和快照均为 0600 文件。备份与恢复时保留数据库、全部仍被引用的快照和对应密钥，限制密钥访问。升级时，早期 W4 未绑定快照的测试需要重新运行，未绑定的旧活动配置需在补测通过后重新启用才会投递。运维验证可由管理员通过 W4 集成测试，或用新 UUID 通过邮件渠道发起测试，按各接口返回的路径查询。测试邮件占用普通额度，可在静默窗口执行。[API](docs/api.md#告警规则与邮件通知)
 
 | 现象 | 诊断与恢复 |
 | --- | --- |

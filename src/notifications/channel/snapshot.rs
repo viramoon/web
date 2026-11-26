@@ -5,15 +5,15 @@ use openssl::{
     symm::{Cipher, decrypt_aead, encrypt_aead},
 };
 use rustix::{
-    fs::{AtFlags, Dir, Mode, OFlags, RenameFlags, openat, renameat_with, unlinkat},
+    fs::{AtFlags, Dir, Mode, OFlags, RenameFlags, open, openat, renameat_with, unlinkat},
     process::geteuid,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{File, OpenOptions, Permissions},
+    fs::{self, File, Permissions},
     io::{self, ErrorKind, Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
-    path::{Component, Path, PathBuf},
+    os::unix::fs::{MetadataExt, PermissionsExt},
+    path::{Component, Path},
     time::Duration,
 };
 use uuid::Uuid;
@@ -24,8 +24,14 @@ const HEADER: &[u8] = b"web.smtp.snapshot.v1\0";
 const NONCE_BYTES: usize = 12;
 const TAG_BYTES: usize = 16;
 const MAX_SNAPSHOT_BYTES: usize = 8192;
-const INVALID_DIRECTORY: ChannelConfigError =
-    ChannelConfigError("SMTP snapshot directory must be an owned absolute 0700 directory");
+const INVALID_DIRECTORY: ChannelConfigError = ChannelConfigError(
+    "SMTP snapshot directory must be an owned absolute 0700 directory with no symlinks or parent traversal",
+);
+const INVALID_STATIC_ROOT: ChannelConfigError = ChannelConfigError(
+    "WEB_STATIC_ROOT must name an existing absolute directory without parent traversal",
+);
+const OVERLAPPING_DIRECTORY: ChannelConfigError =
+    ChannelConfigError("SMTP snapshot and Web static directories must be disjoint");
 const INVALID_KEY: ChannelConfigError =
     ChannelConfigError("SMTP snapshot key is missing, invalid or unavailable");
 
@@ -56,16 +62,8 @@ struct Recorded {
 }
 
 impl SnapshotStore {
-    pub(super) fn open(path: &Path) -> Result<Self, ChannelConfigError> {
-        if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
-            return Err(INVALID_DIRECTORY);
-        }
-        let path: PathBuf = path.components().collect();
-        let directory = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-            .open(path)
-            .map_err(|_| INVALID_DIRECTORY)?;
+    pub(super) fn open(path: &Path, static_root: &Path) -> Result<Self, ChannelConfigError> {
+        let directory = open_private_directory(path, static_root)?;
         check_mode(&directory, true, 0o700).map_err(|_| INVALID_DIRECTORY)?;
         let key = load_key(&directory).map_err(|_| INVALID_KEY)?;
         Ok(Self { directory, key })
@@ -136,6 +134,56 @@ impl SnapshotStore {
             transfer_timeout: Duration::from_secs(record.transfer_seconds),
         })
     }
+}
+
+fn absolute_without_parent(path: &Path) -> bool {
+    path.is_absolute() && !path.components().any(|part| part == Component::ParentDir)
+}
+
+fn open_private_directory(path: &Path, static_root: &Path) -> Result<File, ChannelConfigError> {
+    if !absolute_without_parent(path) || path == Path::new("/") {
+        return Err(INVALID_DIRECTORY);
+    }
+    if !absolute_without_parent(static_root) {
+        return Err(INVALID_STATIC_ROOT);
+    }
+    // The deployment can point static/current at a release directory.
+    let resolved_static = static_root
+        .canonicalize()
+        .map_err(|_| INVALID_STATIC_ROOT)?;
+    let static_info = fs::metadata(&resolved_static).map_err(|_| INVALID_STATIC_ROOT)?;
+    if !static_info.is_dir() {
+        return Err(INVALID_STATIC_ROOT);
+    }
+    if [static_root, resolved_static.as_path()]
+        .into_iter()
+        .any(|root| path.starts_with(root) || root.starts_with(path))
+    {
+        return Err(OVERLAPPING_DIRECTORY);
+    }
+    // Resolve each component relative to the directory already opened. A
+    // symlink in a parent must not bypass the final directory's protection.
+    let flags = OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut directory =
+        File::from(open("/", flags | OFlags::PATH, Mode::empty()).map_err(|_| INVALID_DIRECTORY)?);
+    for part in path.components().skip(1) {
+        directory = File::from(
+            openat(
+                &directory,
+                part.as_os_str(),
+                flags | OFlags::PATH,
+                Mode::empty(),
+            )
+            .map_err(|_| INVALID_DIRECTORY)?,
+        );
+        let info = directory.metadata().map_err(|_| INVALID_DIRECTORY)?;
+        if info.dev() == static_info.dev() && info.ino() == static_info.ino() {
+            return Err(OVERLAPPING_DIRECTORY);
+        }
+    }
+    openat(&directory, ".", flags | OFlags::RDONLY, Mode::empty())
+        .map(File::from)
+        .map_err(|_| INVALID_DIRECTORY)
 }
 
 fn load_key(directory: &File) -> io::Result<Zeroizing<[u8; 32]>> {

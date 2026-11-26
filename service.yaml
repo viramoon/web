@@ -55,6 +55,7 @@ processes:
     requires: [PostgreSQL, "/usr/bin/curl (SMTP/SMTPS)", system_ca, linux_proc]
     environment:
       DATABASE_URL: 与 web 共用，由部署从受控配置注入
+      WEB_STATIC_ROOT: 启用 SMTP 快照时必填，与 web 使用同一静态根绝对路径
       WEB_PUBLIC_ORIGIN: 可选，邮件内使用的私有终端 HTTPS origin
       WEB_SMTP_HOST: 部署配置的固定邮件中继
       WEB_SMTP_PORT: 隐式 TLS 默认 465，STARTTLS 默认 587
@@ -64,7 +65,7 @@ processes:
       WEB_SMTP_CREDENTIAL_FILE: 可选，仅引用由本机部署提供的 0600 秘密文件绝对路径
       WEB_SMTP_TIMEOUT_SECONDS: 10
       WEB_SMTP_SECONDARY_HOST: 可选，备选 SMTP 槽位。其他 WEB_SMTP_SECONDARY_* 参数与主槽位同名
-      WEB_SMTP_SNAPSHOT_DIR: W4 SMTP 必需，notifier 独占的 0700 持久绝对目录，位于静态资源树外
+      WEB_SMTP_SNAPSHOT_DIR: W4 SMTP 必需，notifier 独占的 0700 持久绝对目录，逐级校验且位于静态资源树外
       WEB_NOTIFIER_QUIET_TIME_ZONE: Asia/Shanghai
       WEB_NOTIFIER_QUIET_START: "23:00"
       WEB_NOTIFIER_QUIET_END: "08:00"

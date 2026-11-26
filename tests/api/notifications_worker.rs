@@ -476,6 +476,63 @@ async fn versioned_smtp_test_uses_candidate_and_rollback_controls_delivery_profi
         .await;
     assert!(fixture.next(&mail, later(start, 5)).await);
     assert!(mail.primary.sent.lock().unwrap()[1].1.is_some());
+
+    // Move beyond the previous attempts' quota window, then retry the same alert after a rollback.
+    let sent_at = later(start, 3606);
+    let retry_at = later(sent_at, 30);
+    let outbox_id = fixture
+        .queue_event(second_rule, Uuid::new_v4(), "alert", sent_at)
+        .await;
+    mail.primary
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(DeliveryOutcome::Transient);
+    assert!(fixture.next(&mail, sent_at).await);
+    assert_eq!(
+        mail.primary.sent.lock().unwrap().last(),
+        Some(&(
+            outbox_id,
+            Some(MailKind::Alert {
+                condition: Condition::SourceUnavailable
+            })
+        ))
+    );
+    assert_eq!(
+        fixture.attempts(outbox_id).await,
+        [AttemptOutcome::Transient]
+    );
+
+    let (_, switched) = request(
+        Method::POST,
+        format!("{url}/rollback"),
+        restored["revision"].as_i64(),
+        Some(json!({"version": 2})),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(switched["active"]["settings"]["profile"], "secondary");
+    assert!(fixture.next(&mail, retry_at).await);
+    assert_eq!(
+        mail.secondary.sent.lock().unwrap().last(),
+        Some(&(
+            outbox_id,
+            Some(MailKind::Alert {
+                condition: Condition::SourceUnavailable
+            })
+        ))
+    );
+    assert_eq!(
+        fixture.attempts(outbox_id).await,
+        [AttemptOutcome::Transient, AttemptOutcome::Accepted]
+    );
+    let binding: Option<Uuid> =
+        sqlx::query_scalar("SELECT smtp_snapshot_id FROM app.notification_outbox WHERE id = $1")
+            .bind(outbox_id)
+            .fetch_one(&fixture.pool)
+            .await
+            .unwrap();
+    assert!(binding.is_none());
 }
 
 #[tokio::test]

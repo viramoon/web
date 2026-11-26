@@ -90,9 +90,84 @@ fn invalid_secondary_slot_leaves_the_primary_channel_usable() {
     assert!(channels.channel(SmtpProfile::Secondary).is_none());
 }
 
+fn channels_with_snapshots(
+    directory: &Path,
+    static_root: Option<&Path>,
+) -> Result<EmailChannels, ChannelConfigError> {
+    EmailChannels::from_environment(|key| match key {
+        "WEB_SMTP_SNAPSHOT_DIR" => Some(directory.to_str().unwrap().into()),
+        "WEB_STATIC_ROOT" => static_root.map(|path| path.to_str().unwrap().into()),
+        _ => configured(key),
+    })
+}
+
+#[test]
+fn smtp_snapshots_require_disjoint_configured_and_resolved_static_roots() {
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let public = temp.path().join("static-release");
+    let nested = public.join("private");
+    let separate = temp.path().join("snapshot");
+    for path in [&public, &nested, &separate] {
+        fs::create_dir(path).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let current = temp.path().join("current");
+    symlink(&public, &current).unwrap();
+    let file = temp.path().join("ordinary-file");
+    fs::write(&file, b"synthetic data").unwrap();
+    let cases = [
+        (&public, Some(public.as_path())),
+        (&nested, Some(public.as_path())),
+        (&nested, Some(current.as_path())),
+        (&public, Some(nested.as_path())),
+        (&separate, None),
+        (&separate, Some(file.as_path())),
+        (&separate, Some(Path::new("relative-static-root"))),
+    ];
+    for (directory, root) in cases {
+        assert!(channels_with_snapshots(directory, root).is_err());
+        assert!(!directory.join("snapshot.key").exists());
+    }
+    let missing = temp.path().join("missing-static-root");
+    assert!(channels_with_snapshots(&separate, Some(&missing)).is_err());
+    assert!(!separate.join("snapshot.key").exists());
+    assert!(channels_with_snapshots(&separate, Some(&current)).is_ok());
+    assert!(separate.join("snapshot.key").is_file());
+}
+
+#[test]
+fn smtp_snapshot_directory_rejects_symlink_components_and_parent_traversal() {
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let public = temp.path().join("public");
+    let parent = temp.path().join("private");
+    let snapshots = parent.join("snapshots");
+    fs::create_dir(&public).unwrap();
+    fs::create_dir_all(&snapshots).unwrap();
+    fs::set_permissions(&snapshots, fs::Permissions::from_mode(0o700)).unwrap();
+    let linked_parent = temp.path().join("parent-link");
+    symlink(&parent, &linked_parent).unwrap();
+    let linked_snapshot = temp.path().join("snapshot-link");
+    symlink(&snapshots, &linked_snapshot).unwrap();
+    for path in [
+        linked_parent.join("snapshots"),
+        linked_snapshot,
+        parent.join("../private/snapshots"),
+        "relative".into(),
+    ] {
+        assert!(channels_with_snapshots(&path, Some(&public)).is_err());
+        assert!(!snapshots.join("snapshot.key").exists());
+    }
+    let traversed_root = public.join("../public");
+    assert!(channels_with_snapshots(&snapshots, Some(&traversed_root)).is_err());
+    assert!(!snapshots.join("snapshot.key").exists());
+    assert!(channels_with_snapshots(&snapshots, Some(&public)).is_ok());
+}
+
 #[tokio::test]
 async fn encrypted_smtp_snapshot_keeps_original_transport_and_credentials_after_restart() {
     let root = tempfile::tempdir_in("/tmp").unwrap();
+    let public = root.path().join("public");
+    fs::create_dir(&public).unwrap();
     let snapshots = root.path().join("captures");
     fs::create_dir(&snapshots).unwrap();
     fs::set_permissions(&snapshots, fs::Permissions::from_mode(0o700)).unwrap();
@@ -106,6 +181,7 @@ async fn encrypted_smtp_snapshot_keeps_original_transport_and_credentials_after_
     .unwrap();
     let capture = |key: &str| match key {
         "WEB_SMTP_SNAPSHOT_DIR" => Some(snapshots.to_str().unwrap().into()),
+        "WEB_STATIC_ROOT" => Some(public.to_str().unwrap().into()),
         "WEB_SMTP_SECONDARY_HOST" => Some("old-secondary.example.invalid".into()),
         "WEB_SMTP_SECONDARY_PORT" => Some("1587".into()),
         "WEB_SMTP_SECONDARY_TLS" => Some("starttls".into()),

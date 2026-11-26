@@ -453,7 +453,12 @@ impl EmailChannels {
             "secondary",
         );
         let snapshots = get("WEB_SMTP_SNAPSHOT_DIR")
-            .map(|path| SnapshotStore::open(Path::new(&path)).map(Arc::new))
+            .map(|path| {
+                let static_root = get("WEB_STATIC_ROOT").ok_or(ChannelConfigError(
+                    "WEB_STATIC_ROOT is required with WEB_SMTP_SNAPSHOT_DIR",
+                ))?;
+                SnapshotStore::open(Path::new(&path), Path::new(&static_root)).map(Arc::new)
+            })
             .transpose()?;
         if primary.is_none() && snapshots.is_none() {
             return Err(ChannelConfigError(
