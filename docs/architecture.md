@@ -17,6 +17,13 @@ frontend 不独立运行，由配置指定的静态目录提供资源，按 fert
 
 契约从代码导出，见 [api.md](api.md)；数据库 schema 与迁移见 [database.md](database.md)。部署与发版唯一入口是 fertile deploy/ 和 docs/release.md，web service.yaml 记录组件接口与配置。
 
+## W2 契约来源
+
+后续 W2 使用与 [finance 来源提交](../openapi/finance.commit)一致的以下契约。阶段 0 仅记录来源和版本。
+
+- F1 行情协议 `1.0`。标的、事件与能力的 JSON Schema 及样本 `examples.json` 来自 [`protocol/v1/`](https://github.com/viramoon/finance/tree/b21f24150dae968a147b57eefbe4ffde0f3b4809/protocol/v1)。
+- F2 StrategyBundle v1，`apiVersion` 为 `fertile.finance/strategy/v1`。Bundle schema `strategy-bundle-v1.schema.json` 与组件注册表 `component-registry-v1.json` 来自 [`strategies/schema/`](https://github.com/viramoon/finance/tree/b21f24150dae968a147b57eefbe4ffde0f3b4809/strategies/schema)。
+
 ## 集成控制面
 
 catalog 确定 connector、可用字段和标的，创建、修改和凭据轮换均形成草稿版本。连接测试只接收登记的 connector、候选版本与不透明凭据引用。成功结果在事务中提升候选并退役原活动版本。W1 使用显式不可用的连接适配器，实际工作由 W2/F 系列承接。集成事务记录单管理员审计，通知和投递将由 W3 管理。
