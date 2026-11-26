@@ -15,12 +15,32 @@ use serde::{Deserialize, Serialize};
 pub struct ErrorDetail {
     #[serde(rename = "code")]
     pub code: String,
+    #[serde(
+        rename = "location",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub location: Option<Option<Box<models::Location>>>,
     #[serde(rename = "message")]
     pub message: String,
+    /// JSON Pointer-shaped path from a StrategyBundle compiler diagnostic.
+    #[serde(
+        rename = "path",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub path: Option<Option<String>>,
 }
 
 impl ErrorDetail {
     pub fn new(code: String, message: String) -> ErrorDetail {
-        ErrorDetail { code, message }
+        ErrorDetail {
+            code,
+            location: None,
+            message,
+            path: None,
+        }
     }
 }

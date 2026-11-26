@@ -27,7 +27,7 @@ pub struct Job {
     #[serde(rename = "id")]
     pub id: i64,
     #[serde(rename = "request")]
-    pub request: Box<models::JobRequest>,
+    pub request: Box<models::JobRequestView>,
     #[serde(rename = "status")]
     pub status: models::JobStatus,
     #[serde(
@@ -44,7 +44,7 @@ impl Job {
         attempt: u32,
         created_at: String,
         id: i64,
-        request: models::JobRequest,
+        request: models::JobRequestView,
         status: models::JobStatus,
     ) -> Job {
         Job {

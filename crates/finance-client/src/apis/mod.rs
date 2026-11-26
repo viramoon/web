@@ -113,9 +113,12 @@ impl From<&str> for ContentType {
     }
 }
 
+pub mod bundle_jobs_api;
 pub mod default_api;
+pub mod factor_read_api;
 pub mod jobs_api;
 pub mod market_api;
+pub mod market_read_api;
 pub mod research_api;
 
 pub mod configuration;

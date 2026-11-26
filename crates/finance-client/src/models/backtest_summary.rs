@@ -33,10 +33,16 @@ pub struct BacktestSummary {
     pub research: Option<Option<Box<models::ResearchReport>>>,
     #[serde(rename = "run_id")]
     pub run_id: String,
+    /// Immutable inputs, versions, cutoff, and economics for a StrategyBundle run.
+    #[serde(rename = "run_manifest", skip_serializing_if = "Option::is_none")]
+    pub run_manifest: Option<serde_json::Value>,
     #[serde(rename = "start")]
     pub start: String,
     #[serde(rename = "strategy")]
     pub strategy: String,
+    /// Exact positions, cash, fills, and per-recipe attribution for a StrategyBundle run.
+    #[serde(rename = "strategy_report", skip_serializing_if = "Option::is_none")]
+    pub strategy_report: Option<serde_json::Value>,
     #[serde(rename = "total_orders")]
     pub total_orders: u64,
     #[serde(rename = "total_positions")]
@@ -64,8 +70,10 @@ impl BacktestSummary {
             pnl,
             research: None,
             run_id,
+            run_manifest: None,
             start,
             strategy,
+            strategy_report: None,
             total_orders,
             total_positions,
         }
