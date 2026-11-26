@@ -56,14 +56,19 @@
     {"offset": 0, "hex": "76657273696f6e2068747470733a2f2f6769742d6c66732e6769746875622e636f6d2f737065632f7631"}
   ],
   "fixture_paths": [
-    "tests/fixtures/*",
-    "tests/api/fixtures/*",
-    "tests/replays/*",
+    "fixtures/*",
+    "*/fixtures/*",
+    "replays/*",
+    "*/replays/*",
+    "captures/*",
+    "*/captures/*",
+    "http-dumps/*",
+    "*/http-dumps/*",
     "openapi/examples/*",
     "crates/finance-client/examples/*",
     "crates/finance-client/samples/*",
     "crates/finance-client/test/*",
     "crates/finance-client/tests/*"
   ],
-  "fixture_suffixes": [".csv", ".tsv", ".ndjson", ".jsonl"]
+  "fixture_suffixes": [".csv", ".tsv", ".ndjson", ".jsonl", ".har", ".http", ".report", ".stdout", ".stderr"]
 }

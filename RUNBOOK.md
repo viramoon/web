@@ -55,6 +55,8 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 已有同名钩子或 core.hooksPath 时，保留原有配置，按[钩子接入说明](docs/data-guard.md#检查入口)把检查接入现有钩子。违规文件移到工作树外，并从待推送历史清除相应对象后再推送。CI 仅显示检查名和状态，遇到失败时用同一命令在隔离环境复测。生成器临时输出、数据库与测试日志都放在工作树外。
 
+本地 HTTP 验证使用自身的临时配置、数据库 socket 和 finance 桩。运行命令及 PostgreSQL 工具要求见[API 集成测试](tests/api/README.md)。
+
 ## finance 转发及恢复
 
 用同一示例数据目录启动 finance API 与 web 后，对比两个端点的 JSON。金额与数量保持各自契约类型。

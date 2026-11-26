@@ -14,6 +14,15 @@ pub(crate) fn checked(command: &mut Command) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+fn local_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.env_clear();
+    if let Some(path) = std::env::var_os("PATH") {
+        command.env("PATH", path);
+    }
+    command
+}
+
 pub(crate) struct Cluster {
     dir: TempDir,
 }
@@ -22,7 +31,7 @@ impl Cluster {
     pub(crate) fn create() -> Self {
         let dir = tempfile::tempdir().unwrap();
         checked(
-            Command::new("initdb")
+            local_command("initdb")
                 .args([
                     "--username=web_test",
                     "--auth-local=trust",
@@ -39,7 +48,7 @@ impl Cluster {
         pg
     }
     fn ctl(&self) -> Command {
-        let mut c = Command::new("pg_ctl");
+        let mut c = local_command("pg_ctl");
         c.arg("-D")
             .arg(self.dir.path().join("data"))
             .args(["-w", "-t", "15"]);
@@ -59,15 +68,17 @@ impl Cluster {
     }
     pub(crate) fn url(&self) -> String {
         format!(
-            "postgresql://web_test@localhost/web_test_db?host={}&port=55453",
+            "postgresql://web_test@localhost/web_test_db?host={}&port=55453&password=&sslmode=disable",
             self.dir.path().display()
         )
     }
     pub(crate) fn client(&self, bin: &str) -> Command {
-        let mut command = Command::new(bin);
+        let mut command = local_command(bin);
         command
             .env("PGHOST", self.dir.path())
             .env("PGPORT", "55453")
+            .env("PGPASSFILE", self.dir.path().join("absent-pgpass"))
+            .env("PGSSLMODE", "disable")
             .env("PGUSER", "web_test");
         command
     }

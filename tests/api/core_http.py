@@ -11,7 +11,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+
+from http_fixture import local_http, postgres, web_env
 
 
 class FinanceProbe(BaseHTTPRequestHandler):
@@ -47,7 +48,7 @@ def reserve_port():
 
 def get(port, path):
     try:
-        response = urlopen(f"http://127.0.0.1:{port}{path}", timeout=8)
+        response = local_http.open(f"http://127.0.0.1:{port}{path}", timeout=8)
     except HTTPError as error:
         response = error
     with response:
@@ -68,7 +69,7 @@ def wait_ready(proc, port):
     raise AssertionError("web did not become ready with the test PostgreSQL database")
 
 
-def run(root, finance):
+def run(root, finance, socket_dir):
     static = root / "dist"
     assets = static / "assets"
     assets.mkdir(parents=True)
@@ -87,13 +88,7 @@ def run(root, finance):
     (static / "index.html").write_bytes(index)
     (assets / "app-4da7eb55.js").write_bytes(b"export default 42;")
     port = reserve_port()
-    env = {
-        **os.environ,
-        "WEB_BIND_HOST": "127.0.0.1",
-        "WEB_PORT": str(port),
-        "WEB_STATIC_ROOT": str(static),
-        "FINANCE_BASE_URL": f"http://127.0.0.1:{finance.server_port}",
-    }
+    env = web_env(root, port, finance.server_port, static=static, socket_dir=socket_dir)
     binary = os.environ["WEB_BIN"]
     subprocess.run([binary, "migrate"], env=env, check=True)
     proc = subprocess.Popen([binary, "serve"], env=env)
@@ -204,7 +199,9 @@ if __name__ == "__main__":
         mock.release.set()
         threading.Thread(target=mock.serve_forever, daemon=True).start()
         try:
-            with tempfile.TemporaryDirectory() as folder:
-                run(Path(folder), mock)
+            with tempfile.TemporaryDirectory(dir="/tmp") as folder:
+                root = Path(folder)
+                with postgres(root) as socket_dir:
+                    run(root, mock, socket_dir)
         finally:
             mock.shutdown()

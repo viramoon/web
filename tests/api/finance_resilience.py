@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -15,6 +14,7 @@ import time
 from urllib.error import URLError
 
 from core_http import get, reserve_port
+from http_fixture import web_env
 
 
 SAMPLE = "/api/v1/backtests/sample"
@@ -213,24 +213,14 @@ def exercise(port, mock):
 
 
 def run(root, mock):
-    config = root / "config"
-    config.mkdir()
-    shutil.copyfile("config/base.yaml", config / "base.yaml")
-    # Override only the finance timings through the same profile loader used on the box.
-    (config / "cloudbox.yaml").write_text(json.dumps({"finance": {
-        "request_timeout_ms": REQUEST_MS, "connect_timeout_ms": 500, "max_retries": RETRIES,
-        "backoff_ms": 10, "circuit_failure_threshold": FAILURES, "circuit_open_ms": OPEN_MS,
-    }}))
     static = root / "dist"
     static.mkdir()
     (static / "index.html").write_text("<!doctype html>")
     port = reserve_port()
-    env = {
-        **os.environ, "WEB_CONFIG_DIR": str(config), "FERTILE_PROFILE": "cloudbox",
-        "WEB_BIND_HOST": "127.0.0.1", "WEB_PORT": str(port), "WEB_STATIC_ROOT": str(static),
-        "WEB_AUTO_MIGRATE": "false", "DATABASE_URL": "postgresql://127.0.0.1:1/resilience_test",
-        "FINANCE_BASE_URL": f"http://127.0.0.1:{mock.server_port}",
-    }
+    env = web_env(root, port, mock.server_port, static=static, profile={"finance": {
+        "request_timeout_ms": REQUEST_MS, "connect_timeout_ms": 500, "max_retries": RETRIES,
+        "backoff_ms": 10, "circuit_failure_threshold": FAILURES, "circuit_open_ms": OPEN_MS,
+    }})
     proc = subprocess.Popen([os.environ["WEB_BIN"], "serve"], env=env)
     try:
         deadline = time.monotonic() + 20
@@ -261,7 +251,7 @@ if __name__ == "__main__":
         worker = threading.Thread(target=mock.serve_forever, daemon=True)
         worker.start()
         try:
-            with tempfile.TemporaryDirectory() as folder:
+            with tempfile.TemporaryDirectory(dir="/tmp") as folder:
                 run(Path(folder), mock)
         finally:
             mock.shutdown()

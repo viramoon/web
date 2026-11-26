@@ -29,3 +29,5 @@ jobs:
           python3 -B scripts/data_guard.py range "$BASE_SHA" HEAD
       - name: Run offline guard tests
         run: sh scripts/ci-check.sh data-guard-tests python3 -B -m unittest discover -s tests -p test_data_guard.py -v
+      - name: Verify HTTP fixture isolation
+        run: sh scripts/ci-check.sh http-fixture-isolation python3 -B -m unittest discover -s tests/api -p test_http_isolation.py -v

@@ -159,6 +159,75 @@ class DataGuardTests(unittest.TestCase):
                 self.git("add", ".data-guard/rules.json")
                 self.assert_rejected(self.guard("staged"), "invalid-rules")
 
+    def test_pre_commit_recognizes_market_data_inside_text_wrappers(self):
+        columns = ("open", "high", "low", "close")
+        values = ("1.2301", "1.7000", "1.0100", "1.4000")
+        quote = json.dumps(dict(zip(columns, values)))
+        table = "\n".join(f"| {' | '.join(row)} |" for row in (columns, ("---",) * 4, values))
+        cases = (
+            ("transcript.txt", "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + quote),
+            ("transcript.rs", "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + quote),
+            ("failure.txt", "running 1 test\n---- sample stdout ----\nleft: " + json.dumps(quote)),
+            ("notes.md", "Synthetic output\n" + quote),
+            ("table.md", "Synthetic output\n" + table),
+            ("quote.md", "Quote snapshot\nbid_price: '1.2301'\naskPrice: '1.2400'\n"),
+            ("trade.txt", 'Output: {"price":"1.2301","size":"2.00","side":"buy"}'),
+            ("book.txt", 'Probe: {"bids":[["1.2301","2.00"]],"asks":[["1.24","3.00"]]}'),
+        )
+        for path, payload in cases:
+            with self.subTest(path=path):
+                self.write(path, payload)
+                self.git("add", path)
+                result = self.git("commit", "-qm", "Add wrapped payload", check=False)
+                self.assert_rejected(result, "fixture-source-required")
+                self.assertNotIn(b"1.2301", result.stdout + result.stderr)
+                self.assertEqual(self.git("rev-parse", "HEAD").stdout.decode().strip(), self.base)
+                self.git("rm", "-f", path)
+
+    def test_multiline_credential_and_credential_paths_are_rejected_without_echo(self):
+        payload = '{\n "api_token":\n ' + json.dumps(MARKER) + '\n}\n'
+        self.write("transcript.txt", "Synthetic response\n" + payload)
+        self.git("add", "transcript.txt")
+        self.assert_rejected(self.git("commit", "-qm", "Add response", check=False),
+                             "credential-material")
+        self.git("rm", "-f", "transcript.txt")
+        for path in (
+            "notes/api_token=" + MARKER + ".txt",
+            "notes/Authorization%3A%20Bearer%20" + MARKER + ".txt",
+            "notes/Bearer/" + MARKER + ".txt",
+        ):
+            with self.subTest(shape=path.rsplit("/", 1)[0]):
+                self.write(path, "clean content")
+                self.git("add", path)
+                result = self.git("commit", "-qm", "Add path", check=False)
+                self.assert_rejected(result, "credential-material <redacted-path>")
+                self.git("rm", "-f", path)
+
+    def test_managed_paths_require_sources_and_accept_only_registered_bytes(self):
+        path = "tests/local/fixtures/snapshot.http"
+        generator = "tests/gen_capture.py"
+        self.write(generator, 'print("HTTP/1.1 200 OK\\n\\n" + \'{"bid":"1.00","ask":"2.00"}\')\n')
+        data = self.run_command(sys.executable, generator, check=True).stdout
+        for payload in (data, b"plain synthetic capture"):
+            self.write(path, payload)
+            self.git("add", path)
+            self.assert_rejected(self.guard("staged"), "fixture-source-required")
+        self.write(path, data)
+        self.write(".data-guard/sources.json", json.dumps({
+            "version": 1,
+            "fixtures": {path: {
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "generator": generator,
+                "seed": "fixed",
+                "source": "Fixed local HTTP response from tests/gen_capture.py.",
+            }},
+        }))
+        self.git("add", ".")
+        self.git("commit", "-qm", "Add registered replay")
+        self.write(path, data + b"\n")
+        self.git("add", path)
+        self.assert_rejected(self.guard("staged"), "fixture-digest")
+
     def test_ci_check_hides_success_and_failure_output(self):
         for status in (0, 5):
             with self.subTest(status=status):

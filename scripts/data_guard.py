@@ -6,10 +6,12 @@ from dataclasses import dataclass
 import hashlib
 import json
 from fnmatch import fnmatchcase
+from html import unescape
 import os
 import re
 import subprocess
 import sys
+from urllib.parse import unquote
 
 
 RULES = ".data-guard/rules.json"
@@ -22,10 +24,32 @@ VALUE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ].*)?")
 MARKET_FIELDS = (
     {"open", "high", "low", "close"},
-    {"price", "quantity", "exchange_ts"},
-    {"bids", "asks", "exchange_ts"},
+    {"price", "quantity", "exchangets"},
+    {"price", "quantity", "timestamp"},
+    {"price", "quantity", "ts"},
+    {"price", "quantity", "side"},
+    {"price", "size", "timestamp"},
+    {"price", "size", "ts"},
+    {"price", "size", "side"},
+    {"price", "qty", "timestamp"},
+    {"price", "qty", "side"},
+    {"bid", "ask"},
+    {"bidprice", "askprice"},
+    {"bids", "asks"},
     {"chart", "timestamp", "indicators"},
-    {"observations", "observation_start", "value"},
+    {"observations", "observationstart", "value"},
+)
+SOURCE_SUFFIXES = (".java", ".py", ".rs", ".sh")
+DATA_LINE = re.compile(r"""^\s*(?:[\[{\x60]|["']?[\w-]+["']?\s*[:=])""")
+FIELD_VALUE = re.compile(
+    r"""(?ix)
+    \b(?P<field>[a-z][a-z0-9_-]*)["'\x60]?\s*[:=]\s*["'\x60]?
+    (?: [+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?=[\s,"'\x60;}\])]|$)
+      | \d{4}-\d{2}-\d{2}T
+      | \[
+      | (?:buy|sell|bid|ask)\b
+    )
+    """
 )
 WEB_CAPTURE_FIELDS = (
     {"method", "headers", "body"},
@@ -37,15 +61,23 @@ PRIVATE_KEY = re.compile(
     r"(?m)-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----"
     r"(?:\r?$|(?:\r?\n|\\n)[a-zA-Z0-9+/]{24,})"
 )
+SECRET_FIELD = (
+    r"(?:web[-_]admin[-_]token|api[-_]token|api[-_]key|access[-_]token|refresh[-_]token|"
+    r"client[-_]secret|x[-_]csrf[-_]token|csrf[-_]token|__host-web_admin_session|password)"
+)
+TOKEN_PREFIX = r"(?:gh[pousr]_[a-z0-9]{24,}|github_pat_[a-z0-9_]{24,}|eyj[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+)"
 CREDENTIAL = re.compile(
-    r"""(?ix)
+    rf"""(?ix)
     (?: \bpostgres(?:ql)?://[^\s/'":@]+:[^\s/'"@]+@
-      | \bauthorization["']?[ \t]*:[ \t]*["']?(?:bearer|basic)[ \t]+[a-z0-9._~+/=-]{12,}
-      | \b(?:web_admin_token|api_token|api_key|access_token|refresh_token|client_secret|
-             x-csrf-token|csrf_token|__host-web_admin_session|password)
-        ["']?[ \t]*[:=][ \t]*["']?[a-z0-9._~+/=-]{12,}(?=["'\s,;)}]|$)
+      | \bauthorization["'\x60]?\s*:\s*["'\x60]?(?:bearer|basic)[ \t]+[a-z0-9._~+/=-]{{4,}}
+      | \b{SECRET_FIELD}["'\x60]?\s*[:=]\s*
+        (?: "[a-z0-9._~+/=-]+" | '[a-z0-9._~+/=-]+' | [a-z0-9._~+/=-]{{12,}}(?=["'\s,;)\]}}]|$) )
+      | \b{TOKEN_PREFIX}
     )
     """
+)
+PATH_CREDENTIAL = re.compile(
+    rf"(?i)\b(?:{SECRET_FIELD}|bearer|basic)[=:/ _-]+[a-z0-9][a-z0-9._~+=-]{{11,}}"
 )
 TEST_REPORT = re.compile(r"(?is)^\s*(?:<\?xml.*?\?>\s*)?<(?:testsuite|testsuites)(?=[\s>])")
 EXCEPTION_DUMP = re.compile(
@@ -227,7 +259,7 @@ def looks_like_table(text):
     # Two consecutive records with the same delimiter/width and numeric fields
     # catch common renamed CSV/TSV exports without treating prose as a table.
     lines = text.splitlines()
-    for delimiter in (",", "\t", ";"):
+    for delimiter in (",", "\t", ";", "|"):
         previous_width = 0
         for line in lines:
             row = ()
@@ -237,8 +269,8 @@ def looks_like_table(text):
                 except csv.Error:
                     pass  # A quoted JSON or source-code line is not a delimited record.
             fields = [field.strip() for field in row]
-            columns = {field.translate(ASCII_LOWER) for field in fields}
-            if any(group <= columns for group in TABLE_HEADERS):
+            columns = {normal_field(field.strip("\x60")) for field in fields}
+            if any(group <= columns for group in (*TABLE_HEADERS, *MARKET_FIELDS)):
                 return True
             numeric = any(VALUE.fullmatch(field) for field in fields)
             if len(fields) >= 2 and numeric and any(
@@ -250,6 +282,15 @@ def looks_like_table(text):
             else:
                 previous_width = 0
     return False
+
+
+def normal_field(field):
+    return field.translate(ASCII_LOWER).replace("_", "").replace("-", "")
+
+
+def credential_in_path(path):
+    decoded = unquote(path)
+    return CREDENTIAL.search(decoded) or PATH_CREDENTIAL.search(decoded)
 
 
 def json_content_reason(text, *, openapi=False):
@@ -266,7 +307,7 @@ def json_content_reason(text, *, openapi=False):
             return "log-export"
         if has_fields(REPORT_FIELDS):
             return "test-report"
-        if any(has_fields(group) for group in (*MARKET_FIELDS, *WEB_CAPTURE_FIELDS)):
+        if any(has_fields(group) for group in WEB_CAPTURE_FIELDS):
             return "fixture-source-required"
         return None
     sample = False
@@ -277,7 +318,7 @@ def json_content_reason(text, *, openapi=False):
                 return "log-export"
             if REPORT_FIELDS <= value.keys():
                 return "test-report"
-            fields = {key for key, item in value.items() if not isinstance(item, dict)}
+            fields = {normal_field(key) for key, item in value.items() if not isinstance(item, dict)}
             if any(group <= fields for group in MARKET_FIELDS):
                 sample = True
             if any(group <= value.keys() for group in WEB_CAPTURE_FIELDS):
@@ -295,6 +336,8 @@ def json_content_reason(text, *, openapi=False):
 def inspect_blob(path, entry, rules, source):
     if not valid_path(path):
         return "invalid-path"
+    if credential_in_path(path):
+        return "credential-material"
     normalized = path.translate(ASCII_LOWER)
     if rules.blocked_path_components.intersection(normalized.split("/")[:-1]):
         return "blocked-path"
@@ -315,7 +358,9 @@ def inspect_blob(path, entry, rules, source):
         return "non-text"
     if CONTROL.search(text):
         return "non-text"
-    if PRIVATE_KEY.search(text) or CREDENTIAL.search(text):
+    # Recognize field shapes in plain text and in quoted or escaped payloads.
+    content = unescape(text).replace(r'\"', '"')
+    if PRIVATE_KEY.search(text) or CREDENTIAL.search(content.replace(r"\n", "\n")):
         return "credential-material"
     if TEST_REPORT.search(text):
         return "test-report"
@@ -329,10 +374,18 @@ def inspect_blob(path, entry, rules, source):
     if source:
         if hashlib.sha256(data).hexdigest() != source["sha256"]:
             return "fixture-digest"
-    elif (normalized.endswith(rules.fixture_suffixes)
-          or any(fnmatchcase(normalized, pattern) for pattern in rules.fixture_paths)
-          or json_reason == "fixture-source-required"
-          or looks_like_table(text)):
+        return None
+    if (normalized.endswith(rules.fixture_suffixes)
+            or any(fnmatchcase(normalized, pattern) for pattern in rules.fixture_paths)
+            or json_reason == "fixture-source-required"
+            or looks_like_table(text)):
+        return "fixture-source-required"
+    # In implementation files, check lines shaped like data instead of
+    # interpreting strings passed as arguments or declared as code constants.
+    if normalized.endswith(SOURCE_SUFFIXES):
+        content = "\n".join(line for line in content.splitlines() if DATA_LINE.match(line))
+    fields = {normal_field(match["field"]) for match in FIELD_VALUE.finditer(content.replace(r"\n", "\n"))}
+    if any(group <= fields for group in MARKET_FIELDS):
         return "fixture-source-required"
     return None
 
@@ -396,7 +449,9 @@ def main():
     def report(reason, path=None):
         nonlocal failures
         failures += 1
-        location = f" {ascii(path)}" if path is not None and args.show_paths else ""
+        location = ""
+        if path is not None and args.show_paths:
+            location = " <redacted-path>" if credential_in_path(path) else f" {ascii(path)}"
         print(f"data-guard: {reason}{location}", file=sys.stderr)
 
     try:
