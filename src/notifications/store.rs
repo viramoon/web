@@ -1,4 +1,5 @@
 mod ingest;
+pub(crate) mod silence;
 
 pub use ingest::{RecordError, record_signal};
 
@@ -23,7 +24,7 @@ impl From<sqlx::Error> for StoreError {
 const RULE_COLUMNS: &str = "id::text AS id, revision, condition, severity, enabled,
     email_enabled, cooldown_seconds, reminder_seconds, min_occurrences";
 
-// Rule edits and the worker's reservation must see a consistent set of summary members.
+// Rule edits, manual silences, and reservations must see a consistent delivery policy.
 // This lock ends with the transaction, before the worker contacts SMTP.
 pub(super) async fn lock_rule_updates(tx: &mut PgConnection) -> Result<(), sqlx::Error> {
     const RULE_UPDATE_LOCK: i64 = 6_758_026_211_706_146_535;

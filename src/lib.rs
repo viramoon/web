@@ -27,7 +27,10 @@ use config::Settings;
 use database::{Database, DbStatus};
 use finance::{Finance, FinanceStatus};
 use integrations::StrictUpdateSchema;
-use notifications::{http as notification_http, worker};
+use notifications::{
+    http::{self as notification_http, silence as silence_http},
+    worker,
+};
 use serde::Serialize;
 use std::{
     sync::Arc,
@@ -236,7 +239,9 @@ fn read_product(path: &str) -> Option<auth::Product> {
         | notification_http::RULE
         | notification_http::ALERTS
         | notification_http::ALERT
-        | notification_http::CHANNEL_TEST => Product::Notifications,
+        | notification_http::CHANNEL_TEST
+        | silence_http::RULE_SILENCE
+        | silence_http::ALERT_SILENCE => Product::Notifications,
         _ => return None,
     };
     Some(product)
@@ -264,6 +269,10 @@ async fn check_access(State(s): State<AppState>, req: Request, next: Next) -> Re
         | (&Method::PATCH, "/api/v1/integrations/{id}")
         | (&Method::PUT | &Method::DELETE, "/api/v1/integrations/{id}/credential")
         | (&Method::PUT, notification_http::RULE)
+        | (
+            &Method::PUT | &Method::DELETE,
+            silence_http::RULE_SILENCE | silence_http::ALERT_SILENCE,
+        )
         | (&Method::POST, notification_http::ACK | notification_http::CHANNEL_TESTS) => {
             s.write_access.authorize_same_origin(headers)
         }
@@ -290,6 +299,10 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         (&Method::POST, notification_http::ACK) => {
             Some("Acknowledgment outcome unknown; read the alert before retrying")
         }
+        (
+            &Method::PUT | &Method::DELETE,
+            silence_http::RULE_SILENCE | silence_http::ALERT_SILENCE,
+        ) => Some("Silence outcome unknown; read the silence resource before retrying"),
         (&Method::POST, notification_http::CHANNEL_TESTS) => {
             Some("Test outcome unknown; look up the original Idempotency-Key before retrying")
         }
@@ -452,7 +465,13 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
         notification_http::get_alert,
         notification_http::ack_alert,
         notification_http::start_channel_test,
-        notification_http::get_channel_test
+        notification_http::get_channel_test,
+        silence_http::get_rule,
+        silence_http::put_rule,
+        silence_http::delete_rule,
+        silence_http::get_alert,
+        silence_http::put_alert,
+        silence_http::delete_alert
     ),
     components(schemas(
         ErrorBody,

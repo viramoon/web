@@ -1,5 +1,7 @@
 //! Synthetic alert metadata with a process-local SMTP substitute and isolated PostgreSQL.
 
+mod silence;
+
 use super::postgres::Cluster;
 use axum::{
     Router,
@@ -190,7 +192,10 @@ impl RuleEditor {
             db: db.clone(),
             finance: Finance::new(&settings.finance).unwrap(),
             config: Arc::new(settings),
-            write_access: WriteAccess::load(&token_path, 10, Duration::from_secs(60)).unwrap(),
+            write_access: WriteAccess::load(&token_path, 10, Duration::from_secs(60))
+                .unwrap()
+                .with_sessions(Some("https://web.test"), Duration::from_secs(60))
+                .unwrap(),
             credential_store: None,
             started_at,
         });

@@ -186,6 +186,10 @@ notifier 在打开或创建快照密钥前核对快照目录与部署给 Web 的
 
 排查成员告警时，读取其 `GET /api/v1/alerts/{id}` 详情。在原成员投递的 `summary_attempts` 中查找汇总的拒绝或超时，在 `summary_deferrals` 中查看该汇总的延迟记录。用替代投递的 `replaces_id` 对照原成员投递的 `id`，再看替代投递自身的 `attempts`。需要读取主告警详情时，使用原成员投递的 `summary_alert_id` 作为请求路径中的告警 UUID。
 
+W5 升级时，停下旧 notifier，在共用 PostgreSQL 上执行 `web migrate`，再使用包含 W5 的 web 和 notifier。使用独立数据库角色时，给 web 角色授予 `app.notification_silences` 的读取、插入、更新权限及其序列使用权，给 notifier 角色授予表的读取权与静默判断函数的执行权。备份需包含静默审计表。回退旧 notifier 前，先在升级版本中核对仍有效的静默。旧 notifier 会按原队列策略发送待投递邮件。
+
+主动静默覆盖紧急告警，独立测试邮件仍可用于检查 SMTP。排查持续 `pending` 的业务邮件时，分别查询告警实例和所属规则的 `/silence`。在最后一个适用静默解除或到期后，notifier 下一轮轮询重新检查投递资格，并继续应用静默时段、冷却、重试等待和额度。已经领取的尝试按 SMTP 实际结果结算。[主动静默接口](docs/api.md#主动静默)
+
 ## 历史回测与提交确认
 
 回测页从 /api/v1/backtests/datasets 读取已审核的历史标的。配置数据后提交 SmaCrossover，并在工作台查看作业状态和历史结果。POST 超时或连接中断后，使用管理员身份和原 Idempotency-Key 请求 GET /api/v1/backtests/by-key。若查到 ID，继续轮询该作业。只有明确返回 404 后才允许带原请求及原键重试。
