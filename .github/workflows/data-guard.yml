@@ -1,0 +1,31 @@
+name: Repository Data Guard
+on: workflow_call
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Scan Git objects and verify hooks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+      - name: Check incoming commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$BASE_SHA" = 0000000000000000000000000000000000000000 ]; then
+            if [ "$GITHUB_REF" != refs/heads/main ] && git rev-parse --verify -q refs/remotes/origin/main >/dev/null; then
+              BASE_SHA=refs/remotes/origin/main
+            else
+              BASE_SHA=-
+            fi
+          fi
+          python3 -B scripts/data_guard.py range "$BASE_SHA" HEAD
+      - name: Run offline guard tests
+        run: sh scripts/ci-check.sh data-guard-tests python3 -B -m unittest discover -s tests -p test_data_guard.py -v

@@ -1,0 +1,433 @@
+"""Inspect Git objects before publishing web changes."""
+
+import argparse
+import csv
+from dataclasses import dataclass
+import hashlib
+import json
+from fnmatch import fnmatchcase
+import os
+import re
+import subprocess
+import sys
+
+
+RULES = ".data-guard/rules.json"
+SOURCES = ".data-guard/sources.json"
+MAX_POLICY_BYTES = 256 * 1024
+REGULAR_MODES = {b"100644", b"100755"}
+OID = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+VALUE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ].*)?")
+MARKET_FIELDS = (
+    {"open", "high", "low", "close"},
+    {"price", "quantity", "exchange_ts"},
+    {"bids", "asks", "exchange_ts"},
+    {"chart", "timestamp", "indicators"},
+    {"observations", "observation_start", "value"},
+)
+WEB_CAPTURE_FIELDS = (
+    {"method", "headers", "body"},
+    {"request", "response", "url"},
+)
+LOG_FIELDS = {"timestamp", "level", "fields"}
+REPORT_FIELDS = {"testResults", "numFailedTests"}
+PRIVATE_KEY = re.compile(
+    r"(?m)-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----"
+    r"(?:\r?$|(?:\r?\n|\\n)[a-zA-Z0-9+/]{24,})"
+)
+CREDENTIAL = re.compile(
+    r"""(?ix)
+    (?: \bpostgres(?:ql)?://[^\s/'":@]+:[^\s/'"@]+@
+      | \bauthorization["']?[ \t]*:[ \t]*["']?(?:bearer|basic)[ \t]+[a-z0-9._~+/=-]{12,}
+      | \b(?:web_admin_token|api_token|api_key|access_token|refresh_token|client_secret|
+             x-csrf-token|csrf_token|__host-web_admin_session|password)
+        ["']?[ \t]*[:=][ \t]*["']?[a-z0-9._~+/=-]{12,}(?=["'\s,;)}]|$)
+    )
+    """
+)
+TEST_REPORT = re.compile(r"(?is)^\s*(?:<\?xml.*?\?>\s*)?<(?:testsuite|testsuites)(?=[\s>])")
+EXCEPTION_DUMP = re.compile(
+    r"(?m)^(?:Traceback \(most recent call last\):|thread '[^'\r\n]+' (?:\(\d+\) )?panicked at )"
+)
+ARTIFACT_UPLOAD = re.compile(r"(?im)^[ \t]*(?:-[ \t]+)?uses:[ \t]*['\"]?actions/upload-artifact@")
+TABLE_HEADERS = (
+    {"open", "high", "low", "close"},
+    {"price", "volume"},
+    {"symbol", "price"},
+    {"timestamp", "price"},
+    {"date", "price"},
+)
+ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+GIT_ENV = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1", GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="")
+
+
+class GuardError(Exception):
+    """An error with a fixed diagnostic safe to print in CI."""
+
+
+@dataclass(frozen=True)
+class Entry:
+    mode: bytes
+    oid: bytes
+
+
+@dataclass(frozen=True)
+class Rules:
+    max_blob_bytes: int
+    blocked_path_components: set[str]
+    blocked_suffixes: tuple[str, ...]
+    blocked_magic: tuple[tuple[int, bytes], ...]
+    fixture_paths: tuple[str, ...]
+    fixture_suffixes: tuple[str, ...]
+
+
+def git(*args, optional=False):
+    result = subprocess.run(
+        ["git", *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=GIT_ENV
+    )
+    if result.returncode == 0:
+        return result.stdout
+    if optional:
+        return None
+    raise GuardError("git-read-failed")
+
+
+def read_tree(commit=None):
+    if commit is None:
+        rows = git("ls-files", "--stage", "-z")
+    else:
+        rows = git("ls-tree", "-r", "-z", commit)
+    tree = {}
+    for row in rows.split(b"\0")[:-1]:
+        metadata, path = row.split(b"\t", 1)
+        if commit is None:
+            mode, oid, stage = metadata.split()
+            if stage != b"0":
+                raise GuardError("unmerged-index")
+        else:
+            mode, _, oid = metadata.split()
+        tree[os.fsdecode(path)] = Entry(mode, oid)
+    return tree
+
+
+def commit_id(revision, optional=False):
+    oid = git("rev-parse", "--verify", "--end-of-options", revision + "^{commit}", optional=optional)
+    return oid.decode("ascii").strip() if oid is not None else None
+
+
+def changed_paths(before, after):
+    return sorted(path for path, entry in after.items() if before.get(path) != entry)
+
+
+def blob_size(entry):
+    return int(git("cat-file", "-s", entry.oid))
+
+
+def blob(entry):
+    return git("cat-file", "blob", entry.oid)
+
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate key")
+        result[key] = value
+    return result
+
+
+def policy_file(tree, path, error):
+    entry = tree.get(path)
+    if not entry or entry.mode not in REGULAR_MODES or blob_size(entry) > MAX_POLICY_BYTES:
+        raise GuardError(error)
+    try:
+        value = json.loads(blob(entry).decode("utf-8"), object_pairs_hook=unique_object)
+    except (ValueError, RecursionError):
+        raise GuardError(error) from None
+    if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != 1:
+        raise GuardError(error)
+    return value
+
+
+def valid_path(path):
+    return (isinstance(path, str) and "\\" not in path
+            and not any(part in {"", ".", ".."} for part in path.split("/"))
+            and not re.search(r"[\x00-\x1f\x7f-\x9f\ud800-\udfff]", path))
+
+
+def load_rules(tree):
+    error = "invalid-rules"
+    raw = policy_file(tree, RULES, error)
+    if raw.keys() != {"version", *Rules.__annotations__}:
+        raise GuardError(error)
+    size = raw["max_blob_bytes"]
+    if type(size) is not int or not 1 <= size <= 16 * 1024 * 1024:
+        raise GuardError(error)
+
+    def strings(key, valid):
+        values = raw[key]
+        if not isinstance(values, list) or not all(
+            valid_path(item) and valid(item) for item in values
+        ):
+            raise GuardError(error)
+        normalized = tuple(item.translate(ASCII_LOWER) for item in values)
+        if len(set(normalized)) != len(normalized):
+            raise GuardError(error)
+        return normalized
+
+    def suffix(value):
+        return re.fullmatch(r"\.[a-z0-9][a-z0-9._-]*", value) is not None
+
+    signatures = []
+    if not isinstance(raw["blocked_magic"], list):
+        raise GuardError(error)
+    for item in raw["blocked_magic"]:
+        if not isinstance(item, dict) or item.keys() != {"offset", "hex"}:
+            raise GuardError(error)
+        offset, signature = item["offset"], item["hex"]
+        if (type(offset) is not int or not isinstance(signature, str)
+                or not re.fullmatch(r"(?:[0-9a-f]{2})+", signature)
+                or not 0 <= offset <= size - len(signature) // 2):
+            raise GuardError(error)
+        signatures.append((offset, bytes.fromhex(signature)))
+    return Rules(
+        size,
+        set(strings("blocked_path_components", lambda value: "/" not in value)),
+        strings("blocked_suffixes", suffix),
+        tuple(signatures),
+        strings("fixture_paths", lambda value: True),
+        strings("fixture_suffixes", suffix),
+    )
+
+
+def load_sources(tree, required):
+    error = "invalid-sources"
+    if SOURCES not in tree and not required:
+        return {}
+    raw = policy_file(tree, SOURCES, error)
+    if raw.keys() != {"version", "fixtures"} or not isinstance(raw["fixtures"], dict):
+        raise GuardError(error)
+    for path, record in raw["fixtures"].items():
+        if not valid_path(path) or path in {RULES, SOURCES} or not isinstance(record, dict):
+            raise GuardError(error)
+        if record.keys() != {"sha256", "generator", "seed", "source"}:
+            raise GuardError(error)
+        digest, generator = record["sha256"], record["generator"]
+        if (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or not valid_path(generator) or generator in {path, RULES, SOURCES}
+                or not all(isinstance(record[key], str) and record[key].strip()
+                           for key in ("seed", "source"))):
+            raise GuardError(error)
+    return raw["fixtures"]
+
+
+def looks_like_table(text):
+    # Two consecutive records with the same delimiter/width and numeric fields
+    # catch common renamed CSV/TSV exports without treating prose as a table.
+    lines = text.splitlines()
+    for delimiter in (",", "\t", ";"):
+        previous_width = 0
+        for line in lines:
+            row = ()
+            if delimiter in line:
+                try:
+                    row = next(csv.reader([line], delimiter=delimiter, skipinitialspace=True, strict=True))
+                except csv.Error:
+                    pass  # A quoted JSON or source-code line is not a delimited record.
+            fields = [field.strip() for field in row]
+            columns = {field.translate(ASCII_LOWER) for field in fields}
+            if any(group <= columns for group in TABLE_HEADERS):
+                return True
+            numeric = any(VALUE.fullmatch(field) for field in fields)
+            if len(fields) >= 2 and numeric and any(
+                VALUE.fullmatch(field) or DATE.fullmatch(field) for field in fields[:2]
+            ):
+                if previous_width == len(fields):
+                    return True
+                previous_width = len(fields)
+            else:
+                previous_width = 0
+    return False
+
+
+def json_content_reason(text, *, openapi=False):
+    if not text.lstrip().startswith(("{", "[")):
+        return None
+    try:
+        pending = [json.loads(text, parse_int=str, parse_float=str)]
+    except (ValueError, RecursionError):
+        # Also catch field combinations in line-delimited JSON.
+        def has_fields(group):
+            return all(f'"{key}"' in text for key in group)
+
+        if has_fields(LOG_FIELDS):
+            return "log-export"
+        if has_fields(REPORT_FIELDS):
+            return "test-report"
+        if any(has_fields(group) for group in (*MARKET_FIELDS, *WEB_CAPTURE_FIELDS)):
+            return "fixture-source-required"
+        return None
+    sample = False
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if LOG_FIELDS <= value.keys():
+                return "log-export"
+            if REPORT_FIELDS <= value.keys():
+                return "test-report"
+            fields = {key for key, item in value.items() if not isinstance(item, dict)}
+            if any(group <= fields for group in MARKET_FIELDS):
+                sample = True
+            if any(group <= value.keys() for group in WEB_CAPTURE_FIELDS):
+                sample = True
+            if openapi and {"example", "examples"}.intersection(value):
+                sample = True
+            if "chart" in value and '"timestamp"' in text and '"indicators"' in text:
+                sample = True
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    return "fixture-source-required" if sample else None
+
+
+def inspect_blob(path, entry, rules, source):
+    if not valid_path(path):
+        return "invalid-path"
+    normalized = path.translate(ASCII_LOWER)
+    if rules.blocked_path_components.intersection(normalized.split("/")[:-1]):
+        return "blocked-path"
+    if normalized.endswith(rules.blocked_suffixes):
+        return "blocked-extension"
+    if entry.mode == b"160000":
+        return None  # The submodule owns its own objects and policy.
+    if entry.mode not in REGULAR_MODES:
+        return "blocked-entry-type"
+    if blob_size(entry) > rules.max_blob_bytes:
+        return "oversize"
+    data = blob(entry)
+    if any(data.startswith(magic, offset) for offset, magic in rules.blocked_magic):
+        return "blocked-magic"
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeError:
+        return "non-text"
+    if CONTROL.search(text):
+        return "non-text"
+    if PRIVATE_KEY.search(text) or CREDENTIAL.search(text):
+        return "credential-material"
+    if TEST_REPORT.search(text):
+        return "test-report"
+    if EXCEPTION_DUMP.search(text):
+        return "log-export"
+    if normalized.startswith(".github/workflows/") and ARTIFACT_UPLOAD.search(text):
+        return "artifact-upload"
+    json_reason = json_content_reason(text, openapi=normalized.startswith("openapi/"))
+    if json_reason in {"log-export", "test-report"}:
+        return json_reason
+    if source:
+        if hashlib.sha256(data).hexdigest() != source["sha256"]:
+            return "fixture-digest"
+    elif (normalized.endswith(rules.fixture_suffixes)
+          or any(fnmatchcase(normalized, pattern) for pattern in rules.fixture_paths)
+          or json_reason == "fixture-source-required"
+          or looks_like_table(text)):
+        return "fixture-source-required"
+    return None
+
+
+def inspect_tree(tree, before, paths, rules, report, require_sources=False):
+    csv.field_size_limit(rules.max_blob_bytes)
+    sources = load_sources(tree, require_sources)
+    for path, record in sources.items():
+        if not all(tree.get(item, Entry(b"", b"")).mode in REGULAR_MODES
+                   for item in (path, record["generator"])):
+            report("fixture-source-missing", path)
+    # Recheck all registered payloads when a manifest changes, including any
+    # existing file a new record claims to describe.
+    if SOURCES in paths:
+        previous_sources = load_sources(before, required=False)
+        paths = sorted(set(paths) | sources.keys() | previous_sources.keys())
+    for path in paths:
+        if path in tree:
+            reason = inspect_blob(path, tree[path], rules, sources.get(path))
+            if reason:
+                report(reason, path)
+
+
+def inspect_range(base, tip, rules, report):
+    for line in git("rev-list", "--parents", tip, *([f"^{base}"] if base else [])).splitlines():
+        commit, *parents = line.decode("ascii").split()
+        tree = read_tree(commit)
+        before = read_tree(parents[0]) if parents else {}
+        inspect_tree(tree, before, changed_paths(before, tree), rules, report, require_sources=commit == tip)
+
+
+def inspect_push(remote, report):
+    tracking = [commit_id(f"refs/remotes/{remote}/{ref}", optional=True) for ref in ("HEAD", "main")]
+    default_base = next((oid for oid in tracking if oid), None)
+    for line in sys.stdin.buffer:
+        fields = line.split()
+        if len(fields) != 4 or not all(OID.fullmatch(fields[i]) for i in (1, 3)):
+            raise GuardError("invalid-push-input")
+        local, remote_oid = fields[1], fields[3]
+        if not local.strip(b"0"):
+            continue  # Ref deletion publishes no objects.
+        tip = commit_id(local.decode("ascii"))
+        base = commit_id(remote_oid.decode("ascii")) if remote_oid.strip(b"0") else default_base
+        rules = load_rules(read_tree(tip))
+        inspect_range(base, tip, rules, report)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--show-paths", action="store_true", help="include escaped paths in local diagnostics")
+    modes = parser.add_subparsers(dest="mode", required=True)
+    modes.add_parser("staged")
+    scan = modes.add_parser("range")
+    scan.add_argument("base")
+    scan.add_argument("tip")
+    push = modes.add_parser("push")
+    push.add_argument("remote")
+    args = parser.parse_args()
+    failures = 0
+
+    def report(reason, path=None):
+        nonlocal failures
+        failures += 1
+        location = f" {ascii(path)}" if path is not None and args.show_paths else ""
+        print(f"data-guard: {reason}{location}", file=sys.stderr)
+
+    try:
+        if args.mode == "staged":
+            tree = read_tree()
+            changed = git("diff", "--cached", "--ita-invisible-in-index",
+                          "--name-only", "--no-ext-diff", "--no-renames", "-z")
+            paths = [os.fsdecode(path) for path in changed.split(b"\0")[:-1]]
+            head = commit_id("HEAD", optional=True) if SOURCES in paths else None
+            before = read_tree(head) if head else {}
+            inspect_tree(tree, before, paths, load_rules(tree), report, require_sources=True)
+        else:
+            if git("rev-parse", "--is-shallow-repository").strip() != b"false":
+                raise GuardError("incomplete-history")
+            if args.mode == "range":
+                tip = commit_id(args.tip)
+                tree = read_tree(tip)
+                base = None if args.base == "-" else commit_id(args.base)
+                inspect_range(base, tip, load_rules(tree), report)
+            else:
+                inspect_push(args.remote, report)
+    except GuardError as error:
+        report(str(error))
+    except (OSError, ValueError, csv.Error, RecursionError):
+        report("inspection-failed")
+    if failures:
+        print(f"data-guard: rejected ({failures})", file=sys.stderr)
+        return 1
+    print("data-guard: passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

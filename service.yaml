@@ -32,6 +32,12 @@ processes:
     graceful_stop:
       signals: [SIGTERM, SIGINT]
       deadline_ms: 20000
+telemetry:
+  format: json_stderr
+  request_metadata: [request_id, method, path, status, latency_ms]
+  event_targets: [web, "web::*"]
+  failure_details: 固定阶段或错误类别，panic 使用固定事件
+  repository_data_guard: docs/data-guard.md
 static:
   hosted_by: web
   root_from: paths.static_root

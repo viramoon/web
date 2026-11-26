@@ -42,6 +42,19 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 按照请求的 X-Request-Id 查找标准错误的 JSON 日志，可看到状态、方法、匹配的路由模板与耗时。发行与回滚由 fertile 管理。
 
+非标准方法统一记为 OTHER，未匹配路由记为 <unmatched>。启动或显式迁移失败时按日志中的 stage 检查相应配置、文件权限或服务状态。panic 只记固定事件，HTTP 请求内的 panic 返回通用 500。提高 RUST_LOG 级别可查看 web 自身的诊断事件，第三方追踪仍被过滤。日志和故障资料留在获准的私有目录。字段说明见[日志、样本与 CI 防护](docs/data-guard.md)。
+
+## 安装仓库数据防护
+
+每个克隆在首次提交或推送前安装钩子。需本地 Git 和 Python 3，无额外 Python 包。
+
+    sh scripts/install-data-guard-hooks.sh
+    python3 -B scripts/data_guard.py --show-paths staged
+    python3 -B scripts/data_guard.py --show-paths range origin/main HEAD
+    python3 -B -m unittest discover -s tests -p test_data_guard.py -v
+
+已有同名钩子或 core.hooksPath 时，保留原有配置，按[钩子接入说明](docs/data-guard.md#检查入口)把检查接入现有钩子。违规文件移到工作树外，并从待推送历史清除相应对象后再推送。CI 仅显示检查名和状态，遇到失败时用同一命令在隔离环境复测。生成器临时输出、数据库与测试日志都放在工作树外。
+
 ## finance 转发及恢复
 
 用同一示例数据目录启动 finance API 与 web 后，对比两个端点的 JSON。金额与数量保持各自契约类型。
