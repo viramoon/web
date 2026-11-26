@@ -80,6 +80,9 @@ def run(root, finance):
     }
     for name, content in license_files.items():
         (notices / name).write_bytes(content)
+    (static / "api").mkdir()
+    (static / "api" / "static-shadow.txt").write_bytes(b"static file under an API path")
+    (root / "outside.txt").write_bytes(b"file outside the static root")
     index = b"<!doctype html><title>SPA fallback</title>"
     (static / "index.html").write_bytes(index)
     (assets / "app-4da7eb55.js").write_bytes(b"export default 42;")
@@ -124,9 +127,21 @@ def run(root, finance):
             code, headers, body = get(port, path)
             assert code == 404 and body != index, (path, code, body[:100])
             assert headers["Cache-Control"] == "no-cache", (path, headers)
+        for path in (
+            "/dashboard/../third-party/missing", "/foo/../static/unknown",
+            "/dashboard/%2e%2e/third-party/missing", "/foo/%2e./static/unknown",
+            "/foo/../dashboard", "/foo/%2E%2E/index.html", "/../outside.txt", "/%2e%2e/outside.txt",
+        ):
+            code, headers, body = get(port, path)
+            assert code == 404 and body == b"", (path, code, body[:100])
+            assert headers["Cache-Control"] == "no-cache", (path, headers)
         code, headers, body = get(port, "/api/unknown-path")
         assert code == 404 and headers.get_content_type() == "application/json" and isinstance(json.loads(body), dict)
-        for path in ("/api", "/healthz", "/healthz/unknown-path"):
+        for path in (
+            "/api", "/healthz", "/healthz/unknown-path",
+            "/%61pi", "/%68ealthz", "/%61pi%2funknown-path", "/./%68ealthz//live",
+            "/%61pi/static-shadow.txt", "/api/%FF", "/%68ealthz/%FF", "/%61pi/%2e%2e/dashboard",
+        ):
             code, headers, body = get(port, path)
             assert code == 404 and headers.get_content_type() == "application/json", (path, code, body[:100])
             assert json.loads(body)["error"]["code"] == "not_found", (path, body[:100])
