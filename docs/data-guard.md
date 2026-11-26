@@ -33,9 +33,20 @@ web 对标准错误输出 JSON。请求完成事件只记录 UUID 请求 ID、�
 | fixture_paths | 匹配完整仓库相对路径的 shell glob。`*` 和 `?` 可跨路径段，也支持字符集合。 |
 | fixture_suffixes | 后缀语法同 blocked_suffixes，匹配时需登记来源。 |
 
-普通文件须为 UTF-8 文本，允许 BOM、制表符和换行。路径、后缀、大小、文件类型和魔数硬规则覆盖图片、压缩包、数据库文件、LFS 指针和符号链接。可识别的凭据、结构化日志、异常转储和结构化测试报告属于硬拒绝项。报告与日志专用目录同样被禁止。
+新增或修改的文件默认拒绝。普通文件须命中[路径与类型白名单](../scripts/data_guard.py)，并通过内容检查。表中未列的组合须登记合成来源。此白名单由 web 检查器维护，共享规则文件仍使用 v1 格式。
 
-fixture、回放、HTTP 转储和生成客户端样例等受管路径默认要求登记。内容检查识别行情表，以及 OHLC、报价、成交和盘口的字段组合与值。判定适用于独立 JSON，也适用于嵌在原始 HTTP 转储、测试输出、Markdown 或转义字符串里的样本。跨行凭据也会触发检查。命名为源码的文件仍检查独立的数据行，普通实现中的常量和内联构造由代码审查核对。
+| 路径 | 默认允许的文件 |
+| --- | --- |
+| `src/`、`tests/` | 递归允许 Rust 和目录 README。`tests/` 另允许 Python。 |
+| `docs/`、`crates/finance-client/src/` | 分别递归允许 Markdown 和 Rust。 |
+| `migrations/`、`config/`、`openapi/`、`.sqlx/` | 直接子文件分别允许 SQL、`.yaml`、JSON 和 `query-*.json`。另允许迁移和配置的 README 与 `openapi/finance.commit`。 |
+| `scripts/`、`scripts/openapi/` | 直接子文件分别允许 Shell 与 Python、Java 与 patch。 |
+| `.github/workflows/`、`.github/ISSUE_TEMPLATE/` | 直接子文件允许 YAML，issue 模板另允许 Markdown。PR 模板按确切路径放行。 |
+| 根目录和其他工具文件 | 按确切路径登记，包括 README、RUNBOOK、AGENTS、Rust 构建清单、服务清单、生成客户端清单和钩子。 |
+
+普通文件须为 UTF-8 文本，允许 BOM、制表符和换行。禁止路径、后缀、大小、Git 对象类型和魔数仍按硬规则检查。可识别的凭据、Cargo/libtest 文本或 JSON 报告、JUnit、异常转储及带时间戳和级别的日志均属硬拒绝项。报告和日志专用目录也被禁止。Markdown 代码块、引用及其他文本内嵌记录仍执行相同检查。
+
+fixture、回放、原始 HTTP 转储和生成客户端样例须登记合成来源。内容检查识别行情表，以及 OHLC、报价、成交和盘口的字段组合与值，覆盖独立 JSON、嵌入文本和转义字符串。命名为源码的文件仍检查独立的数据行，普通实现中的常量和内联构造由代码审查核对。
 
 ## 合成来源
 

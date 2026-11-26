@@ -18,6 +18,29 @@ RULES = ".data-guard/rules.json"
 SOURCES = ".data-guard/sources.json"
 MAX_POLICY_BYTES = 256 * 1024
 REGULAR_MODES = {b"100644", b"100755"}
+# Ordinary tracked files. Other paths require a source record in the same tree.
+ALLOWED_FILES = frozenset({
+    ".agents/skills/readme.md", ".data-guard/rules.json", ".data-guard/sources.json",
+    ".githooks/pre-commit", ".githooks/pre-push", ".github/pull_request_template.md",
+    ".gitignore", "agents.md", "build.rs", "cargo.lock", "cargo.toml", "readme.md", "runbook.md",
+    "rust-toolchain.toml", "service.yaml", "config/readme.md", "migrations/readme.md",
+    "crates/finance-client/cargo.toml", "openapi/finance.commit",
+})
+# Directory prefix, filename patterns, and whether subdirectories are allowed.
+ALLOWED_FILE_TYPES = (
+    ("src/", ("*.rs", "readme.md"), True),
+    ("tests/", ("*.rs", "*.py", "readme.md"), True),
+    ("docs/", ("*.md",), True),
+    ("migrations/", ("*.sql",), False),
+    ("config/", ("*.yaml",), False),
+    ("openapi/", ("*.json",), False),
+    ("crates/finance-client/src/", ("*.rs",), True),
+    ("scripts/", ("*.sh", "*.py"), False),
+    ("scripts/openapi/", ("*.java", "*.patch"), False),
+    (".sqlx/", ("query-*.json",), False),
+    (".github/workflows/", ("*.yml", "*.yaml"), False),
+    (".github/issue_template/", ("*.md", "*.yml", "*.yaml"), False),
+)
 OID = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 VALUE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
@@ -55,8 +78,16 @@ WEB_CAPTURE_FIELDS = (
     {"method", "headers", "body"},
     {"request", "response", "url"},
 )
-LOG_FIELDS = {"timestamp", "level", "fields"}
+LOG_FIELDS = (
+    {"timestamp", "level", "fields"},
+    {"timestamp", "level", "message"},
+    {"timestamp", "severity", "message"},
+    {"time", "level", "msg"},
+    {"ts", "level", "msg"},
+)
 REPORT_FIELDS = {"testResults", "numFailedTests"}
+JSON_OBJECT_START = re.compile(r'\{(?=\s*")')
+JSON_DECODER = json.JSONDecoder(parse_int=str, parse_float=str)
 PRIVATE_KEY = re.compile(
     r"(?m)-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----"
     r"(?:\r?$|(?:\r?\n|\\n)[a-zA-Z0-9+/]{24,})"
@@ -79,9 +110,32 @@ CREDENTIAL = re.compile(
 PATH_CREDENTIAL = re.compile(
     rf"(?i)\b(?:{SECRET_FIELD}|bearer|basic)[=:/ _-]+[a-z0-9][a-z0-9._~+=-]{{11,}}"
 )
-TEST_REPORT = re.compile(r"(?is)^\s*(?:<\?xml.*?\?>\s*)?<(?:testsuite|testsuites)(?=[\s>])")
+TRANSCRIPT_LINE = r"^[ \t]*(?:>[ \t]*)*"
+BLOCK_QUOTE = re.compile(r"(?m)^[ \t]*(?:>[ \t]*)+")
+TEST_REPORT = re.compile(
+    rf"""(?imx){TRANSCRIPT_LINE}
+    (?: (?:<\?xml[^\r\n]*?\?>[ \t]*)?<testsuites?(?=[\s>])
+      | test[ ]result:[ \t]+(?:ok|FAILED)\b
+      | test[ \t]+\S+[ \t]+\.\.\.[ \t]+(?:ok|FAILED|ignored)\b
+      | Running[ \t]+(?:unittests|tests/|doc-tests\b)
+      | Compiling[ \t]+\S+[ \t]+v\d+\.\d+\.\d+
+      | Finished[ \t]+(?:\x60[^\x60\r\n]+\x60|\S+)[ \t]+profile\b[^\r\n]*?target\(s\)[ \t]+in\b
+    )
+    """
+)
+LOG_LINE = re.compile(
+    rf"(?im){TRANSCRIPT_LINE}\[?\d{{4}}-\d{{2}}-\d{{2}}[T ]\d{{2}}:\d{{2}}:\d{{2}}"
+    r"(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\]?[ \t]+(?:[|-][ \t]*)?"
+    r"\[?(?:TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)\b"
+)
 EXCEPTION_DUMP = re.compile(
-    r"(?m)^(?:Traceback \(most recent call last\):|thread '[^'\r\n]+' (?:\(\d+\) )?panicked at )"
+    rf"(?m){TRANSCRIPT_LINE}"
+    r"(?:Traceback \(most recent call last\):|thread '[^'\r\n]+' (?:\(\d+\) )?panicked at )"
+)
+HTTP_DUMP = re.compile(
+    rf"(?m){TRANSCRIPT_LINE}"
+    r"(?:HTTP/[123](?:\.\d)?[ \t]+\d{3}\b"
+    r"|(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|CONNECT|TRACE)[ \t]+\S+[ \t]+HTTP/[123](?:\.\d)?\b)"
 )
 ARTIFACT_UPLOAD = re.compile(r"(?im)^[ \t]*(?:-[ \t]+)?uses:[ \t]*['\"]?actions/upload-artifact@")
 TABLE_HEADERS = (
@@ -293,44 +347,87 @@ def credential_in_path(path):
     return CREDENTIAL.search(decoded) or PATH_CREDENTIAL.search(decoded)
 
 
+def allowed_file_type(path):
+    if path in ALLOWED_FILES:
+        return True
+    for prefix, patterns, recursive in ALLOWED_FILE_TYPES:
+        if path.startswith(prefix):
+            relative = path[len(prefix):]
+            if recursive or "/" not in relative:
+                name = relative.rsplit("/", 1)[-1]
+                if any(fnmatchcase(name, pattern) for pattern in patterns):
+                    return True
+    return False
+
+
+def json_objects(value):
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            yield item
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+
+
+def json_diagnostic_reason(text):
+    # Recognize records anywhere in a text stream. Skip decoded spans and
+    # cap work on overlapping malformed candidates.
+    end = 0
+    budget = 4 * len(text)
+    for match in JSON_OBJECT_START.finditer(text):
+        start = match.start()
+        if start < end:
+            continue
+        try:
+            value, end = JSON_DECODER.raw_decode(text, start)
+        except json.JSONDecodeError as error:
+            budget -= max(1, error.pos - start)
+            if budget < 0:
+                return "inspection-failed"
+            continue
+        except RecursionError:
+            return "inspection-failed"
+        for record in json_objects(value):
+            keys = record.keys()
+            if any(group <= keys for group in LOG_FIELDS):
+                return "log-export"
+            if REPORT_FIELDS <= keys:
+                return "test-report"
+            if (record.get("type") in ("suite", "test")
+                    and record.get("event") in ("started", "ok", "failed", "ignored", "timeout", "allowed_fail")):
+                return "test-report"
+            if record.get("type") == "bench" and {"name", "median", "deviation"} <= keys:
+                return "test-report"
+            if record.get("reason") in (
+                "compiler-artifact", "compiler-message", "build-script-executed", "build-finished",
+            ):
+                return "test-report"
+    return None
+
+
 def json_content_reason(text, *, openapi=False):
     if not text.lstrip().startswith(("{", "[")):
         return None
     try:
-        pending = [json.loads(text, parse_int=str, parse_float=str)]
+        value = JSON_DECODER.decode(text.lstrip())
     except (ValueError, RecursionError):
         # Also catch field combinations in line-delimited JSON.
         def has_fields(group):
             return all(f'"{key}"' in text for key in group)
 
-        if has_fields(LOG_FIELDS):
-            return "log-export"
-        if has_fields(REPORT_FIELDS):
-            return "test-report"
         if any(has_fields(group) for group in WEB_CAPTURE_FIELDS):
             return "fixture-source-required"
         return None
-    sample = False
-    while pending:
-        value = pending.pop()
-        if isinstance(value, dict):
-            if LOG_FIELDS <= value.keys():
-                return "log-export"
-            if REPORT_FIELDS <= value.keys():
-                return "test-report"
-            fields = {normal_field(key) for key, item in value.items() if not isinstance(item, dict)}
-            if any(group <= fields for group in MARKET_FIELDS):
-                sample = True
-            if any(group <= value.keys() for group in WEB_CAPTURE_FIELDS):
-                sample = True
-            if openapi and {"example", "examples"}.intersection(value):
-                sample = True
-            if "chart" in value and '"timestamp"' in text and '"indicators"' in text:
-                sample = True
-            pending.extend(value.values())
-        elif isinstance(value, list):
-            pending.extend(value)
-    return "fixture-source-required" if sample else None
+    for record in json_objects(value):
+        fields = {normal_field(key) for key, item in record.items() if not isinstance(item, dict)}
+        if (any(group <= fields for group in MARKET_FIELDS)
+                or any(group <= record.keys() for group in WEB_CAPTURE_FIELDS)
+                or (openapi and {"example", "examples"}.intersection(record))
+                or ("chart" in record and '"timestamp"' in text and '"indicators"' in text)):
+            return "fixture-source-required"
+    return None
 
 
 def inspect_blob(path, entry, rules, source):
@@ -343,8 +440,6 @@ def inspect_blob(path, entry, rules, source):
         return "blocked-path"
     if normalized.endswith(rules.blocked_suffixes):
         return "blocked-extension"
-    if entry.mode == b"160000":
-        return None  # The submodule owns its own objects and policy.
     if entry.mode not in REGULAR_MODES:
         return "blocked-entry-type"
     if blob_size(entry) > rules.max_blob_bytes:
@@ -359,25 +454,31 @@ def inspect_blob(path, entry, rules, source):
     if CONTROL.search(text):
         return "non-text"
     # Recognize field shapes in plain text and in quoted or escaped payloads.
-    content = unescape(text).replace(r'\"', '"')
+    content = BLOCK_QUOTE.sub("", unescape(text)).replace(r'\"', '"')
     if PRIVATE_KEY.search(text) or CREDENTIAL.search(content.replace(r"\n", "\n")):
         return "credential-material"
     if TEST_REPORT.search(text):
         return "test-report"
-    if EXCEPTION_DUMP.search(text):
+    if LOG_LINE.search(text) or EXCEPTION_DUMP.search(text):
         return "log-export"
     if normalized.startswith(".github/workflows/") and ARTIFACT_UPLOAD.search(text):
         return "artifact-upload"
-    json_reason = json_content_reason(text, openapi=normalized.startswith("openapi/"))
-    if json_reason in {"log-export", "test-report"}:
-        return json_reason
+    diagnostic = json_diagnostic_reason(text)
+    if diagnostic:
+        return diagnostic
+    if content != text:
+        diagnostic = json_diagnostic_reason(content.replace(r"\n", "\n"))
+        if diagnostic:
+            return diagnostic
     if source:
         if hashlib.sha256(data).hexdigest() != source["sha256"]:
             return "fixture-digest"
         return None
-    if (normalized.endswith(rules.fixture_suffixes)
+    if (not allowed_file_type(normalized)
+            or normalized.endswith(rules.fixture_suffixes)
             or any(fnmatchcase(normalized, pattern) for pattern in rules.fixture_paths)
-            or json_reason == "fixture-source-required"
+            or HTTP_DUMP.search(text)
+            or json_content_reason(text, openapi=normalized.startswith("openapi/"))
             or looks_like_table(text)):
         return "fixture-source-required"
     # In implementation files, check lines shaped like data instead of

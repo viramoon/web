@@ -228,6 +228,113 @@ class DataGuardTests(unittest.TestCase):
         self.git("add", path)
         self.assert_rejected(self.guard("staged"), "fixture-digest")
 
+    def test_path_and_type_allowlist_defaults_to_verified_sources(self):
+        allowed = {
+            "README.md": "# Synthetic repo",
+            "src/nested/lib.rs": "pub fn fixture() {}",
+            "tests/nested/probe.py": "assert 1 == 1",
+            "docs/nested/guide.md": "# Synthetic guide",
+            "migrations/20990101000000_fixture.sql": "SELECT 1",
+            "openapi/contract.json": '{"openapi":"3.1.0"}',
+            "crates/finance-client/src/nested/query.rs": "pub fn query() {}",
+            ".github/workflows/check.yml": "name: Fixture check",
+        }
+        for path, content in allowed.items():
+            self.write(path, content)
+        self.git("add", ".")
+        self.git("commit", "-qm", "Add ordinary repository files")
+
+        payload = "Plain synthetic text"
+        for path in ("notes.txt", "notes.md", "src/notes.txt", "docs/helper.rs",
+                     "ops/task.py", "migrations/nested/fixture.sql", "tests/probe.jsonl"):
+            with self.subTest(path=path):
+                self.write(path, payload)
+                self.git("add", path)
+                self.assert_rejected(self.guard("staged"), "fixture-source-required")
+                self.git("rm", "-f", path)
+
+        path = "notes.txt"
+        generator = "tests/gen_notes.py"
+        self.write(generator, f"print({payload!r}, end='')")
+        generated = self.run_command(sys.executable, generator, check=True).stdout
+        self.write(path, generated)
+        self.write(".data-guard/sources.json", json.dumps({
+            "version": 1,
+            "fixtures": {path: {
+                "sha256": hashlib.sha256(generated).hexdigest(),
+                "generator": generator,
+                "seed": "fixed",
+                "source": "Fixed text emitted by tests/gen_notes.py.",
+            }},
+        }))
+        self.git("add", ".")
+        self.git("commit", "-qm", "Add registered text outside the allowlist")
+        result = self.guard("range", self.base, "HEAD")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_native_reports_and_embedded_logs_are_hard_rejected(self):
+        cargo = "\n".join((
+            "   Compiling smoke v0.0.0",
+            "     Running unittests src/lib.rs (target/debug/deps/smoke)",
+            "running 1 test",
+            f"test {MARKER} ... ok",
+            "test result: ok. 1 passed; 0 failed; 0 ignored",
+        ))
+        libtest = "\n".join(map(json.dumps, (
+            dict(type="suite", event="started", test_count=1),
+            dict(type="test", name=MARKER, event="ok"),
+            dict(event="ok", type="suite", passed=1, failed=0),
+        )))
+        log = json.dumps({
+            "timestamp": "2030-01-01T00:00:00Z",
+            "level": "WARN",
+            "fields": {"message": MARKER},
+        }, indent=2)
+        fence = chr(96) * 3
+        cases = (
+            ("notes.txt", cargo, "test-report"),
+            ("docs/guide.md", "An attached result\n" + cargo, "test-report"),
+            ("notes.txt", libtest, "test-report"),
+            ("tests/fixture.jsonl", libtest, "test-report"),
+            ("docs/guide.md", f"A pasted log\n{fence}json\n{log}\n{fence}", "log-export"),
+            ("docs/guide.md", "\n".join("> " + line for line in log.splitlines()), "log-export"),
+            ("docs/guide.md", "Run record: " + json.dumps({"raw": log}), "log-export"),
+            ("docs/guide.md", "> 2030-01-01T00:00:00Z INFO web: " + MARKER, "log-export"),
+            ("docs/guide.md", "2030-01-01 00:00:00.123 | WARN | " + MARKER, "log-export"),
+            ("docs/guide.md", "Captured request\nGET /synthetic HTTP/1.1\nHost: loopback\n",
+             "fixture-source-required"),
+        )
+        for path, payload, reason in cases:
+            with self.subTest(path=path, reason=reason):
+                self.write(path, payload)
+                self.git("add", path)
+                self.assert_rejected(self.git("commit", "-qm", "Add captured output", check=False),
+                                     reason)
+                self.assertEqual(self.git("rev-parse", "HEAD").stdout.decode().strip(), self.base)
+                self.git("rm", "-f", path)
+
+        for path, payload, reason in (
+            ("tests/fixture.jsonl", libtest, "test-report"),
+            ("docs/guide.md", log, "log-export"),
+        ):
+            with self.subTest(registered=path):
+                generator = "tests/gen_output.py"
+                self.write(generator, f"import sys\nsys.stdout.buffer.write(bytes.fromhex({payload.encode().hex()!r}))")
+                data = self.run_command(sys.executable, generator, check=True).stdout
+                self.write(path, data)
+                self.write(".data-guard/sources.json", json.dumps({
+                    "version": 1,
+                    "fixtures": {path: {
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "generator": generator,
+                        "seed": "fixed",
+                        "source": "Fixed synthetic output emitted by tests/gen_output.py.",
+                    }},
+                }))
+                self.git("add", ".")
+                self.assert_rejected(self.guard("staged"), reason)
+                self.git("rm", "-f", path)
+
     def test_ci_check_hides_success_and_failure_output(self):
         for status in (0, 5):
             with self.subTest(status=status):
