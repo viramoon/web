@@ -70,6 +70,8 @@ Cookie 使用 `HttpOnly; Secure; SameSite=Strict; Path=/`，作用域为当前�
 
 更新、吊销和发起测试需要 `If-Match: "1"` 形式的当前配置 revision。缺失返回 428，格式错误返回 422，旧版本或状态冲突返回 409。返回单个配置对象的写接口提供对应的 ETag。请求超时后先重新读取配置，核对 revision、版本和最近测试 ID，再决定是否重试。替换候选或从最新 revision 发起新的测试时，原待定测试会被标记为 `superseded`。
 
-catalog 的公共来源覆盖 Binance Spot、Binance USDⓈ-M、Hyperliquid Perp，另有受授权的期权占位。配置只接收 catalog 各条目的标的枚举。凭据仅接收 16 至 4096 字节的 ASCII token。服务器路径、任意测试目标、`.env` 导入和证书文件上传当前均不接受。凭据服务未配置或存储失败时返回 503。响应、日志和错误不含凭据原文，请求正文不写入日志。
+catalog 的公共来源覆盖 Binance Spot、Binance USDⓈ-M、Hyperliquid Perp，另有受授权的期权占位。配置只接收 catalog 各条目的标的枚举。`configure` 只允许 `action` 和 `settings`，`disable` 只允许 `action`。多余字段返回 422。
+
+凭据 token 必须为 16 至 4096 个 ASCII 字符。首字符是英文字母或数字，其余字符可另外使用 `-`、`.`、`_`、`~`、`+`，末尾可有最多两个 `=`。服务器路径、任意测试目标、`.env` 内容和 PEM 内容均不接受。密文存储未配置或存储失败时，凭据录入的 PUT 返回 503。凭据吊销的 DELETE 只需数据库可用并通过鉴权和请求校验。响应、日志和错误不含凭据原文，请求正文不写入日志。
 
 W1 的连接测试适配器会将合法候选标记为 `unavailable`，缺少必需凭据的候选标记为 `failed`。测试成功才在同一个数据库事务中退役原版本并提升候选，失败保留原活动版本。真实连接验证、数据流、自选列表与通知分别由后续 W2/F、U 和 W3 阶段接入。

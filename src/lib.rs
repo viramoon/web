@@ -23,6 +23,7 @@ use chrono::{DateTime, Utc};
 use config::Settings;
 use database::{Database, DbStatus};
 use finance::{Finance, FinanceStatus};
+use integrations::StrictUpdateSchema;
 use serde::Serialize;
 use std::{
     sync::Arc,
@@ -378,7 +379,8 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
         DbStatus,
         FinanceStatus,
         market::MarketSummary
-    ))
+    )),
+    modifiers(&StrictUpdateSchema)
 )]
 pub struct WebApi;
 

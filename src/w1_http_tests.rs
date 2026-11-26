@@ -238,6 +238,84 @@ async fn legacy_backtests_page_and_bearer_requests_reach_their_handlers() {
 }
 
 #[tokio::test]
+async fn integration_patch_rejects_fields_outside_the_selected_action() {
+    let (app, admin, _fixture) = test_app();
+    let path = format!("{INTEGRATIONS}/{}", Uuid::new_v4());
+    let marker = format!("w1-extra-field-{}", Uuid::new_v4().simple());
+    for (case, body) in [
+        (
+            "disable with an unexpected target",
+            json!({"action": "disable", "target": marker}),
+        ),
+        (
+            "disable with configure settings",
+            json!({"action": "disable", "settings": {"symbol": "SPX"}}),
+        ),
+        (
+            "configure with an unexpected target",
+            json!({"action": "configure", "settings": {"symbol": "SPX"}, "target": marker}),
+        ),
+        (
+            "configure with an unexpected settings field",
+            json!({"action": "configure", "settings": {"symbol": "SPX", "path": marker}}),
+        ),
+    ] {
+        let response = send(
+            &app,
+            Request::patch(&path)
+                .header(header::AUTHORIZATION, admin.clone())
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::IF_MATCH, "\"1\""),
+            body.to_string(),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{case}"
+        );
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["code"], "invalid_request", "{case}");
+        assert!(!body.to_string().contains(&marker), "{case}");
+    }
+}
+
+#[tokio::test]
+async fn credential_upload_rejects_path_dotenv_and_pem_token_forms() {
+    let (app, admin, _fixture) = test_app();
+    let path = format!("{INTEGRATIONS}/{}/credential", Uuid::new_v4());
+    let marker = format!("w1-invalid-token-{}", Uuid::new_v4().simple());
+    for (case, token) in [
+        ("absolute path", format!("/tmp/{marker}.env")),
+        ("relative path", format!("../{marker}.env")),
+        ("dotenv filename", format!(".env.{marker}")),
+        ("dotenv assignment", format!("WEB_ADMIN_TOKEN={marker}\n")),
+        (
+            "PEM contents",
+            format!("-----BEGIN CERTIFICATE-----\n{marker}\n-----END CERTIFICATE-----"),
+        ),
+    ] {
+        let response = send(
+            &app,
+            Request::put(&path)
+                .header(header::AUTHORIZATION, admin.clone())
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::IF_MATCH, "\"1\""),
+            json!({"api_token": token}).to_string(),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{case}"
+        );
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["code"], "invalid_request", "{case}");
+        assert!(!body.to_string().contains(&marker), "{case}");
+    }
+}
+
+#[tokio::test]
 async fn session_cookie_same_origin_csrf_and_logout_work_through_router() {
     let (app, admin, _fixture) = test_app();
     for origin in [None, Some("https://other.example.test")] {

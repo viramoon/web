@@ -95,7 +95,9 @@ curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 
 ## 集成配置及凭据
 
-启用凭据录入时，成对设置 `WEB_CREDENTIAL_DIR` 与 `WEB_CREDENTIAL_RECIPIENT_PUBLIC_KEY_FILE`，然后重启 web。前者是 web 运行身份所有的 0700 持久绝对目录，置于静态资源树之外，使用支持原子重命名和目录同步的本地文件系统。后者是受部署保护的 RSA 公钥 PEM 绝对路径，采用 `BEGIN PUBLIC KEY`，RSA 长度 2048 至 8192 位。公钥由 web 运行身份或 root 所有，组与其他用户不得写入。由获授权的接收方保管私钥，仅将对应公钥交给 web。未配置这两个变量时，凭据写接口返回 503，管理和公共接口可照常使用。
+启用凭据录入时，成对设置 `WEB_CREDENTIAL_DIR` 与 `WEB_CREDENTIAL_RECIPIENT_PUBLIC_KEY_FILE`，然后重启 web。前者是 web 运行身份所有的 0700 持久绝对目录，置于静态资源树之外，使用支持原子重命名和目录同步的本地文件系统。后者是受部署保护的 RSA 公钥 PEM 绝对路径，采用 `BEGIN PUBLIC KEY`，RSA 长度 2048 至 8192 位。公钥由 web 运行身份或 root 所有，组与其他用户不得写入。由获授权的接收方保管私钥，仅将对应公钥交给 web。
+
+未配置密文存储时，有效的 `PUT /api/v1/integrations/{id}/credential` 录入请求返回 503。`DELETE /api/v1/integrations/{id}/credential` 只更新 PostgreSQL 中的吊销状态。管理员鉴权、请求体、`If-Match` 校验及数据库事务均成功时返回 200。
 
 web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。0600 密文文件命名为 `<凭据 UUID>.jwe`，受保护头含 `credential_id` 及 `kid`。后者是公钥 DER SPKI 的 SHA-256，经 base64url 编码且省略填充。数据库文件引用应与头中的 UUID 一致。消费者的凭据交付将在对应集成接入时配置，使用独立的运行身份或受控交付路径。
 

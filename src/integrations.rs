@@ -15,7 +15,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::{future::Future, pin::Pin, sync::Arc};
 use store::{Change, CredentialRef, Error, Integration, Outcome, TestInput, TestView};
-use utoipa::ToSchema;
+use utoipa::{
+    Modify, ToSchema,
+    openapi::{OpenApi, RefOr, Schema, schema::AdditionalProperties},
+};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -173,13 +176,40 @@ pub(crate) struct Create {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Update {
     Configure { settings: Settings },
-    Disable,
+    // The struct variant makes Serde enforce deny_unknown_fields for disable.
+    Disable {},
+}
+
+pub(crate) struct StrictUpdateSchema;
+
+impl Modify for StrictUpdateSchema {
+    fn modify(&self, spec: &mut OpenApi) {
+        let schema = spec
+            .components
+            .as_mut()
+            .and_then(|components| components.schemas.get_mut("Update"));
+        let Some(RefOr::T(Schema::OneOf(update))) = schema else {
+            panic!("Update must export a oneOf request schema");
+        };
+        // Utoipa 5.5 does not propagate deny_unknown_fields to enum branches.
+        for variant in &mut update.items {
+            let RefOr::T(Schema::Object(object)) = variant else {
+                panic!("Update variants must export object schemas");
+            };
+            object.additional_properties = Some(Box::new(AdditionalProperties::FreeForm(false)));
+        }
+    }
 }
 
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Credential {
-    #[schema(write_only, min_length = 16, max_length = 4096)]
+    #[schema(
+        write_only,
+        min_length = 16,
+        max_length = 4096,
+        pattern = r"^[A-Za-z0-9][A-Za-z0-9._~+-]*={0,2}(?![\s\S])"
+    )]
     api_token: String,
 }
 
@@ -425,7 +455,7 @@ pub(crate) async fn update(
             let connector = stored_connector(&store::get(&s.db, id).await?)?;
             Change::Settings(settings.validate(connector)?)
         }
-        Update::Disable => Change::Disable,
+        Update::Disable {} => Change::Disable,
     };
     let integration = store::change(&s.db, id, revision, change).await?;
     Ok(integration_response(StatusCode::OK, integration))
@@ -544,4 +574,94 @@ pub(crate) async fn get_test(
     path: Result<Path<String>, PathRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(store::get_test(&s.db, request_id(path)?).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn integration_request_schemas_reject_disallowed_fields_and_token_syntax() {
+        let spec = serde_json::to_value(crate::openapi()).unwrap();
+        let schemas = &spec["components"]["schemas"];
+        let credential = &schemas["Credential"];
+        assert_eq!(credential["additionalProperties"], false);
+        assert_eq!(credential["required"], json!(["api_token"]));
+        assert_eq!(
+            credential["properties"]["api_token"],
+            json!({
+                "type": "string",
+                "writeOnly": true,
+                "minLength": 16,
+                "maxLength": 4096,
+                "pattern": r"^[A-Za-z0-9][A-Za-z0-9._~+-]*={0,2}(?![\s\S])"
+            })
+        );
+
+        let variants = schemas["Update"]["oneOf"].as_array().unwrap();
+        assert_eq!(variants.len(), 2);
+        for (action, fields) in [
+            ("configure", &["action", "settings"][..]),
+            ("disable", &["action"][..]),
+        ] {
+            let variant = variants
+                .iter()
+                .find(|variant| variant["properties"]["action"]["enum"] == json!([action]))
+                .unwrap();
+            assert_eq!(variant["additionalProperties"], false, "{action}");
+            let properties = variant["properties"].as_object().unwrap();
+            assert_eq!(properties.len(), fields.len(), "{action}");
+            let required = variant["required"].as_array().unwrap();
+            assert_eq!(required.len(), fields.len(), "{action}");
+            for field in fields {
+                assert!(properties.contains_key(*field), "{action}.{field}");
+                assert!(
+                    required.iter().any(|name| name == *field),
+                    "{action}.{field}"
+                );
+            }
+        }
+        assert_eq!(schemas["Settings"]["additionalProperties"], false);
+    }
+
+    #[test]
+    fn integration_update_accepts_each_documented_action() {
+        for (body, expected) in [
+            (
+                r#"{"action":"configure","settings":{"symbol":"BTCUSDT"}}"#,
+                "configure",
+            ),
+            (r#"{"action":"disable"}"#, "disable"),
+        ] {
+            let request = serde_json::from_str::<Update>(body).unwrap();
+            let actual = match request {
+                Update::Configure { .. } => "configure",
+                Update::Disable { .. } => "disable",
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn credential_token_validator_enforces_schema_boundaries() {
+        for (token, valid) in [
+            ("a".repeat(15), false),
+            ("a".repeat(16), true),
+            ("9azAZ._~+-012345=".into(), true),
+            ("9azAZ._~+-012345==".into(), true),
+            (format!("{}==", "z".repeat(4094)), true),
+            ("z".repeat(4097), false),
+            (".0123456789abcdef".into(), false),
+            ("a0123=456789abcdef".into(), false),
+            ("a0123456789abcdef===".into(), false),
+            ("a0123456789abcde/".into(), false),
+            ("a0123456789abcdeé".into(), false),
+            ("a0123456789abcdef\n".into(), false),
+        ] {
+            let credential =
+                serde_json::from_value::<Credential>(json!({"api_token": token})).unwrap();
+            assert_eq!(credential.validate().is_ok(), valid);
+        }
+    }
 }

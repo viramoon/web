@@ -2137,7 +2137,8 @@
             "type": "string",
             "writeOnly": true,
             "maxLength": 4096,
-            "minLength": 16
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._~+-]*={0,2}(?![\\s\\S])"
           }
         },
         "additionalProperties": false
@@ -2970,7 +2971,8 @@
               "settings": {
                 "$ref": "#/components/schemas/Settings"
               }
-            }
+            },
+            "additionalProperties": false
           },
           {
             "type": "object",
@@ -2984,7 +2986,8 @@
                   "disable"
                 ]
               }
-            }
+            },
+            "additionalProperties": false
           }
         ]
       },
