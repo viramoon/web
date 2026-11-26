@@ -8,17 +8,17 @@ import json
 import os
 from pathlib import Path
 import secrets
-import shutil
 import subprocess
 import tempfile
 import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from core_http import reserve_port
 from finance_resilience import SAMPLE, SUMMARY, READY, STATUS, MARKET
+from http_fixture import local_http, web_env
 
 
 JOBS = "/api/v1/backtests"
@@ -37,7 +37,7 @@ def request(port, path, method="GET", headers=None, data=None):
     url = f"http://127.0.0.1:{port}{path}"
     req = Request(url, method=method, headers=headers or {}, data=data)
     try:
-        response = urlopen(req, timeout=8)
+        response = local_http.open(req, timeout=8)
     except HTTPError as err:
         response = err
     with response:
@@ -146,20 +146,12 @@ def read_routes(port, mock):
 def web(root, mock, file, max_requests):
     # Inherited admin secrets have no role in the fixture: only a randomly
     # generated local credential in a 0600 file is used.
-    conf = root / "config"
-    conf.mkdir(exist_ok=True)
-    shutil.copyfile("config/base.yaml", conf / "base.yaml")
-    (conf / "cloudbox.yaml").write_text(json.dumps({
-        "security": {"admin_token_file": str(file), "max_requests": max_requests, "window_ms": 1600},
-        "finance": {"request_timeout_ms": 350, "max_retries": 2, "backoff_ms": 10},
-    }))
     (root / "index.html").write_text("<!doctype html>")
     port = reserve_port()
-    env = {k: v for k, v in os.environ.items() if k not in {"WEB_ADMIN_TOKEN", "WEB_ADMIN_TOKEN_FILE"}}
-    env.update(FERTILE_PROFILE="cloudbox", WEB_CONFIG_DIR=str(conf), WEB_STATIC_ROOT=str(root),
-               WEB_PORT=str(port), WEB_BIND_HOST="127.0.0.1", WEB_AUTO_MIGRATE="false",
-               DATABASE_URL="postgresql://127.0.0.1:1/write_test",
-               FINANCE_BASE_URL=f"http://127.0.0.1:{mock.server_port}", RUST_LOG="info")
+    env = web_env(root, port, mock.server_port, token_file=file, profile={
+        "security": {"max_requests": max_requests, "window_ms": 1600},
+        "finance": {"request_timeout_ms": 350, "max_retries": 2, "backoff_ms": 10},
+    })
     # A raw token env variable must never enable a disabled file-backed write path.
     env["WEB_ADMIN_TOKEN"] = mock.env_decoy
     with (root / "web.log").open("ab") as log:
@@ -270,7 +262,7 @@ if __name__ == "__main__":
         worker = threading.Thread(target=mock.serve_forever, daemon=True)
         worker.start()
         try:
-            with tempfile.TemporaryDirectory() as folder:
+            with tempfile.TemporaryDirectory(dir="/tmp") as folder:
                 run(Path(folder), mock)
         finally:
             mock.resume.set()

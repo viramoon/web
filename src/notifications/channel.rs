@@ -96,6 +96,12 @@ pub trait NotificationChannel: Sync + Send {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChannelConfigError(&'static str);
 
+impl ChannelConfigError {
+    pub fn reason(self) -> &'static str {
+        self.0
+    }
+}
+
 impl fmt::Display for ChannelConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.0)

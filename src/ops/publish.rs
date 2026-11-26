@@ -6,7 +6,6 @@ use super::{
     },
     read_snapshot,
 };
-use crate::config::ConfigError;
 use chrono::Utc;
 use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -71,7 +70,7 @@ impl Inputs {
         &self,
         operation: &str,
         stream: Option<&ApprovedStream>,
-    ) -> Result<T, ConfigError> {
+    ) -> Result<T, &'static str> {
         let mut command = Command::new(&self.wal_bin);
         command
             .arg("--data-root")
@@ -98,7 +97,7 @@ impl Inputs {
             .await
             .map_err(|_| "could not read the F3 quality tool result")?;
         if stdout.len() as u64 > QUALITY_MAX_BYTES {
-            return Err("the F3 quality tool result exceeds the size limit".into());
+            return Err("the F3 quality tool result exceeds the size limit");
         }
         if !child
             .wait()
@@ -106,12 +105,12 @@ impl Inputs {
             .map_err(|_| "could not wait for the F3 quality tool")?
             .success()
         {
-            return Err("the F3 quality tool returned a failure".into());
+            return Err("the F3 quality tool returned a failure");
         }
-        serde_json::from_slice(&stdout).map_err(|_| "invalid F3 quality tool result".into())
+        serde_json::from_slice(&stdout).map_err(|_| "invalid F3 quality tool result")
     }
 
-    async fn snapshot(&self) -> Result<QualityFile, ConfigError> {
+    async fn snapshot(&self) -> Result<QualityFile, &'static str> {
         let mut streams = Vec::new();
         let mut encoded_size = 0;
         if !self.streams.is_empty() {
@@ -137,9 +136,11 @@ impl Inputs {
                     reports,
                     watermarks: Some(watermarks),
                 };
-                encoded_size += serde_json::to_vec(&stream)?.len() as u64;
+                let encoded = serde_json::to_vec(&stream)
+                    .map_err(|_| "could not encode the F3 quality stream")?;
+                encoded_size += encoded.len() as u64;
                 if encoded_size > QUALITY_MAX_BYTES {
-                    return Err("the aggregate quality snapshot exceeds the size limit".into());
+                    return Err("the aggregate quality snapshot exceeds the size limit");
                 }
                 streams.push(stream);
             }
@@ -150,7 +151,7 @@ impl Inputs {
             streams,
         };
         if !snapshot.valid() {
-            return Err("invalid aggregate quality snapshot".into());
+            return Err("invalid aggregate quality snapshot");
         }
         Ok(snapshot)
     }
@@ -162,10 +163,11 @@ impl OpsConfig {
         &self,
         config_path: &Path,
         static_root: &Path,
-    ) -> Result<(), ConfigError> {
-        self.validate(static_root)?;
+    ) -> Result<(), &'static str> {
+        self.validate(static_root)
+            .map_err(|_| "invalid operations status configuration")?;
         if !valid_path(config_path) {
-            return Err("quality input configuration requires an absolute file path".into());
+            return Err("quality input configuration requires an absolute file path");
         }
         let (inputs, _) = read_snapshot::<Inputs>(config_path, INPUTS_MAX_BYTES)
             .filter(|(inputs, _)| inputs.valid())
@@ -183,11 +185,11 @@ impl OpsConfig {
             .canonicalize()
             .is_ok_and(|root| parent.starts_with(root))
         {
-            return Err("quality status directory must be outside the static root".into());
+            return Err("quality status directory must be outside the static root");
         }
         let status = parent.join(status.file_name().expect("validated status file name"));
         if config_path.canonicalize().ok().as_ref() == Some(&status) {
-            return Err("quality input and output files must be distinct".into());
+            return Err("quality input and output files must be distinct");
         }
         let directory =
             File::open(&parent).map_err(|_| "quality status directory is unavailable")?;
@@ -197,15 +199,16 @@ impl OpsConfig {
         match fs::symlink_metadata(&status) {
             Ok(metadata) if metadata.is_file() => {}
             Err(error) if error.kind() == ErrorKind::NotFound => {}
-            _ => return Err("quality status output requires a regular file".into()),
+            _ => return Err("quality status output requires a regular file"),
         }
 
         let snapshot = timeout(SAMPLE_TIMEOUT, inputs.snapshot())
             .await
             .map_err(|_| "F3 quality sampling deadline exceeded")??;
-        let encoded = serde_json::to_vec(&snapshot)?;
+        let encoded = serde_json::to_vec(&snapshot)
+            .map_err(|_| "could not encode the F3 quality snapshot")?;
         if encoded.len() as u64 > QUALITY_MAX_BYTES {
-            return Err("the aggregate quality snapshot exceeds the size limit".into());
+            return Err("the aggregate quality snapshot exceeds the size limit");
         }
         let mut pending = tempfile::NamedTempFile::new_in(&parent)
             .map_err(|_| "could not prepare the quality snapshot")?;

@@ -7,7 +7,22 @@ permissions:
   contents: read
 
 jobs:
+  data-guard:
+    name: Service data guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+      - name: Check incoming commits and run guard tests
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: sh scripts/ci-data-guard.sh "$BASE_SHA"
   core:
+    needs: data-guard
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
@@ -27,10 +42,12 @@ jobs:
       DATABASE_URL: postgresql://postgres:local-ci-only@127.0.0.1:5432/web_ci
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_INCREMENTAL: "0"
+      NO_PROXY: "*"
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          submodules: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
@@ -61,25 +78,27 @@ jobs:
           if ! sqlx --version 2>/dev/null | grep -Fqx 'sqlx-cli 0.8.6'; then
             cargo install sqlx-cli --locked --version 0.8.6 --no-default-features --features postgres,rustls
           fi
-          cargo sqlx migrate run
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked
-      - run: cargo sqlx prepare --check -- --all-targets
+      - name: Migrate the isolated test database
+        run: |
+          printf 'WEB_ADMIN_TOKEN_FILE=%s/web-ci-absent-admin.env\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          sh scripts/ci-check.sh sqlx-migrate cargo sqlx migrate run
+      - run: sh scripts/ci-check.sh rustfmt cargo fmt --all -- --check
+      - run: sh scripts/ci-check.sh clippy cargo clippy --workspace --locked --all-targets -- -D warnings
+      - run: sh scripts/ci-check.sh cargo-test cargo test --workspace --locked
+      - run: sh scripts/ci-check.sh sqlx-prepare cargo sqlx prepare --check -- --all-targets
       - name: Boot the HTTP service and verify shutdown
         run: |
-          cargo build --locked --bin web
-          WEB_BIN="$PWD/target/debug/web" python3 tests/api/core_http.py
-          WEB_BIN="$PWD/target/debug/web" python3 tests/api/finance_resilience.py
-          WEB_BIN="$PWD/target/debug/web" python3 tests/api/finance_writes.py
+          sh scripts/ci-check.sh build-web cargo build --locked --bin web
+          export WEB_BIN="$PWD/target/debug/web"
+          sh scripts/ci-check.sh core-http python3 -B tests/api/core_http.py
+          sh scripts/ci-check.sh finance-resilience python3 -B tests/api/finance_resilience.py
+          sh scripts/ci-check.sh finance-writes python3 -B tests/api/finance_writes.py
       - name: Export and compare OpenAPI
         run: |
-          target/debug/web export-openapi > "$RUNNER_TEMP/web.openapi.json"
-          target/debug/web export-openapi > "$RUNNER_TEMP/web.second.json"
-          cmp "$RUNNER_TEMP/web.openapi.json" "$RUNNER_TEMP/web.second.json"
-          cmp "$RUNNER_TEMP/web.openapi.json" openapi/web.openapi.json
-          git diff --check
-      - uses: actions/upload-artifact@v4
-        with:
-          name: web-openapi
-          path: ${{ runner.temp }}/web.openapi.json
+          output=$(mktemp -d)
+          trap 'rm -rf -- "$output"' EXIT
+          sh scripts/ci-check.sh openapi-export sh -c 'target/debug/web export-openapi > "$1"' sh "$output/web.openapi.json"
+          sh scripts/ci-check.sh openapi-second-export sh -c 'target/debug/web export-openapi > "$1"' sh "$output/web.second.json"
+          sh scripts/ci-check.sh openapi-repeat cmp -s "$output/web.openapi.json" "$output/web.second.json"
+          sh scripts/ci-check.sh openapi-snapshot cmp -s "$output/web.openapi.json" openapi/web.openapi.json
+          sh scripts/ci-check.sh diff-check git diff --check

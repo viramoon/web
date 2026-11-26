@@ -10,4 +10,13 @@ W4 的 SMTP 集成测试使用进程内主、备槽位和临时 PostgreSQL 验�
 
 默认 Rust 测试也执行 rclone 本机加密往返，使用 `/usr/bin/rclone` 或由 `WEB_TEST_RCLONE` 指定的绝对路径。完整行情 HTTP 测试核对落库与读回的候选证据，随后显式启用。质量发布测试运行 Web CLI，使用固定种子的 F3 替身发布合成快照，再通过进程内管理员请求验证查询。
 
-先 `cargo build --locked`，设置 WEB_BIN 为 web 可执行文件的绝对路径，DATABASE_URL 指向专用的可迁移测试数据库，然后从仓库根目录运行 `python3 tests/api/core_http.py`。脚本使用独立静态目录和可控的 finance HTTP 服务，覆盖状态与退化、请求 ID、深链接、缓存、错误路由及 SIGTERM 在途请求完成。测试不依赖真实交易账户。
+从仓库根目录构建并运行三个本地 HTTP 验证脚本。WEB_BIN 指向本次构建产物，PATH 包含 PostgreSQL 工具。
+
+    cargo build --locked --bin web
+    export WEB_BIN="$PWD/target/debug/web"
+    python3 -B tests/api/core_http.py
+    python3 -B tests/api/finance_resilience.py
+    python3 -B tests/api/finance_writes.py
+    python3 -B -m unittest discover -s tests/api -p test_http_isolation.py -v
+
+三个脚本使用随机回环端口上的合成 finance 桩、临时静态目录和显式构造的 web 子进程环境。测试客户端直连回环地址，禁用系统代理和 HTTP 重定向。状态与优雅退出用例自行初始化仅监听临时 Unix socket 的 PostgreSQL，迁移后验证状态与退化、请求 ID、深链接、缓存、错误路由及 SIGTERM 在途请求完成，退出时停止实例。另外两个脚本用临时目录内不存在的 Unix socket 路径测试无数据库场景。写权限脚本只使用临时生成的令牌文件，其他 HTTP 脚本将令牌文件指向临时目录内的缺失路径。运行这些脚本只需提供构建产物和工具路径，DATABASE_URL、代理和部署配置都由脚本隔离。
