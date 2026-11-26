@@ -163,14 +163,18 @@ const ALERT_COLUMNS: &str = "id::text AS id, sequence, rule_id::text AS rule_id,
     severity, phase, observed_at, created_at, acknowledged_at, disposition, duplicate_count,
     last_duplicate_at";
 
-const DELIVERY_AUDIT: &str = "COALESCE((
-        SELECT jsonb_agg(to_jsonb(a) - 'outbox_id' ORDER BY a.attempt)
-        FROM app.notification_attempts a WHERE a.outbox_id = d.id
-    ), '[]'::jsonb) AS attempts,
-    COALESCE((
-        SELECT jsonb_agg(to_jsonb(f) - 'outbox_id' - 'sequence' ORDER BY f.sequence)
-        FROM app.notification_deferrals f WHERE f.outbox_id = d.id
-    ), '[]'::jsonb) AS deferrals";
+fn delivery_audit(outbox_id: &str, prefix: &str) -> String {
+    format!(
+        "COALESCE((
+            SELECT jsonb_agg(to_jsonb(a) - 'outbox_id' ORDER BY a.attempt)
+            FROM app.notification_attempts a WHERE a.outbox_id = {outbox_id}
+        ), '[]'::jsonb) AS {prefix}attempts,
+        COALESCE((
+            SELECT jsonb_agg(to_jsonb(f) - 'outbox_id' - 'sequence' ORDER BY f.sequence)
+            FROM app.notification_deferrals f WHERE f.outbox_id = {outbox_id}
+        ), '[]'::jsonb) AS {prefix}deferrals"
+    )
+}
 
 async fn attach_deliveries(
     conn: &mut PgConnection,
@@ -183,13 +187,16 @@ async fn attach_deliveries(
         .iter()
         .map(|alert| Uuid::parse_str(&alert.id).expect("PostgreSQL UUID text"))
         .collect::<Vec<_>>();
+    let audit = delivery_audit("d.id", "");
+    let summary_audit = delivery_audit("summary.id", "summary_");
     let deliveries = sqlx::query_as::<_, (String, sqlx::types::Json<Delivery>)>(&format!(
         "SELECT delivery.event_id::text, to_jsonb(delivery) - 'event_id'
          FROM (
            SELECT d.event_id, d.id::text AS id, d.kind, d.status, d.created_at, d.available_at,
                   d.updated_at, d.last_outcome, d.defer_reason, d.suppression_reason,
                   d.summary_id::text AS summary_id, summary.status AS summary_status,
-                  {DELIVERY_AUDIT}
+                  summary.event_id::text AS summary_alert_id, d.replaces_id::text AS replaces_id,
+                  {audit}, {summary_audit}
            FROM app.notification_outbox d
            LEFT JOIN app.notification_outbox summary ON summary.id = d.summary_id
            WHERE d.event_id = ANY($1)
@@ -255,9 +262,10 @@ pub(crate) async fn ack_alert(db: &Database, id: Uuid) -> Result<Option<Alert>, 
 }
 
 async fn fetch_test(conn: &mut PgConnection, id: Uuid) -> Result<Option<ChannelTest>, sqlx::Error> {
+    let audit = delivery_audit("d.id", "");
     sqlx::query_as(&format!(
         "SELECT d.test_key::text AS id, d.status, d.created_at, d.available_at, d.updated_at,
-                d.last_outcome, d.defer_reason, {DELIVERY_AUDIT}
+                d.last_outcome, d.defer_reason, {audit}
          FROM app.notification_outbox d WHERE d.test_key = $1"
     ))
     .bind(id)

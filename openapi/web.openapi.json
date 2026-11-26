@@ -3448,7 +3448,9 @@
           "available_at",
           "updated_at",
           "attempts",
-          "deferrals"
+          "deferrals",
+          "summary_attempts",
+          "summary_deferrals"
         ],
         "properties": {
           "attempts": {
@@ -3498,8 +3500,38 @@
               }
             ]
           },
+          "replaces_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Previous delivery UUID for this same alert, when this is a replacement."
+          },
           "status": {
             "$ref": "#/components/schemas/DeliveryStatus"
+          },
+          "summary_alert_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Alert UUID for the summary's primary alert. Use it with `GET /api/v1/alerts/{id}`."
+          },
+          "summary_attempts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryAttempt"
+            },
+            "description": "Attempts made by the summary that includes this delivery. Empty without a summary."
+          },
+          "summary_deferrals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryDeferral"
+            },
+            "description": "Deferrals of the summary that includes this delivery. Empty without a summary."
           },
           "summary_id": {
             "type": [

@@ -3,8 +3,8 @@
 use super::postgres::Cluster;
 use axum::{
     Router,
-    body::Body,
-    http::{Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header::CACHE_CONTROL},
 };
 use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::PgPool;
@@ -214,6 +214,18 @@ impl RuleEditor {
             self.app.clone().oneshot(update).await.unwrap().status(),
             StatusCode::OK
         );
+    }
+
+    async fn get_json(&self, path: &str) -> serde_json::Value {
+        let request = Request::get(path)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .body(Body::empty())
+            .unwrap();
+        let response = self.app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
     }
 }
 
@@ -527,6 +539,120 @@ async fn disabling_a_retrying_summary_requeues_only_enabled_members() {
         )
     );
     assert_eq!(calls[3].1, Some(MailKind::TransportRecovered { count: 1 }));
+}
+
+#[tokio::test]
+async fn member_alert_reads_summary_timeout_and_replacement_acceptance() {
+    let fixture = Fixture::create().await;
+    let quiet = at("2026-11-27T15:00:00Z");
+    let morning = at("2026-11-28T00:00:00Z");
+    let mail = FakeSmtp::with_outcomes([DeliveryOutcome::Timeout]);
+    let main_rule = fixture.rule(false).await;
+    let member_rule = fixture.rule(false).await;
+    let summary = fixture
+        .queue_event(main_rule, Uuid::new_v4(), "alert", quiet)
+        .await;
+    let member = fixture
+        .queue_event(member_rule, Uuid::new_v4(), "alert", later(quiet, 1))
+        .await;
+    assert!(!fixture.next(&mail, later(quiet, 1)).await);
+    assert!(fixture.next(&mail, morning).await);
+    assert_eq!(
+        *mail.sent.lock().unwrap(),
+        [(summary, Some(MailKind::Digest { count: 2 }))]
+    );
+
+    let editor = RuleEditor::new(&fixture.db, morning);
+    editor.set_enabled(main_rule, 1, false).await;
+    assert!(!fixture.next(&mail, later(morning, 29)).await);
+    let (member_alert, summary_alert, replacement): (Uuid, Uuid, Uuid) = sqlx::query_as(
+        "SELECT member.event_id, summary.event_id, replacement.id
+         FROM app.notification_outbox member
+         JOIN app.notification_outbox summary ON summary.id = member.summary_id
+         JOIN app.notification_outbox replacement ON replacement.replaces_id = member.id
+         WHERE member.id = $1 AND summary.id = $2",
+    )
+    .bind(member)
+    .bind(summary)
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert!(!fixture.next(&mail, later(morning, 30)).await);
+    assert!(fixture.next(&mail, later(morning, 900)).await);
+    assert_eq!(
+        mail.sent.lock().unwrap()[1],
+        (
+            replacement,
+            Some(MailKind::Alert {
+                condition: Condition::SourceUnavailable
+            })
+        )
+    );
+
+    let detail = editor
+        .get_json(&format!("/api/v1/alerts/{member_alert}"))
+        .await;
+    assert_eq!(detail["id"], member_alert.to_string());
+    let [original, retry] = detail["deliveries"].as_array().unwrap().as_slice() else {
+        panic!("expected the original member and its replacement");
+    };
+    assert_eq!(original["id"], member.to_string());
+    assert_eq!(original["status"], "summarized");
+    assert_eq!(original["attempts"], serde_json::json!([]));
+    assert_eq!(original["summary_id"], summary.to_string());
+    assert_eq!(original["summary_status"], "suppressed");
+    assert_eq!(original["summary_alert_id"], summary_alert.to_string());
+    assert_eq!(
+        original["summary_attempts"],
+        serde_json::json!([{
+            "attempt": 1,
+            "started_at": morning,
+            "finished_at": morning,
+            "outcome": "timeout"
+        }])
+    );
+    assert_eq!(retry["id"], replacement.to_string());
+    assert_eq!(retry["status"], "accepted");
+    assert_eq!(retry["replaces_id"], member.to_string());
+    assert_eq!(retry["summary_alert_id"], serde_json::Value::Null);
+    assert_eq!(retry["summary_attempts"], serde_json::json!([]));
+    assert_eq!(retry["summary_deferrals"], serde_json::json!([]));
+    assert_eq!(
+        retry["attempts"],
+        serde_json::json!([{
+            "attempt": 1,
+            "started_at": later(morning, 900),
+            "finished_at": later(morning, 900),
+            "outcome": "accepted"
+        }])
+    );
+
+    let main = editor
+        .get_json(&format!(
+            "/api/v1/alerts/{}",
+            original["summary_alert_id"].as_str().unwrap()
+        ))
+        .await;
+    assert_eq!(main["id"], summary_alert.to_string());
+    assert_eq!(main["deliveries"][0]["id"], original["summary_id"]);
+    assert_eq!(
+        main["deliveries"][0]["attempts"],
+        original["summary_attempts"]
+    );
+    assert_eq!(original["summary_deferrals"][0]["reason"], "quiet_hours");
+    assert_eq!(
+        main["deliveries"][0]["deferrals"],
+        original["summary_deferrals"]
+    );
+
+    let list = editor.get_json("/api/v1/alerts").await;
+    let listed = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == detail["id"])
+        .expect("member alert appears in the list");
+    assert_eq!(listed["deliveries"], detail["deliveries"]);
 }
 
 #[tokio::test]

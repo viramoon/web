@@ -224,8 +224,18 @@ pub struct Delivery {
     #[schema(format = "uuid")]
     pub summary_id: Option<String>,
     pub summary_status: Option<DeliveryStatus>,
+    /// Alert UUID for the summary's primary alert. Use it with `GET /api/v1/alerts/{id}`.
+    #[schema(format = "uuid")]
+    pub summary_alert_id: Option<String>,
+    /// Previous delivery UUID for this same alert, when this is a replacement.
+    #[schema(format = "uuid")]
+    pub replaces_id: Option<String>,
     pub attempts: Vec<DeliveryAttempt>,
     pub deferrals: Vec<DeliveryDeferral>,
+    /// Attempts made by the summary that includes this delivery. Empty without a summary.
+    pub summary_attempts: Vec<DeliveryAttempt>,
+    /// Deferrals of the summary that includes this delivery. Empty without a summary.
+    pub summary_deferrals: Vec<DeliveryDeferral>,
 }
 
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
