@@ -32,10 +32,36 @@ processes:
     graceful_stop:
       signals: [SIGTERM, SIGINT]
       deadline_ms: 20000
+  - name: web-notifier
+    command: web-notifier
+    requires: [PostgreSQL, "/usr/bin/curl (SMTP/SMTPS)", system_ca, linux_proc]
+    environment:
+      DATABASE_URL: 与 web 共用，由部署从受控配置注入
+      WEB_PUBLIC_ORIGIN: 可选，邮件内使用的私有终端 HTTPS origin
+      WEB_SMTP_HOST: 部署配置的固定邮件中继
+      WEB_SMTP_PORT: 隐式 TLS 默认 465，STARTTLS 默认 587
+      WEB_SMTP_TLS: implicit
+      WEB_SMTP_FROM: 部署配置的固定发件地址
+      WEB_SMTP_TO: 部署配置的本人收件地址
+      WEB_SMTP_CREDENTIAL_FILE: 可选，仅引用由本机部署提供的 0600 秘密文件绝对路径
+      WEB_SMTP_TIMEOUT_SECONDS: 10
+      WEB_NOTIFIER_QUIET_TIME_ZONE: Asia/Shanghai
+      WEB_NOTIFIER_QUIET_START: "23:00"
+      WEB_NOTIFIER_QUIET_END: "08:00"
+      WEB_NOTIFIER_COOLDOWN_SECONDS: 900
+      WEB_NOTIFIER_NORMAL_HOURLY_LIMIT: 6
+      WEB_NOTIFIER_URGENT_HOURLY_LIMIT: 2
+      WEB_NOTIFIER_URGENT_BYPASS_QUIET: true
+    health:
+      web_status: /api/v1/system/status
+      field: notifications.state
+    graceful_stop:
+      signals: [SIGTERM, SIGINT]
+      deadline_ms: 75000
 telemetry:
   format: json_stderr
   request_metadata: [request_id, method, path, status, latency_ms]
-  event_targets: [web, "web::*"]
+  event_targets: [web, "web::*", web_notifier, "web_notifier::*"]
   failure_details: 固定阶段或错误类别，panic 使用固定事件
   repository_data_guard: docs/data-guard.md
 static:

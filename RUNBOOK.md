@@ -122,6 +122,43 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 
 W1 catalog 允许按标的创建草稿。连接测试记录失败或不可用，保留原活动版本。更新请求超时后先读配置 revision 和最近测试 ID。W1 不需要修改端口或新增守护进程。部署前执行 `web migrate`，再启动新 web 进程。需要回到 W1 前的二进制时，保留已迁移的数据库和密文，并设置 `WEB_AUTO_MIGRATE=false`。
 
+## 告警与邮件进程
+
+先在同一个 web 数据库上执行 `web migrate`，再交由 fertile 的进程管理器启动 `target/release/web-notifier`。进程读取专用的部署环境并使用同一 `DATABASE_URL`。它没有监听端口和额外的持久化目录，依赖 Linux `/proc`、系统 CA 和 `/usr/bin/curl` 的 SMTP/SMTPS 支持。SMTP 使用 TLS 1.2 或更高版本，证书与主机名由系统 CA 验证。SIGINT 或 SIGTERM 停止领取新任务，并给当前发送和结算留出配置的 SMTP 时限再加 11 秒。部署管理器宜保留 75 秒停止宽限，以涵盖最高时限和连接池清理。
+
+web-notifier 与 web 共用日志过滤器。启动失败显示固定的配置错误，提高 RUST_LOG 级别仍会过滤第三方追踪。
+
+| notifier 环境变量 | 含义及默认值 |
+| --- | --- |
+| `DATABASE_URL` | 由部署注入，与 web API 共用 PostgreSQL |
+| `WEB_SMTP_HOST`、`WEB_SMTP_PORT` | 固定中继的主机名或 IP。隐式 TLS 默认端口 465，STARTTLS 默认 587 |
+| `WEB_SMTP_TLS` | `implicit`（默认）或 `starttls` |
+| `WEB_SMTP_FROM`、`WEB_SMTP_TO` | 固定发件地址和本人收件地址，各一个邮箱 |
+| `WEB_SMTP_CREDENTIAL_FILE` | 可选，部署提供的本机秘密文件绝对路径，运行用户所有、0600 普通文件、存放于静态目录之外。仅含 `username` 和 `password` 两个 JSON 字符串字段 |
+| `WEB_SMTP_TIMEOUT_SECONDS` | 单次 SMTP 超时，默认 10 秒，范围 1–60 |
+| `WEB_PUBLIC_ORIGIN` | 可选，与 web API 相同的规范 HTTPS origin。配置后邮件附私有 `/alerts` 绝对链接 |
+| `WEB_NOTIFIER_QUIET_TIME_ZONE` | 默认 `Asia/Shanghai`，从 PostgreSQL 的 IANA 时区表校验 |
+| `WEB_NOTIFIER_QUIET_START`、`WEB_NOTIFIER_QUIET_END` | 默认 `23:00`–`08:00`，当地时间 `HH:MM`。静默开始包含、结束排除，两值相同关闭静默 |
+| `WEB_NOTIFIER_COOLDOWN_SECONDS` | 默认 900 秒，范围 0–604800。规则可覆盖此值 |
+| `WEB_NOTIFIER_NORMAL_HOURLY_LIMIT`、`WEB_NOTIFIER_URGENT_HOURLY_LIMIT` | 滚动一小时各自允许的投递尝试数，默认普通 6、紧急 2，各允许 1–1000 |
+| `WEB_NOTIFIER_URGENT_BYPASS_QUIET` | 默认 `true`，紧急投递可绕过静默，仍计入紧急额度 |
+
+SMTP 凭据轮换后重启 notifier，固定地址或其他 notifier 配置变更也在重启后生效。运维验证可由管理员用一个新 UUID 发起测试发送，然后读取响应的 `Location` 或按原 UUID 查询。测试邮件占用普通额度，可在静默窗口执行。详见 [API](docs/api.md#告警规则与邮件通知)。
+
+| 现象 | 诊断与恢复 |
+| --- | --- |
+| 测试一直 `pending` | 在测试记录中核对 `available_at` 和 `deferrals`，确认进程正在运行且可读取已迁移的目标库 |
+| 投递 `pending` 且最近结果为 `timeout`、`transient` 或 `interrupted` | 查看尝试表、静默和额度，进程按 30 秒起的指数退避自动重试，最多 5 次尝试 |
+| 投递 `failed` | 核对有限错误分类、TLS 证书、部署地址和本机凭据文件权限，修复后使用新 UUID 发测试邮件 |
+| system/status 的 `notifications.state` 为 `degraded` | 管理员可在 `/alerts` 查看一次 SMTP 失效事件与后续恢复。每轮故障后的首次 SMTP 接受都会记录恢复并排入该轮失败尝试汇总，包括上一轮汇总重试成功的情况 |
+| 投递 `accepted` | SMTP 中继已接受邮件。收件箱送达、异步退信与垃圾箱状态由邮件系统跟踪 |
+
+一次尝试的结果未知时，同一 outbox ID 生成相同 `Message-ID`。SMTP 接收后进程崩溃或响应超时可能产生重复邮件。数据库保留每次尝试、延迟决定及汇总关联。回滚时先停 notifier，再切换 web 二进制，保留前向兼容的数据库迁移和历史投递记录。
+
+停用等待重试的汇总中的任一规则后，notifier 会停止原汇总的后续发送，为仍可发送的告警排入带新 `Message-ID` 的替代投递。替代投递沿用原汇总的重试等待，并接受当前冷却、静默和限流检查。
+
+排查成员告警时，读取其 `GET /api/v1/alerts/{id}` 详情。在原成员投递的 `summary_attempts` 中查找汇总的拒绝或超时，在 `summary_deferrals` 中查看该汇总的延迟记录。用替代投递的 `replaces_id` 对照原成员投递的 `id`，再看替代投递自身的 `attempts`。需要读取主告警详情时，使用原成员投递的 `summary_alert_id` 作为请求路径中的告警 UUID。
+
 ## 历史回测与提交确认
 
 回测页从 /api/v1/backtests/datasets 读取已审核的历史标的。配置数据后提交 SmaCrossover，并在工作台查看作业状态和历史结果。POST 超时或连接中断后，使用管理员身份和原 Idempotency-Key 请求 GET /api/v1/backtests/by-key。若查到 ID，继续轮询该作业。只有明确返回 404 后才允许带原请求及原键重试。

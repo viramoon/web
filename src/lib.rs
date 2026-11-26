@@ -7,6 +7,7 @@ pub mod database;
 pub mod finance;
 mod integrations;
 mod market;
+pub mod notifications;
 mod spa;
 pub mod telemetry;
 #[cfg(test)]
@@ -25,6 +26,7 @@ use config::Settings;
 use database::{Database, DbStatus};
 use finance::{Finance, FinanceStatus};
 use integrations::StrictUpdateSchema;
+use notifications::{http as notification_http, worker};
 use serde::Serialize;
 use std::{
     sync::Arc,
@@ -95,6 +97,7 @@ pub struct SystemStatus {
     pub database: DbStatus,
     pub finance: FinanceStatus,
     pub market: market::MarketSummary,
+    pub notifications: worker::NotificationHealth,
 }
 
 #[utoipa::path(get, path="/healthz/live", responses((status=200, body=Health)))]
@@ -158,15 +161,17 @@ async fn status(State(s): State<AppState>) -> Json<SystemStatus> {
         None
     };
     finance.circuit = s.finance.circuit_state().into();
+    let (database, notifications) = s.db.status_snapshot();
     Json(SystemStatus {
         web: WebStatus {
             version: env!("CARGO_PKG_VERSION").into(),
             commit: env!("WEB_GIT_SHA").into(),
             started_at: s.started_at,
         },
-        database: s.db.status(),
+        database,
         finance,
         market: market::MarketSummary::from_status(market),
+        notifications,
     })
 }
 
@@ -219,6 +224,11 @@ fn read_product(path: &str) -> Option<auth::Product> {
         "/api/v1/integrations"
         | "/api/v1/integrations/catalog"
         | "/api/v1/integration-tests/{id}" => Product::Integrations,
+        notification_http::RULES
+        | notification_http::RULE
+        | notification_http::ALERTS
+        | notification_http::ALERT
+        | notification_http::CHANNEL_TEST => Product::Notifications,
         _ => return None,
     };
     Some(product)
@@ -238,7 +248,9 @@ async fn check_access(State(s): State<AppState>, req: Request, next: Next) -> Re
         }
         (&Method::POST, "/api/v1/integrations" | "/api/v1/integrations/{id}/tests")
         | (&Method::PATCH, "/api/v1/integrations/{id}")
-        | (&Method::PUT | &Method::DELETE, "/api/v1/integrations/{id}/credential") => {
+        | (&Method::PUT | &Method::DELETE, "/api/v1/integrations/{id}/credential")
+        | (&Method::PUT, notification_http::RULE)
+        | (&Method::POST, notification_http::ACK | notification_http::CHANNEL_TESTS) => {
             s.write_access.authorize_same_origin(headers)
         }
         _ => Ok(()),
@@ -257,7 +269,20 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         .and_then(|id| Uuid::parse_str(id).ok())
         .unwrap_or_else(Uuid::new_v4);
     let path = matched_path(&req).unwrap_or("<unmatched>");
+    let write_timeout_hint = match (req.method(), path) {
+        (&Method::PUT, notification_http::RULE) => {
+            Some("Rule update outcome unknown; read the rule revision before retrying")
+        }
+        (&Method::POST, notification_http::ACK) => {
+            Some("Acknowledgment outcome unknown; read the alert before retrying")
+        }
+        (&Method::POST, notification_http::CHANNEL_TESTS) => {
+            Some("Test outcome unknown; look up the original Idempotency-Key before retrying")
+        }
+        _ => None,
+    };
     let no_store = is_integration_route(path)
+        || notification_http::is_private(path)
         || matches!(
             path,
             "/api/v1/backtests/by-key" | "/api/v1/admin/session" | "/api/v1/me/capabilities"
@@ -291,7 +316,7 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
             Err(_) => api_error(
                 StatusCode::GATEWAY_TIMEOUT,
                 "request_timeout",
-                "Request deadline exceeded",
+                write_timeout_hint.unwrap_or("Request deadline exceeded"),
             ),
         };
         if response.status() == StatusCode::PAYLOAD_TOO_LARGE {
@@ -338,6 +363,7 @@ pub fn router(s: AppState) -> Router {
         )
         .route("/api/v1/me/capabilities", get(auth::capabilities))
         .merge(integrations::routes())
+        .merge(notification_http::routes())
         .fallback(spa::serve);
     with_controls(routes, s)
 }
@@ -380,7 +406,15 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
         integrations::put_credential,
         integrations::delete_credential,
         integrations::start_test,
-        integrations::get_test
+        integrations::get_test,
+        notification_http::list_rules,
+        notification_http::get_rule,
+        notification_http::put_rule,
+        notification_http::list_alerts,
+        notification_http::get_alert,
+        notification_http::ack_alert,
+        notification_http::start_channel_test,
+        notification_http::get_channel_test
     ),
     components(schemas(
         ErrorBody,
@@ -391,7 +425,8 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
         SystemStatus,
         DbStatus,
         FinanceStatus,
-        market::MarketSummary
+        market::MarketSummary,
+        worker::NotificationHealth
     )),
     modifiers(&StrictUpdateSchema)
 )]
@@ -463,7 +498,82 @@ mod tests {
         routing::post,
     };
     use std::path::Path;
+    use tokio::sync::Notify;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn system_status_returns_while_a_half_open_finance_trial_is_held_and_db_is_unavailable() {
+        let fixture = tempfile::tempdir_in("/tmp").unwrap();
+        let mut cfg = Settings::load(Path::new("config"), |_| None).unwrap();
+        cfg.finance.base_url = "http://127.0.0.1:1".into();
+        cfg.finance.circuit_failure_threshold = 1;
+        cfg.finance.circuit_open_ms = 0;
+        cfg.finance.max_retries = 0;
+        cfg.finance.request_timeout_ms = 1_500;
+        let finance = Finance::new(&cfg.finance).unwrap();
+        let app = router(AppState {
+            finance: finance.clone(),
+            write_access: auth::WriteAccess::load(
+                &fixture.path().join("unused-token"),
+                10,
+                Duration::from_secs(1),
+            )
+            .unwrap(),
+            credential_store: None,
+            db: Database::new(
+                &format!(
+                    "postgresql://localhost/test?host={}",
+                    fixture.path().display()
+                ),
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+            )
+            .unwrap()
+            .with_stalled_connections(),
+            config: Arc::new(cfg),
+            started_at: Utc::now(),
+        });
+
+        let opened = finance
+            .read::<(), (), _, _>(|_| async {
+                let invalid = serde_json::from_str::<u64>("fixture").unwrap_err();
+                Err(finance_client::apis::Error::Serde(invalid))
+            })
+            .await;
+        assert!(opened.is_err());
+        assert_eq!(finance.circuit_state(), "open");
+        let ready = Notify::new();
+        let release = Notify::new();
+        let trial = finance.read(|_| async {
+            ready.notify_one();
+            release.notified().await;
+            Ok::<(), finance_client::apis::Error<()>>(())
+        });
+        tokio::pin!(trial);
+        tokio::select! {
+            _ = ready.notified() => {}
+            _ = &mut trial => panic!("fixture trial completed before it was held"),
+        }
+
+        let request = Request::get("/api/v1/system/status")
+            .body(Body::empty())
+            .unwrap();
+        let response = tokio::select! {
+            response = tokio::time::timeout(Duration::from_millis(500), app.oneshot(request)) => {
+                response.expect("system status must return while the trial is held").unwrap()
+            }
+            _ = &mut trial => panic!("system status waited for the finance trial to finish"),
+        };
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["finance"]["circuit"], "half_open");
+        assert_eq!(body["finance"]["ok"], false);
+        assert_eq!(body["database"]["ok"], false);
+        assert_eq!(body["notifications"]["state"], "unavailable");
+        release.notify_one();
+        assert!(trial.await.is_ok());
+    }
 
     #[tokio::test]
     async fn bounds_panics_deadlines_and_payloads_without_losing_request_id() {

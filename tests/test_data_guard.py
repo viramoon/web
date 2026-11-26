@@ -335,6 +335,46 @@ class DataGuardTests(unittest.TestCase):
                 self.assert_rejected(self.guard("staged"), reason)
                 self.git("rm", "-f", path)
 
+    def test_w3_code_rows_are_allowed_but_delimited_data_still_needs_a_source(self):
+        cases = {
+            "src/notifications/worker.rs": (
+                "fn configure() {\n    set_limit(\n        1,\n        1000,\n    );\n}\n"
+            ),
+            "tests/api/notifications_worker.rs": (
+                "fn rules(rule: u64) {\n    let _ = [\n"
+                "        (rule, 1, false),\n        (rule, 2, true),\n    ];\n}\n"
+            ),
+        }
+        for path, content in cases.items():
+            self.write(path, content)
+        self.git("add", ".")
+        self.git("commit", "-qm", "Add W3 source")
+
+        path = "src/notifications/capture.rs"
+        for table in ("date,price\n2030-01-01,1.25\n", "1,2,\n3,4,\n"):
+            with self.subTest(table=table):
+                self.write(path, table)
+                self.git("add", path)
+                self.assert_rejected(self.guard("staged"), "fixture-source-required")
+                self.git("rm", "-f", path)
+
+    def test_reviewed_w3_credentials_require_the_exact_path_and_source_bytes(self):
+        path = "src/notifications/channel/tests.rs"
+        fixture = (ROOT / path).read_bytes()
+        self.write(path, fixture)
+        self.git("add", path)
+        self.git("commit", "-qm", "Add the reviewed W3 test source")
+        self.write(path, fixture + b"\n// modified\n")
+        self.git("add", path)
+        self.assert_rejected(self.guard("staged"), "credential-material")
+
+        self.write(path, fixture)
+        self.git("add", path)
+        copy = "tests/copied_smtp.rs"
+        self.write(copy, fixture)
+        self.git("add", copy)
+        self.assert_rejected(self.guard("staged"), "credential-material")
+
     def test_ci_check_hides_success_and_failure_output(self):
         for status in (0, 5):
             with self.subTest(status=status):

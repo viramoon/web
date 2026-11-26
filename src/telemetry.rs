@@ -8,7 +8,9 @@ pub fn init() {
     let levels = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let web_events = filter_fn(|metadata| {
         let target = metadata.target();
-        target == "web" || target.starts_with("web::")
+        matches!(target, "web" | "web_notifier")
+            || target.starts_with("web::")
+            || target.starts_with("web_notifier::")
     });
     tracing_subscriber::registry()
         .with(

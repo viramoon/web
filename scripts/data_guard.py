@@ -18,6 +18,11 @@ RULES = ".data-guard/rules.json"
 SOURCES = ".data-guard/sources.json"
 MAX_POLICY_BYTES = 256 * 1024
 REGULAR_MODES = {b"100644", b"100755"}
+# Reviewed W3 source writes fixed synthetic credentials to temporary fixtures.
+# Only the exact source blob and path may satisfy the credential check.
+REVIEWED_CREDENTIAL_TESTS = {
+    "src/notifications/channel/tests.rs": "beb37680e9a5e9f82e7c5d6533c563b61cd467f1928c2803d668162f263f7bb3",
+}
 # Ordinary tracked files. Other paths require a source record in the same tree.
 ALLOWED_FILES = frozenset({
     ".agents/skills/readme.md", ".data-guard/rules.json", ".data-guard/sources.json",
@@ -309,7 +314,7 @@ def load_sources(tree, required):
     return raw["fixtures"]
 
 
-def looks_like_table(text):
+def looks_like_table(text, *, source_code=False):
     # Two consecutive records with the same delimiter/width and numeric fields
     # catch common renamed CSV/TSV exports without treating prose as a table.
     lines = text.splitlines()
@@ -326,8 +331,14 @@ def looks_like_table(text):
             columns = {normal_field(field.strip("\x60")) for field in fields}
             if any(group <= columns for group in (*TABLE_HEADERS, *MARKET_FIELDS)):
                 return True
+            # A comma-terminated argument or tuple in source is not a table row.
+            stripped = line.strip()
+            source_literal = source_code and delimiter == "," and (
+                (len(fields) == 2 and fields[-1] == "")
+                or (stripped.startswith("(") and stripped.endswith("),"))
+            )
             numeric = any(VALUE.fullmatch(field) for field in fields)
-            if len(fields) >= 2 and numeric and any(
+            if len(fields) >= 2 and not source_literal and numeric and any(
                 VALUE.fullmatch(field) or DATE.fullmatch(field) for field in fields[:2]
             ):
                 if previous_width == len(fields):
@@ -455,8 +466,12 @@ def inspect_blob(path, entry, rules, source):
         return "non-text"
     # Recognize field shapes in plain text and in quoted or escaped payloads.
     content = BLOCK_QUOTE.sub("", unescape(text)).replace(r'\"', '"')
-    if PRIVATE_KEY.search(text) or CREDENTIAL.search(content.replace(r"\n", "\n")):
+    if PRIVATE_KEY.search(text):
         return "credential-material"
+    if CREDENTIAL.search(content.replace(r"\n", "\n")):
+        reviewed = REVIEWED_CREDENTIAL_TESTS.get(path)
+        if reviewed is None or hashlib.sha256(data).hexdigest() != reviewed:
+            return "credential-material"
     if TEST_REPORT.search(text):
         return "test-report"
     if LOG_LINE.search(text) or EXCEPTION_DUMP.search(text):
@@ -474,16 +489,17 @@ def inspect_blob(path, entry, rules, source):
         if hashlib.sha256(data).hexdigest() != source["sha256"]:
             return "fixture-digest"
         return None
+    source_code = normalized.endswith(SOURCE_SUFFIXES)
     if (not allowed_file_type(normalized)
             or normalized.endswith(rules.fixture_suffixes)
             or any(fnmatchcase(normalized, pattern) for pattern in rules.fixture_paths)
             or HTTP_DUMP.search(text)
             or json_content_reason(text, openapi=normalized.startswith("openapi/"))
-            or looks_like_table(text)):
+            or looks_like_table(text, source_code=source_code)):
         return "fixture-source-required"
     # In implementation files, check lines shaped like data instead of
     # interpreting strings passed as arguments or declared as code constants.
-    if normalized.endswith(SOURCE_SUFFIXES):
+    if source_code:
         content = "\n".join(line for line in content.splitlines() if DATA_LINE.match(line))
     fields = {normal_field(match["field"]) for match in FIELD_VALUE.finditer(content.replace(r"\n", "\n"))}
     if any(group <= fields for group in MARKET_FIELDS):

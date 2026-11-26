@@ -195,7 +195,15 @@ async fn postgres_integration_migration_upgrades_existing_schema() {
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(versions, vec![20261122000000, 20261126000000]);
+    assert_eq!(
+        versions,
+        vec![
+            20261122000000,
+            20261126000000,
+            20261127000000,
+            20261127010000
+        ]
+    );
     let components: Vec<(String, i32)> =
         sqlx::query_as("SELECT component, version FROM app.schema_info ORDER BY component")
             .fetch_all(&pool)
@@ -219,6 +227,34 @@ async fn postgres_integration_migration_upgrades_existing_schema() {
             "integration_versions"
         ]
     );
+    let notification_tables: Vec<String> = sqlx::query_scalar(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'app'
+         AND (tablename = 'alert_events' OR starts_with(tablename, 'notification_'))
+         ORDER BY tablename",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        notification_tables,
+        [
+            "alert_events",
+            "notification_attempts",
+            "notification_deferrals",
+            "notification_health",
+            "notification_incidents",
+            "notification_outbox",
+            "notification_rules",
+        ]
+    );
+    let replaces_id_type: String = sqlx::query_scalar(
+        "SELECT data_type FROM information_schema.columns
+         WHERE table_schema = 'app' AND table_name = 'notification_outbox' AND column_name = 'replaces_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(replaces_id_type, "uuid");
     pool.close().await;
     pg.stop();
 }
