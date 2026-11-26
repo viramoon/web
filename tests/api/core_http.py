@@ -116,6 +116,11 @@ def run(root, finance):
             code, headers, body = get(port, path)
             assert code == 200 and body == content, (path, code, body[:100])
             assert headers["Cache-Control"] == "no-cache", (path, headers)
+        for path in ("/NOTICE", "/%4EOTICE", "/./%2fNOTICE//"):
+            code, headers, body = get(port, path)
+            assert code == 200 and body == license_files["NOTICE"], (path, code, body[:100])
+            assert body != index, path
+            assert headers["Cache-Control"] == "no-cache", (path, headers)
         for path in (
             "/static/third-party/lightweight-charts/LICENSE",
             "/static/third-party/lightweight-charts/NOTICE",
@@ -123,6 +128,7 @@ def run(root, finance):
             "/assets/", "/assets/unknown", "/third-party/", "/third-party/lightweight-charts/missing",
             "/missing.js", "/theme.css", "/bundle.js.map", "/favicon.ico", "/images/logo.PNG",
             "/fonts/app.woff2", "/missing%2ejs", "/docs/LICENSE", "/docs/NOTICE/",
+            "/docs/NOTICE", "/docs%2fNOTICE", "/NOTICE/NOTICE",
         ):
             code, headers, body = get(port, path)
             assert code == 404 and body != index, (path, code, body[:100])
@@ -131,10 +137,20 @@ def run(root, finance):
             "/dashboard/../third-party/missing", "/foo/../static/unknown",
             "/dashboard/%2e%2e/third-party/missing", "/foo/%2e./static/unknown",
             "/foo/../dashboard", "/foo/%2E%2E/index.html", "/../outside.txt", "/%2e%2e/outside.txt",
+            "/docs/../NOTICE", "/docs/%2e%2e/NOTICE",
         ):
             code, headers, body = get(port, path)
             assert code == 404 and body == b"", (path, code, body[:100])
             assert headers["Cache-Control"] == "no-cache", (path, headers)
+        docs = static / "docs"
+        docs.mkdir()
+        docs_notice = b"Documentation notice\n"
+        (docs / "NOTICE").write_bytes(docs_notice)
+        code, _, body = get(port, "/docs/NOTICE")
+        assert code == 200 and body == docs_notice, (code, body[:100])
+        (notices / "NOTICE").unlink()
+        code, _, body = get(port, "/NOTICE")
+        assert code == 404 and body != index, (code, body[:100])
         code, headers, body = get(port, "/api/unknown-path")
         assert code == 404 and headers.get_content_type() == "application/json" and isinstance(json.loads(body), dict)
         for path in (
