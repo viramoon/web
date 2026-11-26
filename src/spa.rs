@@ -5,14 +5,41 @@ use axum::{
     http::{HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use std::path::Path;
+use percent_encoding::percent_decode_str;
+use std::{borrow::Cow, path::Path};
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
 
-pub fn reserved(path: &str) -> bool {
-    matches!(path, "/api" | "/healthz")
-        || path.starts_with("/api/")
-        || path.starts_with("/healthz/")
+#[derive(PartialEq, Eq)]
+enum PathKind {
+    Reserved,
+    Invalid,
+    Asset,
+    Page,
+}
+
+fn classify_path(path: &str) -> PathKind {
+    let decoded: Cow<'_, [u8]> = percent_decode_str(path).into();
+    let mut segments = decoded
+        .split(|&byte| byte == b'/')
+        .filter(|segment| !segment.is_empty() && *segment != b".");
+    let first = segments.clone().next().unwrap_or_default();
+    // Reserved paths keep their JSON error response even with a malformed suffix.
+    if matches!(first, b"api" | b"healthz") {
+        return PathKind::Reserved;
+    }
+    if segments.clone().any(|segment| segment == b"..") || std::str::from_utf8(&decoded).is_err() {
+        return PathKind::Invalid;
+    }
+    let filename = segments.next_back().unwrap_or_default();
+    if matches!(first, b"assets" | b"static" | b"third-party")
+        || filename.contains(&b'.')
+        || matches!(filename, b"LICENSE" | b"NOTICE")
+    {
+        PathKind::Asset
+    } else {
+        PathKind::Page
+    }
 }
 
 fn hashed_asset(path: &str) -> bool {
@@ -36,7 +63,8 @@ fn hashed_asset(path: &str) -> bool {
 
 pub async fn serve(State(state): State<AppState>, req: Request) -> Response {
     let path = req.uri().path().to_string();
-    if reserved(&path) {
+    let kind = classify_path(&path);
+    if kind == PathKind::Reserved {
         return api_error(StatusCode::NOT_FOUND, "not_found", "Unknown endpoint");
     }
     if !matches!(*req.method(), Method::GET | Method::HEAD) {
@@ -45,16 +73,16 @@ pub async fn serve(State(state): State<AppState>, req: Request) -> Response {
     // The configured directory is a trusted build artifact. ServeDir validates request paths.
     let root = &state.config.paths.static_root;
     let method = req.method().clone();
-    let mut resp = ServeDir::new(root)
-        .oneshot(req)
-        .await
-        .expect("ServeDir is infallible")
-        .into_response();
-    if resp.status() == StatusCode::NOT_FOUND
-        && method == Method::GET
-        && path != "/assets"
-        && !path.starts_with("/assets/")
-    {
+    let mut resp = if kind == PathKind::Invalid {
+        StatusCode::NOT_FOUND.into_response()
+    } else {
+        ServeDir::new(root)
+            .oneshot(req)
+            .await
+            .expect("ServeDir is infallible")
+            .into_response()
+    };
+    if resp.status() == StatusCode::NOT_FOUND && method == Method::GET && kind == PathKind::Page {
         let request = Request::new(Body::empty());
         resp = ServeFile::new(root.join("index.html"))
             .oneshot(request)

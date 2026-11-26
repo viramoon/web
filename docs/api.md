@@ -14,7 +14,9 @@ OpenAPI 由 handler 注解和输出类型生成。执行下列命令可在不启
 
 CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.openapi.json)逐字节比对。正式集成时将本提交的生成物交给 fertile/contracts/web.openapi.json，再由 frontend 使用 Hey API 生成客户端。生成物只能经导出流程更新。
 
-未知 /api 路径返回 JSON 404，错误结构为 error.code、error.message，日志由 X-Request-Id 关联。页面 GET 的前端路由回落到 index.html；/healthz、/api、/assets 保留各自的错误语义。
+路由未命中时，解码后首段为 `api` 或 `healthz` 的路径返回 JSON 404，判断时忽略空段和 `.` 段。错误结构为 `error.code`、`error.message`，日志由 `X-Request-Id` 关联。
+
+静态文件以 `WEB_STATIC_ROOT` 为根提供，许可证和声明的 URL 为 `/third-party/lightweight-charts/LICENSE` 和 `/third-party/lightweight-charts/NOTICE`。对静态资源和页面，解码后含 `..` 段的 GET、HEAD 在读取文件前返回 404。缺失的 `/assets`、`/static`、`/third-party` 及其子路径返回 404。解码后末段含 `.` 或恰为 `LICENSE`、`NOTICE` 的缺失路径也返回 404。其他有效路径的页面 GET（如 `/dashboard`）在未命中时回退到 `index.html`。完整判定和缓存行为见 [静态托管](../src/static/README.md)。
 
 GET /api/v1/backtests/sample 使用锁定版本的 finance 客户端转发回测摘要。pnl 始终是十进制字符串，原始精度与尾零保留。已有示例返回 200，缺失示例保留 finance 的 404 与错误结构。finance 连接失败或熔断打开时返回 503 / finance_unavailable，超时返回 504 / finance_timeout，无效响应或其他上游故障返回 502。所有错误均使用 error.code、error.message。
 
