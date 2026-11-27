@@ -18,7 +18,7 @@ W2a 的路由测试使用合成标的、临时管理员凭据和内存路由，�
 
 `cargo test --locked --offline --lib f10c_` 用固定时钟、虚构标的和合成十进制数构造期权、深度、敞口、历史、预算及覆盖响应。回环 finance 替身核对查询转发、禁止转发身份头、显示许可和上游错误。进程内用例覆盖匿名、共享节流、边界参数、旧链的 pending、敞口未知情景的本地 503、非法情景的 400 和请求 schema，以及 3.0 事件的时间戳校验。回环用例覆盖混合版本 WAL 和投影的 502 拒绝，以及 5xx 响应的完整错误结构。完整替身测试使用随机本地端口。
 
-`cargo test --locked --offline --lib f10d_` 用固定时钟、合成合约 ID 和精确字符串验证期权流。随机回环端口上的 finance 替身核对两条专用路径和旧入口的窗口、分页、错误及响应原样转发。进程内用例覆盖共享授权与节流、兼容错误、产品许可和 OpenAPI。所有数据来自测试代码中的确定性字面量。
+`cargo test --locked --offline --lib f10d_` 用固定时钟、合成合约 ID 和精确字符串验证期权流。随机回环端口上的 finance 替身核对两条专用路径和旧入口的窗口、分页、错误及响应原样转发。`f10d_verification_fixtures_match_contract_and_pagination` 在进程内用生成的 F10d 模型校验核验样本，覆盖条件解释对象、正常续页及超大偏移返回空页。其他进程内用例覆盖共享授权与节流、兼容错误、产品许可和 OpenAPI。所有数据来自测试代码中的确定性字面量。
 
 另执行 `cargo test --locked --offline --lib public_openapi_preserves_f1_composition_and_declares_restricted_reads`，核对旧 WAL 和投影的响应引用，以及 `Event`、`Message`、`SchemaVersion` 与基线 OpenAPI 的哈希。
 

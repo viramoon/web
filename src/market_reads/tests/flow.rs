@@ -38,62 +38,127 @@ fn observation_coverage() -> Value {
         "covered": [], "uncovered": [], "unknown": [{"start": START, "end": END}]})
 }
 
-fn verification_page() -> Value {
-    json!({
-        "access": display_access("opra-history"), "con_id": 201,
+fn verification_page(offset: u64, limit: usize) -> Value {
+    let mut access = display_access("opra-history");
+    access["record_local"] = json!(true);
+    let mut page = json!({
+        "access": access, "con_id": 201,
         "start": START, "end": END, "quote_start": START, "verified_at": END,
         "max_quote_age_ms": 500, "multiplier": "100.00", "next_offset": null,
-        "durable_through": null, "observation_coverage": observation_coverage(),
-        "counts": {"verified": 1, "unknown": 1, "pending_intervals": 0, "pending_trade_rows": 0,
+        "durable_through": U64_MAX, "observation_coverage": observation_coverage(),
+        "counts": {"verified": 2, "unknown": 2, "pending_intervals": 0, "pending_trade_rows": 0,
             "unavailable_intervals": 1, "unresolved_amendments": 0, "non_trade_markers": 0},
         "issues": [{"kind": "bid_ask", "reason": "expired_contract", "start": START,
             "end": END, "observed_at": END}],
         "trades": [{"trade": {"occurrence": 1, "batch": {"page": 1, "kind": "trades",
             "requested_start": START, "obtained_at": END},
-            "row": {"occurred_at": START, "price": PRICE, "quantity": SIZE, "exchange": "XTEST",
+            "row": {"occurred_at": START, "price": PRICE, "quantity": "0.0000000100", "exchange": "XTEST",
                 "special_conditions": "", "past_limit": false, "unreported": false}},
-            "status": "active", "condition": {"mapping_version": "fixture-v1", "meaning": "unknown"},
-            "inference": {"direction": "unknown", "confidence": "unknown", "reason": "fixture_future_reason",
+            "status": "active", "condition": {"mapping_version": "fixture-v1", "meaning": {"status": "empty"}},
+            "inference": {"direction": "unknown", "confidence": "unknown", "reason": "quote_coverage_unknown",
                 "rule_version": "fixture-v1", "quote": null}, "identity": "unknown",
-            "suspected_scale": {}, "premium": PRICE}],
-    })
+            "suspected_scale": {}, "premium": "0.001234010000000000000001"}],
+    });
+    let trades = page["trades"].as_array_mut().unwrap();
+    let mut second = trades[0].clone();
+    second["trade"]["occurrence"] = json!(2);
+    trades.push(second);
+
+    // Match F10d's page slicing. Counts, issues and other evidence apply to the whole report.
+    let start = usize::try_from(offset)
+        .unwrap_or(usize::MAX)
+        .min(trades.len());
+    let end = start.saturating_add(limit).min(trades.len());
+    let next_offset = (end < trades.len()).then_some(end);
+    *trades = trades[start..end].to_vec();
+    page["next_offset"] = json!(next_offset);
+    page
 }
 
 #[tokio::test]
 async fn f10d_routes_forward_windows_and_preserve_evidence() {
     let observed = observation_page();
-    let mut verified = verification_page();
-    verified["access"]["record_local"] = json!(true);
-    verified["durable_through"] = json!(U64_MAX);
+    let mut legacy_verified = verification_page(0, 20);
+    legacy_verified["access"]["record_local"] = json!(false);
+    legacy_verified["durable_through"] = Value::Null;
+    let mut future_verified = legacy_verified.clone();
+    future_verified["trades"][0]["inference"]["reason"] = json!("fixture_future_reason");
     let mut empty = observed.clone();
     empty["items"] = json!([]);
     empty["next_offset"] = Value::Null;
-    let exchange = |path: &str, params: &str, response: &Value| {
-        Exchange::ok(format!("{path}?{params}"), response.clone())
-    };
-    let observed_page = format!("{QUERY}&offset=0&limit=1");
-    let verified_page = format!("{QUERY}&offset={U64_MAX}&limit=100");
-    let fixture = Fixture::start(vec![
-        exchange(OBSERVATIONS, &observed_page, &observed),
-        exchange(VERIFICATION, &verified_page, &verified),
-        exchange(OBSERVATIONS, QUERY, &observed),
-        exchange(VERIFICATION, QUERY, &verification_page()),
-        exchange(OBSERVATIONS, QUERY, &empty),
-    ])
-    .await;
-    for (request, expected) in [
-        (format!("{OBSERVATIONS}?{observed_page}"), observed.clone()),
-        (format!("{VERIFICATION}?{verified_page}"), verified),
-        (format!("{LEGACY}?{LEGACY_QUERY}"), observed),
+    let observed_path = format!("{OBSERVATIONS}?{QUERY}&offset=0&limit=1");
+    let mut reads = vec![(observed_path.clone(), observed_path, observed.clone())];
+    for (offset, limit) in [(0, 1), (1, 1), (u64::MAX, 100)] {
+        let path = format!("{VERIFICATION}?{QUERY}&offset={offset}&limit={limit}");
+        reads.push((path.clone(), path, verification_page(offset, limit)));
+    }
+    let legacy_path = format!("{LEGACY}?instrument_id={INSTRUMENT}&mode=verified&{LEGACY_QUERY}");
+    let verification_path = format!("{VERIFICATION}?{QUERY}");
+    let observations_path = format!("{OBSERVATIONS}?{QUERY}");
+    reads.extend([
         (
-            format!("{LEGACY}?instrument_id={INSTRUMENT}&mode=verified&{LEGACY_QUERY}"),
-            verification_page(),
+            format!("{LEGACY}?{LEGACY_QUERY}"),
+            observations_path.clone(),
+            observed,
         ),
-        (format!("{OBSERVATIONS}?{QUERY}"), empty),
-    ] {
-        assert_eq!(fixture.get_json(&request, StatusCode::OK).await, expected);
+        (legacy_path, verification_path.clone(), legacy_verified),
+        (
+            verification_path.clone(),
+            verification_path,
+            future_verified,
+        ),
+        (observations_path.clone(), observations_path, empty),
+    ]);
+    let fixture = Fixture::start(
+        reads
+            .iter()
+            .map(|(_, upstream, response)| Exchange::ok(upstream.clone(), response.clone()))
+            .collect(),
+    )
+    .await;
+    for (request, _, expected) in reads {
+        assert_eq!(
+            fixture.get_json(&request, StatusCode::OK).await,
+            expected,
+            "{request}"
+        );
     }
     fixture.upstream_expectations_met();
+}
+
+#[test]
+fn f10d_verification_fixtures_match_contract_and_pagination() {
+    let report = verification_page(0, 20);
+    for (offset, limit, occurrences, next_offset) in [
+        (0, 20, &[1, 2][..], None),
+        (0, 1, &[1][..], Some(1)),
+        (1, 1, &[2][..], None),
+        (u64::MAX, 100, &[][..], None),
+    ] {
+        let fixture = verification_page(offset, limit);
+        let page: models::OptionFlowVerificationPage = serde_json::from_value(fixture.clone())
+            .expect("synthetic verification page must decode with the pinned F10d model");
+        assert_eq!(serde_json::to_value(&page).unwrap(), fixture);
+        assert_eq!(
+            page.trades
+                .iter()
+                .map(|trade| trade.trade.occurrence)
+                .collect::<Vec<_>>(),
+            occurrences
+        );
+        assert_eq!(page.next_offset, next_offset);
+        for field in [
+            "counts",
+            "issues",
+            "observation_coverage",
+            "durable_through",
+        ] {
+            assert_eq!(
+                fixture[field], report[field],
+                "offset {offset} changed {field}"
+            );
+        }
+    }
 }
 
 #[tokio::test]

@@ -50,7 +50,7 @@
       "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE 19eb173751487befc504c78f60bfbb6be68f97e6。快照由 finance-api export-openapi 根据 handler 和类型导出，含期权和期权流价量字段的 schema 声明，无行情行或示例。"
     },
     "src/market_reads/tests/flow.rs": {
-      "sha256": "c7dbc4c2f55df898656387d64d4daaad078c937ec1ac9aa35ad7a5f78333edfe",
+      "sha256": "8cdb4c75f61b4cffc5e4acbf4ed1c1e735cd13be67571c61a813e5f469b4dd29",
       "generator": "src/market_reads/tests/synthetic.rs",
       "seed": "固定合约 ID 201、UTC 时钟和精确数字文本",
       "source": "运行 cargo test --locked --offline --lib f10d_。测试代码以固定字面量在内存中构造观察、核验、预算和覆盖响应，使用随机回环端口上的替身验证转发。"
