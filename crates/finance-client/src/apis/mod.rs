@@ -123,6 +123,7 @@ pub mod jobs_api;
 pub mod market_api;
 pub mod market_options_analytics_api;
 pub mod market_options_depth_api;
+pub mod market_options_flow_api;
 pub mod market_options_lines_api;
 pub mod market_read_api;
 pub mod research_api;
