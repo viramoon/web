@@ -1,4 +1,17 @@
 {
   "version": 1,
-  "fixtures": {}
+  "fixtures": {
+    "tests/api/database.rs": {
+      "sha256": "6db9c2e3c6fbfef50b95a4cd6383dd46373c4875472a8b405bf8bac110d1b3c8",
+      "generator": "tests/api/postgres.rs",
+      "seed": "fixed",
+      "source": "Run cargo test --locked --test api database. An isolated Unix-socket cluster is initialized in a temporary directory. The migration test writes a fixed synthetic schema marker using SQL and exercises only test configuration and local service stubs."
+    },
+    "tests/api/notifications_worker/silence.rs": {
+      "sha256": "d2ad0480b84be6c32702fad9b9901f7c9494c0f693e9c157a63c47cd1a2f8e07",
+      "generator": "tests/api/notifications_worker.rs",
+      "seed": "fixed",
+      "source": "Run cargo test --locked --test api notifications_worker::silence. The worker test harness builds fixture rows and routes, with generated opaque IDs, fixed synthetic subject IDs, controlled UTC intervals and an in-process SMTP substitute."
+    }
+  }
 }

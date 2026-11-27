@@ -92,6 +92,7 @@ impl Database {
             sqlx::query_scalar(
                 "SELECT to_regclass('app.integration_configs') IS NOT NULL
                     AND to_regclass('app.notification_health') IS NOT NULL
+                    AND to_regclass('app.notification_silences') IS NOT NULL
                     AND (
                         SELECT count(*) FROM pg_catalog.pg_attribute
                         WHERE attrelid = to_regclass('app.notification_outbox')

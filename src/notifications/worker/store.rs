@@ -19,7 +19,14 @@ const SENDER_LOCK: i64 = 6_758_026_211_706_146_534;
 const RETIRABLE_SUMMARIES: &str = "
     summary.status = 'pending' AND summary.kind = 'alert' AND EXISTS (
         SELECT FROM app.notification_outbox member
-        WHERE member.summary_id = summary.id AND member.suppression_reason IS NOT NULL
+        WHERE member.summary_id = summary.id AND (
+            member.suppression_reason IS NOT NULL OR (
+                summary.available_at <= $1 AND (
+                    app.notification_silence_overlaps(summary.rule_id, summary.event_id, $1, $1)
+                    OR app.notification_silence_overlaps(member.rule_id, member.event_id, $1, $1)
+                )
+            )
+        )
     )";
 
 const REQUEUEABLE_ALERTS: &str = "
@@ -51,7 +58,7 @@ struct Pending {
     priority: String,
     attempts: i32,
     digest_count: Option<i64>,
-    defer_reason: Option<String>,
+    was_deferred: bool,
     candidate_profile: Option<SmtpProfile>,
     snapshot_id: Option<Uuid>,
     integration_test_id: Option<Uuid>,
@@ -82,8 +89,10 @@ pub(super) async fn claim(
     let has_work = {
         let mut read_conn = db.connection().await?;
         sqlx::query_scalar::<_, bool>(&format!(
-            "SELECT EXISTS (SELECT FROM app.notification_outbox
-             WHERE (status = 'pending' AND available_at <= $1) OR status = 'sending')
+            "SELECT EXISTS (SELECT FROM app.notification_outbox job
+             WHERE (status = 'pending' AND available_at <= $1
+                    AND NOT app.notification_silence_overlaps(job.rule_id, job.event_id, $1, $1))
+                 OR status = 'sending')
              OR EXISTS (SELECT 1 FROM app.notification_outbox summary WHERE {RETIRABLE_SUMMARIES})
              OR EXISTS (SELECT 1 {REQUEUEABLE_ALERTS})",
         ))
@@ -160,7 +169,10 @@ pub(super) async fn claim(
                ON version.integration_id = config.id AND version.state = 'active'
          )
          SELECT job.id, job.kind, event.condition, job.priority, job.attempts,
-                job.digest_count, job.defer_reason, job.integration_test_id,
+                job.digest_count, job.integration_test_id,
+                (job.defer_reason IS NOT NULL OR
+                    app.notification_silence_overlaps(job.rule_id, job.event_id, job.created_at, $1)
+                ) AS was_deferred,
                 candidate.settings->>'profile' AS candidate_profile,
                 CASE WHEN job.integration_test_id IS NOT NULL THEN job.smtp_snapshot_id
                      ELSE smtp.active_snapshot END AS snapshot_id
@@ -171,6 +183,7 @@ pub(super) async fn claim(
          LEFT JOIN app.integration_versions candidate
            ON candidate.integration_id = test.integration_id AND candidate.version = test.config_version
          WHERE job.status = 'pending' AND job.available_at <= $1
+           AND NOT app.notification_silence_overlaps(job.rule_id, job.event_id, $1, $1)
            AND ((job.integration_test_id IS NULL AND smtp.delivery_enabled) OR test.status = 'pending')
            AND (job.kind NOT IN ('reminder', 'recovery') OR NOT EXISTS (
                SELECT FROM app.notification_outbox prior
@@ -247,8 +260,8 @@ async fn replace_suppressed_summaries(
     db: &mut PgConnection,
     now: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
-    // Retire a pending summary if an edit suppressed a member. The primary
-    // alert can still be eligible, so don't give it a rule suppression reason.
+    // Retire the old summary if it can no longer send with its original membership.
+    // Manually silenced alerts keep their replacements pending until eligible.
     sqlx::query(&format!(
         "UPDATE app.notification_outbox summary SET status = 'suppressed', updated_at = $1
          WHERE {RETIRABLE_SUMMARIES}"
@@ -282,13 +295,16 @@ async fn summarize(
     if pending.kind != DeliveryKind::Alert {
         return Ok(1);
     }
-    if pending.attempts == 0 && pending.defer_reason.is_some() {
+    if pending.attempts == 0 && pending.was_deferred {
         sqlx::query(
             "UPDATE app.notification_outbox SET status = 'summarized', summary_id = $1, updated_at = $2
              WHERE id IN (
                  SELECT id FROM app.notification_outbox
                  WHERE id <> $1 AND status = 'pending' AND attempts = 0 AND available_at <= $2
-                   AND priority = $3 AND kind = 'alert' AND defer_reason IS NOT NULL
+                   AND priority = $3 AND kind = 'alert'
+                   AND NOT app.notification_silence_overlaps(rule_id, event_id, $2, $2)
+                   AND (defer_reason IS NOT NULL OR
+                       app.notification_silence_overlaps(rule_id, event_id, created_at, $2))
                  ORDER BY available_at, created_at, id LIMIT 99 FOR UPDATE SKIP LOCKED
              )",
         )
