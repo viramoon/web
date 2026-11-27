@@ -10,6 +10,8 @@
 | /healthz/ready | 检查 database、static_index 与 finance 并返回 checks（name、ok、required）。数据库不可用或静态目录缺 index.html 为 503 / not_ready；finance 不可达默认返回 200 / degraded，设置 WEB_REQUIRE_FINANCE=true 后返回 503。全部就绪为 200 / ready |
 | /api/v1/system/status | 200，含 web.version、web.commit、web.started_at、database.ok / latency_ms、finance.ok / latency_ms。下游不可用时仍能读取各依赖状态 |
 
+含新增迁移的发布回退后，先核实旧进程连接由迁移前快照恢复的独立数据库，再使用上表的就绪和状态接口验证旧版服务。[回退流程](../RUNBOOK.md#含新增迁移的发布回退)
+
 OpenAPI 由 handler 注解和输出类型生成。执行下列命令可在不启动服务或数据库的情况下导出 JSON。
 
     cargo run --locked -q -- export-openapi > openapi/web.openapi.json
