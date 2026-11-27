@@ -48,8 +48,9 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 旧代码绝不在新发布写过的数据库上运行。凡含新增迁移的发布，在首次运行迁移前保留已验证可恢复的备份和上一套发布制品。回退时，从同一迁移前快照恢复独立数据库 `web_rollback_<sha>` 与独立数据根 `data-paper-rollback-<sha>`，然后在这套目标上运行旧发布。`<sha>` 取自要恢复的旧 fertile 发布提交，两处使用同一标识。
 
-1. 暂停接入和任务领取，按 fertile 运维流程停止新版 `web`、`web-notifier` 及其他相关写入方。保全新版数据库、数据根和发布指针。核对备份清单的截点早于首次迁移，并与选定的旧发布匹配。留存备份后到切换前的写入与投递记录，供恢复后对账。
-2. 在 fertile 仓库根目录，以受控的 PostgreSQL 恢复角色运行下例。预先设置实例根 `FERTILE_ROOT`、旧发布提交 `old_sha` 和经核对的迁移前快照绝对路径 `pre_migration_snapshot`。选择尚未建立的目标库和数据根。预检或恢复失败时停止切换，核对目标占用、归档和访问权限。
+1. 暂停接入和任务领取，等待在途作业结束。保全新版数据库、数据根和发布指针，记录 notifier 原启用状态。核对备份清单的截点早于首次迁移，并与选定的旧发布匹配。留存备份后到切换前的写入与投递记录，供恢复后对账。
+2. 在 supervisord 管理的实例上，从 fertile 仓库根目录执行 `scripts/fertile down` 停止整栈，确认 supervisord 已退出。随后执行 `scripts/postgres.sh start` 单独启动 PostgreSQL。等待数据库可用后再执行预检和正式恢复，期间保持业务进程停止。正式恢复会检查 supervisord 是否仍在运行。
+3. 在 fertile 仓库根目录，以受控的 PostgreSQL 恢复角色运行下例。预先设置实例根 `FERTILE_ROOT`、旧发布提交 `old_sha` 和经核对的迁移前快照绝对路径 `pre_migration_snapshot`。选择尚未建立的目标库和数据根。预检或恢复失败时停止切换，核对目标占用、归档和访问权限。
 
    ```bash
    (
@@ -68,10 +69,11 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
    )
    ```
 
-3. 核对恢复库的 `_sqlx_migrations` 与旧发布相符，并核对旧版所需的数据库角色、权限、业务状态及文件引用。按 fertile 发布流程同时切换旧版二进制、配置和静态产物。为旧发布设置恢复后的 `FERTILE_DATA_ROOT`，将任何独立研究目录配置指向恢复根下的对应目录，并将 `web` 和 `web-notifier` 的 `DATABASE_URL` 指向同一个恢复库。使用 fertile 本机数据库配置时，核对 `FERTILE_WEB_DATABASE` 指向该库。
-4. 核实旧版进程实际使用的数据库及数据根，再检查 `/healthz/ready`、旧版页面和备份截点前的业务记录。保持 notifier 停止，直至完成[队列对账](#告警与邮件进程)。验证通过后恢复接入。新版数据库和数据根单独保留用于对账以及切回新版。
+4. 核对恢复库的 `_sqlx_migrations` 与旧发布相符，并核对旧版所需的数据库角色、权限、业务状态及文件引用。执行 `scripts/postgres.sh stop` 停止单独启动的 PostgreSQL，交由 supervisor 随旧发布启动。按 Ruler 手册准备 `old_env`。为旧发布设置恢复后的 `FERTILE_DATA_ROOT`，将任何独立研究目录配置指向恢复根下的对应目录，并将 `web` 和 `web-notifier` 的 `DATABASE_URL` 指向同一个恢复库。使用 fertile 本机数据库配置时，核对 `FERTILE_WEB_DATABASE` 指向该库。运行 `"${old_env[@]}" FERTILE_ENABLE_WEB_NOTIFIER=0 scripts/fertile rollback --switch-only "$old_sha"` 切换旧版二进制、配置和静态产物。
+5. 运行 `"${old_env[@]}" FERTILE_ENABLE_WEB_NOTIFIER=0 scripts/fertile ensure-up` 启动旧发布。对账完成前，每次 `ensure-up` 都沿用同一组恢复目标及 notifier 禁用设置。用 `scripts/fertile status --json` 确认 notifier 未运行。核实旧版进程实际使用的数据库及数据根，再检查 `/healthz/ready`、旧版页面和备份截点前的业务记录，完成[队列对账](#告警与邮件进程)。
+6. 对账和验证通过后，若原部署已启用 notifier 且旧发布包含该进程，运行 `"${old_env[@]}" FERTILE_ENABLE_WEB_NOTIFIER=1 scripts/fertile ensure-up` 恢复邮件投递，并核对 notifier 已连接恢复库。其余情况下保持 notifier 禁用。恢复业务接入。新版数据库和数据根单独保留用于对账以及切回新版。
 
-完整的快照恢复与发布切换由 fertile 管理。[备份与恢复](https://github.com/viramoon/fertile/blob/main/ops/backup.md) · [Ruler 回滚手册](https://github.com/viramoon/fertile/blob/main/ops/ruler-runbook.md)
+完整的快照恢复与发布切换由 fertile 管理。[备份与恢复](https://github.com/viramoon/fertile/blob/main/ops/backup.md) · [Ruler 回滚手册](https://github.com/viramoon/fertile/blob/main/ops/ruler-runbook.md#从升级前快照回滚并切回新版)
 
 ## 安装仓库数据防护
 

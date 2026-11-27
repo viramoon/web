@@ -104,3 +104,40 @@ class RunbookRollbackTests(unittest.TestCase):
                 result, calls, _, _ = self.run_example(**options)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(calls, [])
+
+    def assert_rollback_order(self, *markers):
+        offset = 0
+        for marker in markers:
+            position = self.rollback.find(marker, offset)
+            self.assertNotEqual(position, -1, f"Missing or out of order: {marker}")
+            offset = position + len(marker)
+
+    def test_supervisor_exits_and_postgres_runs_alone_before_restore(self):
+        self.assert_rollback_order(
+            "`scripts/fertile down`",
+            "确认 supervisord 已退出",
+            "`scripts/postgres.sh start` 单独启动 PostgreSQL",
+            'scripts/restore.sh "$pre_migration_snapshot" --dry-run',
+            'scripts/restore.sh "$pre_migration_snapshot" \\\n',
+            "`scripts/postgres.sh stop`",
+            "scripts/fertile ensure-up",
+        )
+
+    def test_notifier_stays_disabled_until_queue_reconciliation(self):
+        switch = '"${old_env[@]}" FERTILE_ENABLE_WEB_NOTIFIER=0 scripts/fertile rollback --switch-only "$old_sha"'
+        disabled = '"${old_env[@]}" FERTILE_ENABLE_WEB_NOTIFIER=0 scripts/fertile ensure-up'
+        enabled = '"${old_env[@]}" FERTILE_ENABLE_WEB_NOTIFIER=1 scripts/fertile ensure-up'
+        self.assertEqual(self.rollback.count("scripts/fertile ensure-up"), 2)
+        self.assertEqual(re.findall(r"`([^`\n]*scripts/fertile ensure-up)`", self.rollback), [disabled, enabled])
+        self.assert_rollback_order(
+            "记录 notifier 原启用状态",
+            switch,
+            disabled,
+            "每次 `ensure-up` 都沿用同一组恢复目标及 notifier 禁用设置",
+            "`scripts/fertile status --json`",
+            "确认 notifier 未运行",
+            "完成[队列对账](#告警与邮件进程)",
+            "对账和验证通过后，若原部署已启用 notifier 且旧发布包含该进程",
+            enabled,
+            "核对 notifier 已连接恢复库",
+        )
