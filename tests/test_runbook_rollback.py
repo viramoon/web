@@ -141,3 +141,65 @@ class RunbookRollbackTests(unittest.TestCase):
             enabled,
             "核对 notifier 已连接恢复库",
         )
+
+    def test_instance_root_and_port_are_required_before_shutdown(self):
+        self.assert_rollback_order(
+            "暂停接入或停止服务前",
+            "核对目标实例的绝对持久根、PostgreSQL 端口和进程管理器",
+            "export FERTILE_ROOT FERTILE_POSTGRES_PORT",
+            "`sudo systemctl stop fertile.target`",
+            "`scripts/fertile down`",
+        )
+        blocks = re.findall(r"^```bash\n(.*?)^```$", self.rollback, re.M | re.S)
+        self.assertEqual(len(blocks), 1)
+        script = (
+            "FERTILE_ROOT=$1\nFERTILE_POSTGRES_PORT=$2\n"
+            "check_instance() {\n" + blocks[0] + "}\n"
+            "check_instance && /bin/sh -c 'printf \"%s\\n\" \"$FERTILE_ROOT\" \"$FERTILE_POSTGRES_PORT\"'"
+        )
+        instance = str(ROOT)
+        for case, root, port, ready in (
+            ("confirmed instance", instance, "55432", True),
+            ("missing root", "", "55432", False),
+            ("missing port", instance, "", False),
+            ("relative root", ".", "55432", False),
+            ("privileged port", instance, "1023", False),
+            ("out-of-range port", instance, "65536", False),
+        ):
+            with self.subTest(case=case):
+                result = subprocess.run(
+                    ["/bin/bash", "--noprofile", "--norc", "-c", script, "check-instance", root, port],
+                    env={}, capture_output=True, text=True, timeout=5,
+                )
+                if ready:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), [root, port])
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+
+    def test_systemd_has_its_own_stop_restore_and_start_path(self):
+        systemd_heading = "\n#### systemd 实例\n"
+        supervisord_heading = "\n#### supervisord 实例\n"
+        self.assert_rollback_order(systemd_heading, supervisord_heading)
+        preparation, branches = self.rollback.split(systemd_heading, 1)
+        systemd, supervisord = branches.split(supervisord_heading, 1)
+        for marker in (
+            "fertile.target` 的单元绑定到已确认的实例根",
+            "ops/backup.md#恢复步骤",
+            "`sudo systemctl stop fertile.target`",
+            "`web_rollback_<sha>`",
+            "`data-paper-rollback-<sha>`",
+            "deploy/linux-server.md#systemd",
+        ):
+            self.assertIn(marker, systemd)
+        self.assert_rollback_order(
+            systemd_heading, "fertile.target` 的单元绑定到已确认的实例根",
+            "`sudo systemctl stop fertile.target`", "单独启动该实例的 PostgreSQL",
+            "完成预检与正式恢复", "停止单独启动的 PostgreSQL",
+            "`FERTILE_ENABLE_WEB_NOTIFIER=0`", "再由 systemd 启动",
+            "完成[队列对账](#告警与邮件进程)", "再按原启用状态恢复投递", supervisord_heading,
+        )
+        for command in ("scripts/fertile down", "scripts/fertile rollback", "scripts/fertile ensure-up"):
+            self.assertNotIn(command, preparation + systemd)
+            self.assertIn(command, supervisord)
