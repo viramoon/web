@@ -23,7 +23,7 @@ use crate::{
     AppState, ErrorBody, api_error,
     finance::Fault,
     market_reads::MarketReadError,
-    market_types::{InstrumentId, ProductToken, valid_token},
+    market_types::{InstrumentId, ProductToken, parse_u64, valid_token},
 };
 
 const CHAIN: &str = "/api/v1/options/chain";
@@ -42,7 +42,7 @@ struct ChainQuery {
     after_con_id: Option<i32>,
     limit: Option<u16>,
     instrument_id: Option<InstrumentId>,
-    as_of: Option<DateTime<Utc>>,
+    as_of: Option<DateTime<FixedOffset>>,
     offset: Option<u32>,
 }
 
@@ -103,7 +103,7 @@ struct ExposureQuery {
 
 enum OptionReadError {
     InvalidQuery,
-    ChainConIdRequired,
+    ContractPending,
     Market(MarketReadError),
     Upstream(Fault),
 }
@@ -116,10 +116,10 @@ impl IntoResponse for OptionReadError {
                 "invalid_market_request",
                 "Invalid market request",
             ),
-            Self::ChainConIdRequired => api_error(
-                StatusCode::BAD_REQUEST,
-                "option_chain_con_id_required",
-                "Supply the confirmed broker underlying_con_id",
+            Self::ContractPending => api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "finance_contract_pending",
+                "The finance contract for this capability is pending",
             ),
             Self::Market(error) => error.into_response(),
             Self::Upstream(fault) => fault.into_response(),
@@ -148,11 +148,6 @@ fn positive_id(id: i32) -> Result<u32, OptionReadError> {
 
 fn timestamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::AutoSi, true)
-}
-
-fn nanos(text: &str) -> Option<u64> {
-    let value = text.parse::<u64>().ok()?;
-    (text == value.to_string()).then_some(value)
 }
 
 fn limited(limit: Option<u16>, max: u16) -> Result<Option<u64>, OptionReadError> {
@@ -184,15 +179,25 @@ async fn chain(
     query: Result<Query<ChainQuery>, QueryRejection>,
 ) -> Result<Json<Box<RawValue>>, OptionReadError> {
     let query = parsed(query)?;
-    let limit = limited(query.limit, 500)?;
     let Some(underlying_con_id) = query.underlying_con_id else {
-        return Err(OptionReadError::ChainConIdRequired);
+        return Err(
+            if query.instrument_id.is_some()
+                && query.expiry.is_none()
+                && query.after_con_id.is_none()
+                && query.limit != Some(0)
+            {
+                OptionReadError::ContractPending
+            } else {
+                OptionReadError::InvalidQuery
+            },
+        );
     };
     if query.instrument_id.is_some() || query.as_of.is_some() || query.offset.is_some() {
         return Err(OptionReadError::InvalidQuery);
     }
     let underlying_con_id = positive_id(underlying_con_id)?;
     let after_con_id = query.after_con_id.map(positive_id).transpose()?;
+    let limit = limited(query.limit, 500)?;
     let raw = state
         .finance
         .read(|cfg| async move {
@@ -235,8 +240,8 @@ async fn history(
 ) -> Result<Json<Box<RawValue>>, OptionReadError> {
     let query = parsed(query)?;
     let underlying_con_id = positive_id(query.underlying_con_id)?;
-    let start = nanos(&query.start).ok_or(OptionReadError::InvalidQuery)?;
-    let end = nanos(&query.end).ok_or(OptionReadError::InvalidQuery)?;
+    let start = parse_u64(&query.start).ok_or(OptionReadError::InvalidQuery)?;
+    let end = parse_u64(&query.end).ok_or(OptionReadError::InvalidQuery)?;
     if start >= end {
         return Err(OptionReadError::InvalidQuery);
     }
@@ -309,11 +314,7 @@ async fn flow(query: Result<Query<FlowQuery>, QueryRejection>) -> Response {
     {
         return OptionReadError::InvalidQuery.into_response();
     }
-    api_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "finance_contract_pending",
-        "The finance contract for this capability is pending",
-    )
+    OptionReadError::ContractPending.into_response()
 }
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -357,9 +358,23 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
             let parameters = operation["parameters"]
                 .as_array_mut()
                 .expect("chain parameters");
-            parameters[0]["description"] =
-                json!("Confirmed broker identifier. Required for a successful read.");
-            parameters[0]["required"] = json!(false);
+            for parameter in parameters.iter_mut() {
+                match parameter["name"].as_str() {
+                    Some("underlying_con_id") => {
+                        parameter["description"] =
+                            json!("Confirmed broker identifier. Required for a successful read.");
+                        parameter["required"] = json!(false);
+                    }
+                    Some("limit") => {
+                        parameter["description"] = json!(
+                            "F10c page size: 1–500, defaults to 100. Legacy queries retain their original range."
+                        );
+                        parameter["schema"] =
+                            json!({"type": "integer", "format": "int32", "minimum": 0});
+                    }
+                    _ => {}
+                }
+            }
             for (name, schema) in [
                 (
                     "instrument_id",
@@ -377,6 +392,8 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
                     "schema": schema,
                 }));
             }
+            operation["responses"]["503"]["description"] =
+                json!("Finance unavailable, or finance contract pending for a legacy query");
         }
         if path == EXPOSURE {
             let parameters = operation["parameters"]

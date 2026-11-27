@@ -38,6 +38,11 @@ pub(crate) fn valid_token(value: &str) -> bool {
         && bytes.all(|byte| lower_digit(byte) || matches!(byte, b'_' | b'-' | b'.'))
 }
 
+pub(crate) fn parse_u64(value: &str) -> Option<u64> {
+    let number: u64 = value.parse().ok()?;
+    (number.to_string() == value).then_some(number)
+}
+
 #[derive(Clone, Serialize, ToSchema)]
 #[serde(transparent)]
 #[schema(value_type = String, pattern = r"^[a-z0-9][a-z0-9_.-]{0,63}(?![\s\S])")]

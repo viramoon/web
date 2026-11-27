@@ -166,45 +166,60 @@ async fn f10c_preserves_future_values_nulls_missing_fields_and_numeric_text() {
 
 #[tokio::test]
 async fn f10c_maps_upstream_errors_on_every_read() {
-    for (upstream_status, web_status, code) in [
+    for (upstream_status, upstream_error, web_status, web_error) in [
         (
             StatusCode::BAD_REQUEST,
+            ("market_read_query_invalid", "Invalid market read query"),
             StatusCode::BAD_REQUEST,
-            "market_read_query_invalid",
+            ("market_read_query_invalid", "Invalid market read query"),
         ),
         (
             StatusCode::NOT_FOUND,
+            (
+                "market_read_not_found",
+                "Requested market data is unavailable",
+            ),
             StatusCode::NOT_FOUND,
-            "market_read_not_found",
+            (
+                "market_read_not_found",
+                "Requested market data is unavailable",
+            ),
         ),
         (
             StatusCode::INTERNAL_SERVER_ERROR,
+            ("market_read_failed", "Could not read market data"),
             StatusCode::BAD_GATEWAY,
-            "finance_upstream_error",
+            ("finance_upstream_error", "Finance request failed"),
         ),
         (
             StatusCode::SERVICE_UNAVAILABLE,
+            (
+                "market_read_source_unavailable",
+                "Market read source is not connected",
+            ),
             StatusCode::SERVICE_UNAVAILABLE,
-            "finance_unavailable",
+            ("finance_unavailable", "Finance is unavailable"),
         ),
         (
             StatusCode::GATEWAY_TIMEOUT,
+            ("gateway_timeout", "Synthetic upstream gateway timed out"),
             StatusCode::GATEWAY_TIMEOUT,
-            "finance_timeout",
+            ("finance_timeout", "Finance request timed out"),
         ),
     ] {
         for (path, upstream) in READS {
             let fixture = Fixture::start(vec![Exchange {
                 request: upstream.into(),
                 status: upstream_status,
-                value: json!({"error": {"code": code, "message": "Synthetic error"}}),
+                value: json!({"error": {"code": upstream_error.0, "message": upstream_error.1}}),
             }])
             .await;
             let body = fixture.get_json(path, web_status).await;
-            assert_eq!(body["error"]["code"], code, "{path}");
-            if upstream_status.is_server_error() {
-                assert_ne!(body["error"]["message"], "Synthetic error", "{path}");
-            }
+            assert_eq!(
+                body,
+                json!({"error": {"code": web_error.0, "message": web_error.1}}),
+                "{path} with upstream status {upstream_status}"
+            );
             fixture.upstream_expectations_met();
         }
     }
@@ -269,13 +284,17 @@ async fn f10c_routes_share_anonymous_denial_and_throttle_before_finance() {
 }
 
 #[tokio::test]
-async fn f10c_validates_query_bounds_and_only_flow_is_pending() {
+async fn f10c_validates_query_bounds_and_preserves_legacy_pending() {
     let gateway = Gateway::new("http://127.0.0.1:1".into());
     for path in [
         "/api/v1/options/chain?underlying_con_id=2147483648",
         "/api/v1/options/chain?underlying_con_id=101&limit=501",
         "/api/v1/options/chain?underlying_con_id=101&after_con_id=0",
         "/api/v1/options/chain?underlying_con_id=101&expiry=2100-02-29",
+        "/api/v1/options/chain?offset=1",
+        "/api/v1/options/chain?instrument_id=SYNTH.XNYS&limit=0",
+        "/api/v1/options/chain?instrument_id=SYNTH.XNYS&expiry=2026-01-02",
+        "/api/v1/options/chain?instrument_id=SYNTH.XNYS&underlying_con_id=101",
         "/api/v1/options/exposure?underlying_id=SYNTH.XNYS&instrument_id=SYNTH.XTEST",
         "/api/v1/options/history?underlying_con_id=101&start=1&end=1",
         "/api/v1/options/history?underlying_con_id=101&start=01&end=10",
@@ -289,17 +308,22 @@ async fn f10c_validates_query_bounds_and_only_flow_is_pending() {
             "invalid_market_request"
         );
     }
-    assert_eq!(
-        gateway
-            .get_json(FLOW, StatusCode::SERVICE_UNAVAILABLE)
-            .await["error"]["code"],
-        "finance_contract_pending"
-    );
-    let legacy = "/api/v1/options/chain?instrument_id=SYNTH.XNYS&offset=1";
-    assert_eq!(
-        gateway.get_json(legacy, StatusCode::BAD_REQUEST).await["error"]["code"],
-        "option_chain_con_id_required"
-    );
+    for path in [
+        FLOW,
+        "/api/v1/options/chain?instrument_id=SYNTH.XNYS&offset=1",
+        "/api/v1/options/chain?instrument_id=SYNTH.XNYS&limit=65535",
+    ] {
+        assert_eq!(
+            gateway
+                .get_json(path, StatusCode::SERVICE_UNAVAILABLE)
+                .await,
+            json!({"error": {
+                "code": "finance_contract_pending",
+                "message": "The finance contract for this capability is pending"
+            }}),
+            "{path}"
+        );
+    }
 }
 
 #[test]
@@ -365,31 +389,85 @@ fn f10c_openapi_keeps_legacy_views_and_exports_read_schemas() {
     }
 }
 
+fn option_history_quote() -> Value {
+    let batch =
+        json!({"request_id": null, "page": "1", "occurrence": "1", "requested_start_ts": "1"});
+    option_history_event(
+        "option_history_quote",
+        json!({"batch": batch, "bid": null, "ask": PRICE,
+            "bid_quantity": null, "ask_quantity": SIZE, "bid_past_low": false, "ask_past_high": false}),
+    )
+}
+
+fn option_history_event(kind: &str, payload: Value) -> Value {
+    let mut wire = event(kind, payload);
+    wire["schema_version"] = json!("3.0");
+    wire["asset_kind"] = json!("option");
+    wire["exchange_ts"] = json!("1000000000");
+    wire
+}
+
 #[test]
 fn f10c_generated_wal_decodes_v3_evidence_without_changing_v1() {
     let batch =
         json!({"request_id": null, "page": "1", "occurrence": "1", "requested_start_ts": "1"});
-    for (kind, payload) in [
-        (
+    for wire in [
+        option_history_event(
             "option_history_trade",
             json!({"batch": batch, "condition_mapping_version": "fixture-v1",
             "contract_multiplier": "100.00", "exchange": "XTEST", "past_limit": false,
             "price": PRICE, "quantity": SIZE, "special_conditions": "", "unreported": true}),
         ),
-        (
-            "option_history_quote",
-            json!({"batch": batch, "bid": null, "ask": PRICE,
-            "bid_quantity": null, "ask_quantity": SIZE, "bid_past_low": false, "ask_past_high": false}),
-        ),
+        option_history_quote(),
     ] {
-        let mut wire = event(kind, payload);
-        wire["schema_version"] = json!("3.0");
-        wire["asset_kind"] = json!("option");
-        wire["exchange_ts"] = json!("1000000000");
         let mut decoded: models::Event = serde_json::from_value(wire.clone()).unwrap();
         assert!(event_version_matches(&decoded));
         assert_eq!(serde_json::to_value(&decoded).unwrap(), wire);
+        let legacy_page: models::MarketWalPage =
+            serde_json::from_value(wal_reply(wire, true)).unwrap();
+        assert!(matches!(
+            check_record(&legacy_page.access, &legacy_page.records[0]),
+            Err(MarketReadError::InvalidResponse)
+        ));
+        for invalid in [None, Some("01"), Some("+1"), Some("18446744073709551616")] {
+            decoded.exchange_ts = invalid.map(str::to_owned);
+            assert!(!event_version_matches(&decoded), "{invalid:?}");
+        }
+        decoded.exchange_ts = Some("1000000000".into());
         decoded.schema_version = models::SchemaVersion::Variant10;
         assert!(!event_version_matches(&decoded));
     }
+}
+
+#[tokio::test]
+async fn f10c_legacy_wal_and_projection_reject_v3_evidence() {
+    let wal = format!("{WAL}?source={SOURCE}&product={PRODUCT}");
+    let projected = format!(
+        "{PROJECTION}?source={SOURCE}&product={PRODUCT}&channel=fixture&instrument_id={INSTRUMENT}&epoch=7&seq={POSITION}"
+    );
+    let valid = option_history_quote();
+    let mut missing_timestamp = valid.clone();
+    missing_timestamp["exchange_ts"] = Value::Null;
+    let mut script = Vec::new();
+    for record in [valid, missing_timestamp] {
+        let page = wal_rows(vec![event("trade", trade()), record]);
+        let projection = json!({
+            "as_of": AS_OF, "access": access(true),
+            "projected_through": page["through"],
+            "record": page["records"][1],
+        });
+        script.push(Exchange::ok(wal.clone(), page));
+        script.push(Exchange::ok(projected.clone(), projection));
+    }
+    let fixture = Fixture::start(script).await;
+    for path in [&wal, &projected, &wal, &projected] {
+        assert_eq!(
+            fixture.get_json(path, StatusCode::BAD_GATEWAY).await,
+            json!({"error": {
+                "code": "finance_invalid_response",
+                "message": "Invalid finance response"
+            }})
+        );
+    }
+    fixture.upstream_expectations_met();
 }

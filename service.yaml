@@ -40,6 +40,7 @@ market_gateway:
   finance_contract: openapi/finance.commit
   access: administrator
   cache_control: no-store
+  legacy_wal_event_versions: ["1.0", "2.0"]
   rest_reads: {max_requests: 120, window_seconds: 60, identity: single_admin}
   watchlists: {table: app.market_watchlists, migration: "20261127040000", max_instruments: 64}
   depth_focus: {path: /api/v1/market/depth-focus, state: process_local}
@@ -56,6 +57,7 @@ market_gateway:
     option_exposure: /api/v1/options/exposure
     option_history: /api/v1/options/history
     source: authorized_ibkr_paper_read_only_market_owner
+  legacy_option_chain_query: {path: /api/v1/options/chain, status: 503, code: finance_contract_pending}
   pending_reads:
     /api/v1/options/flow: F10d
   events:

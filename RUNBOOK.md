@@ -126,7 +126,7 @@ curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 
 先部署含 F10c 的 finance，再切换 web。使用现有 `FINANCE_BASE_URL`，由 finance 的已授权 IBKR paper 只读行情所有者接入链和调度器、Nasdaq 深度回调、敞口输入快照及已取得的历史链批次。单独启动 finance API 时，这些来源可能未装配。若新读路径返回 `503 finance_unavailable`，除连通性和熔断外，还应检查该来源是否已接入且具有展示许可。上游已接入但不存在相应快照或历史窗口时，保留 404。
 
-期权链使用已确认的券商 `underlying_con_id`；敞口使用 F1 `underlying_id`。场所深度请读 `/api/v1/market/depth?symbol=…`，仅当状态为 `receiving` 时展示盘口。历史链查询使用已取得的精确窗口。上述 GET 仅查已接入的数据与状态，供应商会话及采集任务由行情所有者管理。`/api/v1/options/flow` 仍返回 `503 finance_contract_pending`，等待 F10d。[路径和参数](docs/api.md#w8-期权场所深度与券商线路)
+期权链使用已确认的券商 `underlying_con_id`，仅带旧参数的合法请求仍返回 `503 finance_contract_pending`。敞口使用 F1 `underlying_id`。场所深度请读 `/api/v1/market/depth?symbol=…`，仅当状态为 `receiving` 时展示盘口。历史链查询使用已取得的精确窗口。上述 GET 仅查已接入的数据与状态，供应商会话及采集任务由行情所有者管理。`/api/v1/options/flow` 仍返回 `503 finance_contract_pending`，等待 F10d。[路径和参数](docs/api.md#w8-期权场所深度与券商线路)
 
 ## 集成配置及凭据
 

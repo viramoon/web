@@ -1,6 +1,7 @@
 use crate::{
     AppState, api_error,
     finance::{Fault, Finance},
+    market_types::parse_u64,
 };
 use axum::{
     Json, Router,
@@ -145,6 +146,9 @@ fn check_record(
         || event.product != access.product
         || event.license != access.license
         || !event_version_matches(event)
+        // W2a responses expose the original 1.0/2.0 contract. Reject the whole
+        // page if needed so its cursor never hides an unsupported record.
+        || event.schema_version == models::SchemaVersion::Variant30
     {
         return Err(MarketReadError::InvalidResponse);
     }
@@ -178,7 +182,10 @@ pub(crate) fn event_version_matches(event: &models::Event) -> bool {
                     ))
         }
         models::SchemaVersion::Variant30 => {
-            option_history && event.asset_kind == models::AssetKind::Option && event.revision == "0"
+            option_history
+                && event.asset_kind == models::AssetKind::Option
+                && event.revision == "0"
+                && event.exchange_ts.as_deref().and_then(parse_u64).is_some()
         }
     }
 }
@@ -401,9 +408,6 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
         "Message",
         "NonEmptyText",
         "OpenInterest",
-        "OptionHistoryBatch",
-        "OptionHistoryQuote",
-        "OptionHistoryTrade",
         "PerpetualContext",
         "ProductPolicy",
         "ProjectedMarketEvent",
@@ -423,6 +427,42 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
     ] {
         schemas[name] = upstream_schemas[name].clone();
     }
+    retain_legacy_event_schemas(schemas);
+}
+
+fn retain_legacy_event_schemas(schemas: &mut Value) {
+    let is_option_history = |kind: &Value| {
+        matches!(
+            kind.as_str(),
+            Some("option_history_trade" | "option_history_quote")
+        )
+    };
+    schemas["SchemaVersion"]["enum"]
+        .as_array_mut()
+        .expect("finance event versions")
+        .retain(|version| matches!(version.as_str(), Some("1.0" | "2.0")));
+    schemas["Message"]["oneOf"]
+        .as_array_mut()
+        .expect("finance event messages")
+        .retain(|message| !is_option_history(&message["properties"]["kind"]["enum"][0]));
+    // The upstream Event intersects the envelope and tagged message with
+    // a final version-specific constraint. Preserve the two W6 branches.
+    let constraints = schemas["Event"]["allOf"][2]["oneOf"]
+        .as_array_mut()
+        .expect("finance event version constraints");
+    constraints.retain(|rule| {
+        matches!(
+            rule["properties"]["schema_version"]["const"].as_str(),
+            Some("1.0" | "2.0")
+        )
+    });
+    constraints
+        .iter_mut()
+        .find(|rule| rule["properties"]["schema_version"]["const"] == "1.0")
+        .expect("finance event version 1.0")["properties"]["kind"]["not"]["enum"]
+        .as_array_mut()
+        .expect("version 1.0 message exclusions")
+        .retain(|kind| !is_option_history(kind));
 }
 
 pub(crate) fn register_read_operation(

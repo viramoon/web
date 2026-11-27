@@ -22,7 +22,7 @@ CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.opena
 
 [finance 来源提交](../openapi/finance.commit) 锁定为 finance main 的 `40bd0ef4d8c9ef8c7ffac57f7562c8ddd74d6553`，包含 F10b 和 F10c。W8 公开六项 F10c 期权和行情所有者读取，见[读取参数与响应](#w8-期权场所深度与券商线路)。该 [finance OpenAPI](../openapi/finance.openapi.json) 也包含策略、作业、研究、决策和 Binance 状态端点。浏览器的 bars 和指标仍使用 W2a 的 WAL 视图。
 
-WAL 与投影 REST 的 `Event`、`Message` 保留 1.0 与 2.0，并识别 3.0 的 `option_history_trade` 和 `option_history_quote`。原始记录仍须通过本机记录与显示许可检查。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制与大整数文本。市场 WebSocket 只发 1.0 数据帧，遇到其他事件版本发出 `unsupported_version` 重置。web 运维 SSE 使用下文的 `/events` 契约。
+WAL 与投影 REST 保留 W6 的 1.0 与 2.0 `Event`、`Message` 和 `SchemaVersion`。上游返回 3.0 的 `option_history_trade` 或 `option_history_quote` 时，整条请求返回 `502 finance_invalid_response`，以保留原分页和旧客户端解码行为。原始记录仍须通过本机记录与显示许可检查。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制与大整数文本。市场 WebSocket 只发 1.0 数据帧。web 运维 SSE 使用下文的 `/events` 契约。
 
 同一 finance 提交导出的三个 1.0 读流产物与 W6 逐字节一致。[市场 WS schema](../openapi/finance.market-ws.schema.json) · [行情状态 SSE schema](../openapi/finance.market-status-sse.schema.json) · [合成回放样本](../openapi/finance.read-stream-examples.json)
 
@@ -116,7 +116,7 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 | `/market/subscriptions/budget` | 返回账户线路上限、预留、常驻股票、热点期权、轮换占用、调度阶段、发现及观察计数。 |
 | `/market/subscriptions/coverage` | 传正整数 `con_id` 和 RFC 3339 的 `start`、`end`。返回观察区间 `covered`、`uncovered`、`unknown` 及可空的 `last_observed_at`。 |
 
-旧期权链占位参数 `instrument_id`、`as_of`、`offset` 已弃用。仅提交旧形式时返回 `400 option_chain_con_id_required`。旧的 F1 标识无已确认的券商映射，接入方应从行情所有者取得 `underlying_con_id`，并切换到游标分页。
+旧期权链占位参数 `instrument_id`、`as_of`、`offset` 已弃用。仅提交有效的旧请求形式时仍返回 `503 finance_contract_pending`。成功读取需从行情所有者取得已确认的 `underlying_con_id`，并使用游标分页。两种查询形式的专用参数须分别使用。
 
 参数校验失败返回 400。展示未获准返回 `403 market_display_denied`，上游查无快照或窗口的 404 保留，错误响应仍使用 `error.code` 与 `error.message`。上游异常归为 502，来源未接线、连接失败或熔断为 `503 finance_unavailable`，超时为 `504 finance_timeout`。接口使用 finance 已取得的数据，历史读取不触发下载。
 

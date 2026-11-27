@@ -2,7 +2,7 @@
   "version": 1,
   "fixtures": {
     "src/market_reads/tests.rs": {
-      "sha256": "38a4ade48c7b7682e72a069ed9f07e10c5d8345adb93d036bc8c73c0737dd9df",
+      "sha256": "778649bf05ebbe760d30a8a05da7d529f4438b647aed7f12b31ff585ce4e9575",
       "generator": "src/market_reads/tests/synthetic.rs",
       "seed": "fixed",
       "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。 W6 用相同固定值构造混合版本 WAL，包含资金费率、持仓量和控制帧。"
@@ -38,7 +38,7 @@
       "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE fc5e153e9727181f5748659c0610b2fbc2b49769。finance-api export-read-stream 从已提交的合成 F1 种子构造 WS 回放，并用固定时钟、虚构标的和大整数文本生成 SSE 样本。"
     },
     "src/market_reads/tests/options.rs": {
-      "sha256": "b104aa250e0484f544cf5a63ab3e94821f05ffe2bedcf4b0cb3c0ec3f2758511",
+      "sha256": "1995c45c5ec1963284662fd111c836dbfc5b9334eb9fa2d43069f11762aa5a06",
       "generator": "src/market_reads/tests/synthetic.rs",
       "seed": "固定虚构标的、十进制文本、UTC 时钟和券商标识",
       "source": "运行 cargo test --locked --offline --lib f10c_。期权、深度、敞口、历史、预算、覆盖和版本 3.0 的证据都在测试运行时构造。"
