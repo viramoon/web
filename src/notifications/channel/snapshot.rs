@@ -1,5 +1,5 @@
 //! Private, immutable SMTP configuration captures. PostgreSQL stores only the opaque ID.
-use super::{ChannelConfigError, Credentials, EmailChannel};
+use super::{ChannelConfigError, Credentials, EmailChannel, PRIMARY_REQUIRED};
 use openssl::{
     rand::rand_bytes,
     symm::{Cipher, decrypt_aead, encrypt_aead},
@@ -62,10 +62,20 @@ struct Recorded {
 }
 
 impl SnapshotStore {
-    pub(super) fn open(path: &Path, static_root: &Path) -> Result<Self, ChannelConfigError> {
+    pub(super) fn open(
+        path: &Path,
+        static_root: &Path,
+        create_key: bool,
+    ) -> Result<Self, ChannelConfigError> {
         let directory = open_private_directory(path, static_root)?;
         check_mode(&directory, true, 0o700).map_err(|_| INVALID_DIRECTORY)?;
-        let key = load_key(&directory).map_err(|_| INVALID_KEY)?;
+        let key = load_key(&directory, create_key).map_err(|error| {
+            if !create_key && error.kind() == ErrorKind::NotFound {
+                PRIMARY_REQUIRED
+            } else {
+                INVALID_KEY
+            }
+        })?;
         Ok(Self { directory, key })
     }
 
@@ -186,12 +196,12 @@ fn open_private_directory(path: &Path, static_root: &Path) -> Result<File, Chann
         .map_err(|_| INVALID_DIRECTORY)
 }
 
-fn load_key(directory: &File) -> io::Result<Zeroizing<[u8; 32]>> {
+fn load_key(directory: &File, create_key: bool) -> io::Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0; 32]);
     let read = || read_private(directory, KEY_FILE, 32);
     let bytes = match read() {
         // Read the winning file below even if a different replica published it first.
-        Err(error) if error.kind() == ErrorKind::NotFound => {
+        Err(error) if create_key && error.kind() == ErrorKind::NotFound => {
             let mut has_snapshot = false;
             for entry in Dir::read_from(directory)? {
                 if entry?.file_name().to_bytes().ends_with(b".smtp") {

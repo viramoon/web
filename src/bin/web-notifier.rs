@@ -84,6 +84,19 @@ async fn run() -> Result<(), Failure> {
     )
     .map_err(|_| ("database_configuration", "invalid DATABASE_URL"))?;
 
+    tokio::pin!(stop_signal);
+    let idle_reason = tokio::select! {
+        result = worker::smtp_idle_reason(&db, &channel) => result.map_err(|_| {
+            ("smtp_configuration", "notifier could not read the SMTP configuration from PostgreSQL")
+        })?,
+        _ = &mut stop_signal => return Ok(()),
+    };
+    if let Some(reason) = idle_reason {
+        tracing::warn!(stage = "smtp_configuration", reason, "notifier idle");
+        stop_signal.await;
+        return Ok(());
+    }
+
     let (shutdown, stop) = watch::channel(false);
     let running = worker::run(&db, &policy, &channel, stop);
     let worker_error = |_| ("notification_worker", "notifier worker failed");

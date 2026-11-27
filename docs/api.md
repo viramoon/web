@@ -185,7 +185,7 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 
 等待重试的汇总若有主任务或成员被抑制，notifier 会停止原汇总的后续发送，并为仍符合规则的告警重新排队。可在原成员投递的 `summary_attempts` 中查看汇总的超时或拒绝记录，并在替代投递的 `attempts` 中查看其自身尝试。已领取的尝试按实际 SMTP 结果结算，`accepted` 表示中继已接收。SMTP 配置由部署提供，测试请求无正文或查询参数，测试邮件发往配置中的本人邮箱。
 
-`FERTILE_ENABLE_WEB_NOTIFIER=0` 时 fertile 守护器不会启动邮件进程。直接启动时，显式关闭、SMTP 主槽不可用或已配置的快照存储不可用会使进程空转，收到 SIGTERM 或 SIGINT 后以状态码 0 退出。即使备选槽和快照存储可用，主槽缺项时也保留待处理邮件和独立渠道测试的状态。web 仍按原接口保存告警和排队，空转进程不连接数据库、推进队列或发送邮件。修复配置并重启后恢复按既有策略处理。`notifications.state` 反映数据库投递历史，进程是否空转以启动日志为准。[安全启动条件](../RUNBOOK.md#告警与邮件进程)
+`FERTILE_ENABLE_WEB_NOTIFIER=0` 时 fertile 守护器不会启动邮件进程。直接启动时，显式关闭或所需 SMTP 配置不可用会使进程空转，收到 SIGTERM 或 SIGINT 后以状态码 0 退出。W3 默认投递需要主槽。已有绑定快照的活动 W4 版本时，普通邮件和独立渠道测试继续使用该快照，槽位更新后重启也沿用同一绑定。活动快照的目录、密钥或文件不可用时，队列与投递记录保留原状。web 仍保存告警和排队，通知进程可只读查询当前活动版本以判断是否空转。`notifications.state` 反映数据库投递历史，进程启动空转以日志为准。[安全启动条件](../RUNBOOK.md#告警与邮件进程)
 
 管理写入返回 504 时，按 `id` 读取规则 revision 或告警确认状态，或用原 `Idempotency-Key` 作为 `testId` 查询测试。查明结果后才使用原请求重试。`GET /api/v1/system/status` 的 `notifications` 包含 `state`（`idle`、`healthy`、`degraded`、`unavailable`）、失败起始时间和最近尝试、接受时间及结果。HTTP 请求读取最近一次后台数据库轮询的快照。启动时或后台无法读取投递状态时，`state` 为 `unavailable`。SMTP 投递状态独立于 HTTP 就绪探测。
 

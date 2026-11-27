@@ -14,9 +14,16 @@ use std::{
 };
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
-use web::database::Database;
+use web::{
+    database::Database,
+    notifications::{
+        channel::{EmailChannels, NotificationChannel, SmtpProfile},
+        worker::{self, NotificationPolicy},
+    },
+};
 
 const SMTP_REQUIRED: &str = "a usable SMTP primary profile is required";
+const SNAPSHOT_REQUIRED: &str = "active SMTP snapshot is unavailable";
 const DISABLED: &str = "notification delivery is disabled";
 
 fn notifier() -> Command {
@@ -186,6 +193,40 @@ fn configure_secondary_smtp(command: &mut Command, port: u16) {
         .env("WEB_SMTP_SECONDARY_TIMEOUT_SECONDS", "1");
 }
 
+fn command_setting(command: &Command, key: &str) -> Option<String> {
+    command
+        .get_envs()
+        .find(|(name, _)| *name == key)
+        .and_then(|(_, value)| value)
+        .map(|value| value.to_str().unwrap().to_owned())
+}
+
+async fn activate_snapshot(pool: &PgPool, command: &Command) -> Uuid {
+    let channel = EmailChannels::from_environment(|key| command_setting(command, key)).unwrap();
+    let snapshot = channel
+        .capture_profile(SmtpProfile::Secondary)
+        .await
+        .unwrap();
+    let integration = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO app.integration_configs (id, connector) VALUES ($1, 'smtp')")
+        .bind(integration)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO app.integration_versions (integration_id, version, state, settings, smtp_snapshot_id)
+         VALUES ($1, 1, 'active', '{\"profile\":\"secondary\"}', $2)",
+    )
+    .bind(integration)
+    .bind(snapshot)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    snapshot
+}
+
 #[tokio::test]
 async fn notifier_without_smtp_keeps_the_outbox_intact() {
     let pg = Cluster::create();
@@ -248,6 +289,135 @@ async fn notifier_with_only_secondary_smtp_idles_before_opening_snapshot_storage
     let snapshots = snapshot_fixture(&mut command, dir.path());
     assert_idle(&mut command, SMTP_REQUIRED, None, &[&marker]).await;
     assert_eq!(fs::read_dir(snapshots).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn notifier_with_active_w4_and_unavailable_snapshot_keeps_outbox_intact() {
+    let pg = Cluster::create();
+    let pool = outbox_fixture(&pg).await;
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = notifier();
+    let marker = smtp_fixture(&mut command, &listener, dir.path());
+    configure_secondary_smtp(&mut command, listener.local_addr().unwrap().port());
+    let snapshots = snapshot_fixture(&mut command, dir.path());
+    let snapshot = activate_snapshot(&pool, &command).await;
+    let before = delivery_state(&pool).await;
+    command
+        .env("DATABASE_URL", pg.url())
+        .env("WEB_SMTP_TO", "receiver@example.invalid")
+        .env_remove("WEB_SMTP_SNAPSHOT_DIR");
+    assert_idle(
+        &mut command,
+        SNAPSHOT_REQUIRED,
+        Some(Signal::TERM),
+        &[&marker],
+    )
+    .await;
+    assert_eq!(delivery_state(&pool).await, before);
+
+    // The same guard must hold when the snapshot becomes unavailable after startup.
+    command.env("WEB_SMTP_SNAPSHOT_DIR", &snapshots);
+    let channel = EmailChannels::for_notifier(|key| command_setting(&command, key)).unwrap();
+    let db = Database::new(&pg.url(), Duration::from_secs(2), Duration::from_secs(2)).unwrap();
+    assert_eq!(worker::smtp_idle_reason(&db, &channel).await.unwrap(), None);
+    fs::remove_file(snapshots.join(format!("{snapshot}.smtp"))).unwrap();
+    assert!(
+        !worker::dispatch_one(
+            &db,
+            &NotificationPolicy::default(),
+            &channel,
+            chrono::Utc::now
+        )
+        .await
+        .unwrap()
+    );
+    assert_idle(
+        &mut command,
+        SNAPSHOT_REQUIRED,
+        Some(Signal::TERM),
+        &[&marker],
+    )
+    .await;
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+    assert_eq!(delivery_state(&pool).await, before);
+}
+
+#[tokio::test]
+async fn notifier_restarts_without_primary_and_uses_bound_w4_snapshot() {
+    let pg = Cluster::create();
+    let pool = outbox_fixture(&pg).await;
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let bound_relay = TcpListener::bind("127.0.0.1:0").unwrap();
+    let replacement_relay = TcpListener::bind("127.0.0.1:0").unwrap();
+    bound_relay.set_nonblocking(true).unwrap();
+    replacement_relay.set_nonblocking(true).unwrap();
+    let mut command = notifier();
+    let snapshots = snapshot_fixture(&mut command, dir.path());
+    configure_secondary_smtp(&mut command, bound_relay.local_addr().unwrap().port());
+    let snapshot = activate_snapshot(&pool, &command).await;
+    let snapshot_path = snapshots.join(format!("{snapshot}.smtp"));
+    let snapshot_before = fs::read(&snapshot_path).unwrap();
+
+    configure_secondary_smtp(&mut command, replacement_relay.local_addr().unwrap().port());
+    let stderr = tempfile::NamedTempFile::new_in("/tmp").unwrap();
+    let mut child = Server(
+        command
+            .env("DATABASE_URL", pg.url())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(stderr.reopen().unwrap())
+            .spawn()
+            .unwrap(),
+    );
+    let connection = timeout(Duration::from_secs(8), async {
+        loop {
+            match bound_relay.accept() {
+                Ok((connection, _)) => break connection,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    assert!(child.0.try_wait().unwrap().is_none());
+                    sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("loopback listener failed: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("notifier did not connect to the bound relay");
+    // The loopback fixture observes the attempted SMTP connection only.
+    drop(connection);
+    kill_process(Pid::from_child(&child.0), Signal::TERM).unwrap();
+    let status = timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                break status;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("notifier did not stop after the snapshot attempt");
+    assert_eq!(status.code(), Some(0));
+    let outcomes: Vec<String> = sqlx::query_scalar(
+        "SELECT outcome FROM app.notification_attempts
+         WHERE outbox_id = '00000000-0000-0000-0000-000000000001' ORDER BY attempt",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert!(matches!(outcomes[0].as_str(), "transient" | "timeout"));
+    assert_eq!(
+        replacement_relay.accept().unwrap_err().kind(),
+        ErrorKind::WouldBlock
+    );
+    assert_eq!(fs::read(snapshot_path).unwrap(), snapshot_before);
+    assert!(
+        !fs::read_to_string(stderr.path())
+            .unwrap()
+            .contains("notifier idle")
+    );
 }
 
 #[tokio::test]

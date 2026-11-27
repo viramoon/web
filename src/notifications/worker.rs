@@ -10,7 +10,7 @@ use tokio::{sync::watch, time};
 use utoipa::ToSchema;
 
 use super::{
-    channel::{DeliveryOutcome, MailKind, NotificationChannel},
+    channel::{DeliveryOutcome, MailKind, NotificationChannel, PreparedSnapshot},
     model::{AttemptOutcome, DeliveryKind},
 };
 use store::Job;
@@ -18,6 +18,7 @@ use store::Job;
 const DB_DEADLINE: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_ATTEMPTS: i32 = 5;
+const MAX_HOURLY_LIMIT: i64 = 1_000;
 // A replacement worker must allow any SMTP subprocess from a lost database
 // session to reach its transport deadline before treating the attempt as unknown.
 const ABANDONED_AFTER: TimeDelta = TimeDelta::seconds(65);
@@ -98,13 +99,13 @@ impl NotificationPolicy {
                 "WEB_NOTIFIER_NORMAL_HOURLY_LIMIT",
                 defaults.normal_hourly_limit,
                 1,
-                1000,
+                MAX_HOURLY_LIMIT,
             )?,
             urgent_hourly_limit: number(
                 "WEB_NOTIFIER_URGENT_HOURLY_LIMIT",
                 defaults.urgent_hourly_limit,
                 1,
-                1000,
+                MAX_HOURLY_LIMIT,
             )?,
             urgent_bypasses_quiet,
         })
@@ -162,6 +163,23 @@ pub async fn health(db: &Database) -> NotificationHealth {
         .unwrap_or_default()
 }
 
+pub async fn smtp_idle_reason(
+    db: &Database,
+    channel: &impl NotificationChannel,
+) -> Result<Option<&'static str>, sqlx::Error> {
+    time::timeout(DB_DEADLINE, async {
+        let mut connection = db.connection().await?;
+        Ok(
+            match store::smtp_transport(&mut connection, channel).await? {
+                store::SmtpTransport::Available { .. } => None,
+                store::SmtpTransport::Unavailable(reason) => Some(reason),
+            },
+        )
+    })
+    .await
+    .map_err(|_| sqlx::Error::PoolTimedOut)?
+}
+
 pub async fn run(
     db: &Database,
     policy: &NotificationPolicy,
@@ -207,23 +225,24 @@ pub async fn dispatch_one(
     channel: &impl NotificationChannel,
     clock: impl Fn() -> DateTime<Utc>,
 ) -> Result<bool, sqlx::Error> {
-    let Some((mut lock, mut job)) = time::timeout(DB_DEADLINE, store::claim(db, policy, &clock))
-        .await
-        .map_err(|_| sqlx::Error::PoolTimedOut)??
+    let Some((mut lock, mut job)) =
+        time::timeout(DB_DEADLINE, store::claim(db, policy, channel, &clock))
+            .await
+            .map_err(|_| sqlx::Error::PoolTimedOut)??
     else {
         return Ok(false);
     };
     if let (Some(_), None, Some(profile)) = (
         job.integration_test_id,
-        job.snapshot_id,
+        job.snapshot.as_ref(),
         job.candidate_profile,
     ) {
-        job.snapshot_id = time::timeout(DB_DEADLINE, async {
+        job.snapshot = time::timeout(DB_DEADLINE, async {
             let snapshot = channel.capture_profile(profile).await;
             if let Some(snapshot) = snapshot {
                 store::pin_snapshot(&mut lock, job.id, snapshot).await?;
             }
-            Ok::<_, sqlx::Error>(snapshot)
+            Ok::<_, sqlx::Error>(snapshot.map(PreparedSnapshot::ById))
         })
         .await
         .map_err(|_| sqlx::Error::PoolTimedOut)??;
@@ -241,8 +260,8 @@ pub async fn dispatch_one(
 async fn send(channel: &impl NotificationChannel, job: &Job) -> AttemptOutcome {
     let kind = match (job.kind, job.condition) {
         (DeliveryKind::Test, _) => {
-            return match (job.snapshot_id, job.integration_test_id) {
-                (Some(snapshot), _) => channel.test_snapshot(snapshot, job.id).await.into(),
+            return match (&job.snapshot, job.integration_test_id) {
+                (Some(snapshot), _) => snapshot.test(channel, job.id).await.into(),
                 (None, None) => channel.test(job.id).await.into(),
                 (None, Some(_)) => AttemptOutcome::ConfigurationError,
             };
@@ -254,8 +273,8 @@ async fn send(channel: &impl NotificationChannel, job: &Job) -> AttemptOutcome {
         (DeliveryKind::Recovery, Some(condition)) => MailKind::Recovery { condition },
         _ => return AttemptOutcome::ConfigurationError,
     };
-    match job.snapshot_id {
-        Some(snapshot) => channel.send_snapshot(snapshot, job.id, kind).await.into(),
+    match &job.snapshot {
+        Some(snapshot) => snapshot.send(channel, job.id, kind).await.into(),
         None => channel.send(job.id, kind).await.into(),
     }
 }

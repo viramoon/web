@@ -159,9 +159,9 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 
 默认关闭邮件进程。`FERTILE_ENABLE_WEB_NOTIFIER=0` 时，fertile 守护器不会启动 `web-notifier`。需要启用时，先对与 web 共用的 `DATABASE_URL` 执行 `web migrate`，确认专用部署环境中有完整的 SMTP 主槽，包括中继、发件人、本人收件人和中继所需的认证，再在 fertile 设置 `FERTILE_ENABLE_WEB_NOTIFIER=1`。启用后用隔离队列核对一次投递结果。进程不监听端口，依赖 Linux `/proc`、系统 CA 和 `/usr/bin/curl` 的 SMTP/SMTPS 支持。SMTP 使用 TLS 1.2 或更高版本，证书与主机名由系统 CA 验证。
 
-如果直接启动二进制时传入 `FERTILE_ENABLE_WEB_NOTIFIER=0`、SMTP 主槽不可用，或已配置的快照存储不可用，进程进入安全空转。空转时不连接 PostgreSQL、不领取、结算或延迟任何 outbox 任务、不访问 SMTP。进程在启动时记录一次 `notifier idle`，日志只包含固定阶段和原因。修复 SMTP 配置后重启 notifier 才会重新读取环境并恢复领取，原队列继续应用投递策略。
+如果直接启动二进制时传入 `FERTILE_ENABLE_WEB_NOTIFIER=0`，或本机缺少任何可能可用的 SMTP 配置，进程在连接 PostgreSQL 前进入安全空转。否则启动时只读检查数据库选择的 SMTP 配置。所需配置不可用时，进程记录一次 `notifier idle`，诊断使用固定阶段和原因。空转保留 outbox、尝试、延迟和投递健康记录，无 SMTP 请求。修复配置后重启，原队列继续应用投递策略。
 
-主槽要求有效的 `WEB_SMTP_HOST`、`WEB_SMTP_FROM`、`WEB_SMTP_TO` 以及配置的可选字段。主槽缺项时，即使备选槽和快照存储可用，进程也会在打开快照目录前空转。在尚未启用 W4 SMTP 版本的数据库中，普通任务和独立渠道测试依赖主槽。备选槽用于创建 W4 候选快照。主槽可用时，备选槽配置不完整只产生固定的槽位不可用日志，已启用的 W4 SMTP 版本继续使用绑定的快照。
+尚未启用 W4 SMTP 版本时，普通任务和独立渠道测试依赖主槽。主槽要求有效的 `WEB_SMTP_HOST`、`WEB_SMTP_FROM`、`WEB_SMTP_TO` 以及配置的可选字段。此时仅配置备选槽和快照目录会空转。启用 W4 后，普通任务与独立渠道测试使用活动版本绑定的快照。保留 `WEB_SMTP_SNAPSHOT_DIR`、对应密钥和可读取解密的绑定文件后，移除主槽并重启仍可投递。缺目录、缺文件或快照无法解密时，保留原队列并等待恢复。备选槽用于创建 W4 候选快照，空目录在主槽缺失时不会生成新密钥。
 
 SIGINT 或 SIGTERM 让空转进程以状态码 0 退出。正常投递的进程收到同样信号后停止领取新任务，并结算已领取的任务。配置快照目录时，最长发送与结算宽限为 78 秒，随后留两秒关闭连接池。部署管理器设置 85 秒停止宽限。有效 SMTP 已配置时，其他启动失败仍以状态码 1 退出。notifier 与 web 共用日志过滤器，标准错误的 JSON 事件使用固定 `stage` 和 `reason`。提高 `RUST_LOG` 级别仍会过滤第三方追踪。
 
@@ -174,7 +174,7 @@ SIGINT 或 SIGTERM 让空转进程以状态码 0 退出。正常投递的进程�
 | `WEB_SMTP_FROM`、`WEB_SMTP_TO` | 固定发件地址和本人收件地址，各一个邮箱 |
 | `WEB_SMTP_CREDENTIAL_FILE` | 可选，部署提供的本机秘密文件绝对路径，运行用户所有、0600 普通文件、存放于静态目录之外。仅含 `username` 和 `password` 两个 JSON 字符串字段 |
 | `WEB_SMTP_TIMEOUT_SECONDS` | 单次 SMTP 超时，默认 10 秒，范围 1–60 |
-| `WEB_SMTP_SNAPSHOT_DIR` | W4 候选测试所需。由 notifier 运行用户独占的 0700 持久绝对目录，置于静态资源树之外 |
+| `WEB_SMTP_SNAPSHOT_DIR` | W4 候选测试和已绑定快照的投递所需。由 notifier 运行用户独占的 0700 持久绝对目录，置于静态资源树之外 |
 | `WEB_STATIC_ROOT` | 配置快照目录时必填。由部署为 Web 和 notifier 传入同一个静态根绝对路径 |
 | `WEB_PUBLIC_ORIGIN` | 可选，与 web API 相同的规范 HTTPS origin。配置后邮件附私有 `/alerts` 绝对链接 |
 | `WEB_NOTIFIER_QUIET_TIME_ZONE` | 默认 `Asia/Shanghai`，从 PostgreSQL 的 IANA 时区表校验 |
