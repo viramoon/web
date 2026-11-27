@@ -2,9 +2,9 @@
 
 web 拥有 `app`（业务）和 `blog`（博客）两个 PostgreSQL schema。初始化迁移建立 `app.schema_info` 及一条服务版本记录。sqlx 把已经执行的迁移、校验值和执行结果记录在 `_sqlx_migrations`。新增迁移采用 UTC 时间戳命名，已经应用的文件保持原样。
 
-从仓库根运行 `web migrate`，以 `DATABASE_URL` 指定目标库。部署时由运行环境注入连接串并限制配置文件权限。运行角色需读取 `app.schema_info`，并具有集成和通知表所需的 SELECT、INSERT、UPDATE 权限及审计序列的使用权限。迁移角色另需建 schema、表、索引及约束的权限。自动迁移默认启用；使用独立迁移角色时先 `web migrate`，再设置 `WEB_AUTO_MIGRATE=false`。
+从仓库根运行 `web migrate`，以 `DATABASE_URL` 指定目标库。部署时由运行环境注入连接串并限制配置文件权限。运行角色需读取 `app.schema_info`，并具有集成、通知及自选表所需的 SELECT、INSERT、UPDATE 权限及审计序列的使用权限。迁移角色另需建 schema、表、索引及约束的权限。使用独立迁移角色时先 `web migrate`，再设置 `WEB_AUTO_MIGRATE=false`。自动迁移默认启用。
 
-服务启动时先监听 HTTP。后台从连接池获取连接，检查 `app.schema_info` 的 web 版本、`blog` schema、`app.integration_configs`、`app.notification_health` 和 `app.notification_outbox.replaces_id`。缺少迁移、标记不匹配或连接中断时 live 仍为 200，ready 为 503。探测失败从 250ms 退避至最多 4s，恢复后每秒检查一次。`acquire_timeout_ms` 限制池内等待时间，`connect_timeout_ms` 限制获取可用连接（包括新建和重连）与执行探测语句各自的时间。`/api/v1/system/status` 的 `database.ok` 和 `latency_ms` 为最近一次探测结果，失败时延迟为空。数据库连接串不写入 HTTP 响应。
+服务启动时先监听 HTTP。后台从连接池获取连接，检查 `app.schema_info` 的 web 版本、`blog` schema、`app.integration_configs`、`app.notification_health`、`app.market_watchlists`，以及 `app.notification_outbox` 的 `replaces_id`、`integration_test_id` 和 `smtp_snapshot_id` 列。缺少迁移、标记不匹配或连接中断时 live 仍为 200，ready 为 503。探测失败从 250ms 退避至最多 4s，恢复后每秒检查一次。`acquire_timeout_ms` 限制池内等待时间，`connect_timeout_ms` 限制获取可用连接（包括新建和重连）与执行探测语句各自的时间。`/api/v1/system/status` 的 `database.ok` 和 `latency_ms` 为最近一次探测结果，失败时延迟为空。数据库连接串不写入 HTTP 响应。
 
 数据库就绪后，后台轮询同时刷新通知健康快照。读取失败时，快照中的通知状态为 `unavailable`，数据库就绪继续按连接和迁移探测判定。`/api/v1/system/status` 直接读取后台发布的快照，避免请求等待数据库连接或查询。
 

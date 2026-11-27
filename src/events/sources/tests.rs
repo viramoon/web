@@ -98,3 +98,66 @@ fn alert_poll_emits_changes_and_resets_after_the_window_is_replaced() {
     ));
     assert_eq!(events.len(), ALERT_WINDOW as usize + 1);
 }
+
+#[tokio::test]
+async fn alert_poll_from_empty_sends_sse_reset_only_when_window_overruns() {
+    use axum::{
+        body::to_bytes,
+        response::{IntoResponse, Sse},
+    };
+    use std::convert::Infallible;
+
+    let window = |count| (1..=count).rev().map(synthetic_alert).collect();
+    let mut events = Vec::new();
+    let mut alerts = Alerts::default();
+    alerts.record(window(ALERT_WINDOW + 1), &mut events);
+    assert_eq!(events.len(), ALERT_WINDOW as usize);
+    assert!(
+        events
+            .iter()
+            .all(|item| matches!(item, EventPayload::Alert { .. }))
+    );
+
+    alerts = Alerts::default();
+    events.clear();
+    alerts.record(Vec::new(), &mut events);
+    assert!(events.is_empty());
+    alerts.record(window(ALERT_WINDOW), &mut events);
+    assert_eq!(events.len(), ALERT_WINDOW as usize);
+    assert!(
+        events
+            .iter()
+            .all(|item| matches!(item, EventPayload::Alert { .. }))
+    );
+
+    alerts = Alerts::default();
+    events.clear();
+    alerts.record(Vec::new(), &mut events);
+    assert!(events.is_empty());
+    alerts.record(window(ALERT_WINDOW + 1), &mut events);
+    assert_eq!(events.len(), ALERT_WINDOW as usize + 1);
+    let response = Sse::new(futures_util::stream::iter([Ok::<_, Infallible>(
+        super::super::frame(events.remove(0), None),
+    )]))
+    .into_response();
+    let body = to_bytes(response.into_body(), 1024).await.unwrap();
+    let text = std::str::from_utf8(&body).unwrap();
+    let mut lines = text.lines();
+    assert_eq!(lines.next(), Some("event: reset"));
+    let data: serde_json::Value =
+        serde_json::from_str(lines.next().unwrap().strip_prefix("data: ").unwrap()).unwrap();
+    assert_eq!(
+        data,
+        serde_json::json!({
+            "schema_version": "1.0",
+            "kind": "reset",
+            "reason": "alert_window_overrun"
+        })
+    );
+    for (expected, event) in (2..=ALERT_WINDOW + 1).zip(&events) {
+        assert!(matches!(event, EventPayload::Alert { alert } if alert.sequence == expected));
+    }
+    events.clear();
+    alerts.record(window(ALERT_WINDOW + 1), &mut events);
+    assert!(events.is_empty());
+}

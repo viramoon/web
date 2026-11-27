@@ -12,6 +12,12 @@
       "generator": "src/market_stream/fixture.rs",
       "seed": "fixed",
       "source": "运行 cargo test --locked --offline market_stream::replay。用固定时钟、十进制和超出 JavaScript 安全整数的序号构造合成快照、增量、重置和永续合约上下文。"
+    },
+    "tests/api/database.rs": {
+      "sha256": "6f4216608a04cece622eeb6a109d051e0f14cd502a506092a767eef734521cb7",
+      "generator": "tests/api/postgres.rs",
+      "seed": "fixed",
+      "source": "运行 cargo test --test api --locked --offline postgres_integration_migration_upgrades_existing_schema。隔离 PostgreSQL 由版本化 SQL 和固定的 schema 标识构造。"
     }
   }
 }

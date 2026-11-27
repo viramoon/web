@@ -213,10 +213,12 @@ struct Alerts(Option<Vec<AlertUpdate>>);
 
 impl Alerts {
     fn record(&mut self, mut current: Vec<AlertUpdate>, events: &mut Vec<EventPayload>) {
+        // After an empty poll, any lookback row lies beyond the observed window.
         if let Some(previous) = &self.0
-            && let Some(last_seen) = previous.first()
             && let Some(lookback) = current.get(ALERT_WINDOW as usize)
-            && lookback.sequence > last_seen.sequence
+            && previous
+                .first()
+                .is_none_or(|last_seen| lookback.sequence > last_seen.sequence)
         {
             events.push(EventPayload::Reset {
                 reason: EventResetReason::AlertWindowOverrun,
