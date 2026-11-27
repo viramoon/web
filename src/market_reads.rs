@@ -13,6 +13,8 @@ use finance_client::{apis::market_read_api, models};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+mod views;
+
 const PRODUCTS: &str = "/api/v1/market/products";
 const WAL: &str = "/api/v1/market/wal";
 const PROJECTION: &str = "/api/v1/market/projection/latest";
@@ -27,17 +29,20 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(PROJECTION, get(projected))
         .route(WATERMARKS, get(watermarks))
         .route(FINANCE_GAPS, get(gaps))
+        .merge(views::routes())
 }
 
 pub(crate) fn is_private(path: &str) -> bool {
     matches!(
         path,
         PRODUCTS | WAL | PROJECTION | WATERMARKS | FINANCE_GAPS
-    )
+    ) || views::is_private(path)
 }
 
 pub(crate) enum MarketReadError {
     InvalidQuery,
+    DepthFocusRequired,
+    IndicatorNotFound,
     DisplayDenied,
     InvalidResponse,
     Upstream(Fault),
@@ -46,7 +51,8 @@ pub(crate) enum MarketReadError {
 impl MarketReadError {
     pub(crate) fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidQuery => StatusCode::BAD_REQUEST,
+            Self::InvalidQuery | Self::DepthFocusRequired => StatusCode::BAD_REQUEST,
+            Self::IndicatorNotFound => StatusCode::NOT_FOUND,
             Self::DisplayDenied => StatusCode::FORBIDDEN,
             Self::InvalidResponse => StatusCode::BAD_GATEWAY,
             Self::Upstream(fault) => fault.status,
@@ -61,6 +67,16 @@ impl IntoResponse for MarketReadError {
                 StatusCode::BAD_REQUEST,
                 "market_query_invalid",
                 "Missing or invalid market query parameters",
+            ),
+            Self::DepthFocusRequired => api_error(
+                StatusCode::BAD_REQUEST,
+                "depth_focus_required",
+                "Select a depth focus or supply an instrument identifier",
+            ),
+            Self::IndicatorNotFound => api_error(
+                StatusCode::NOT_FOUND,
+                "market_indicator_not_found",
+                "No indicator has this identifier",
             ),
             Self::DisplayDenied => api_error(
                 StatusCode::FORBIDDEN,
@@ -267,15 +283,22 @@ async fn watermarks(
     State(state): State<AppState>,
     query: Result<Query<FeedQuery>, QueryRejection>,
 ) -> Result<Json<models::MarketWatermarks>, MarketReadError> {
-    let query = &parsed(query)?;
-    let result = state
-        .finance
-        .read(|cfg| async move {
-            market_read_api::watermarks(&cfg, &query.source, &query.product).await
-        })
+    let query = parsed(query)?;
+    product_watermarks(&state.finance, &query.source, &query.product)
+        .await
+        .map(Json)
+}
+
+async fn product_watermarks(
+    finance: &Finance,
+    source: &str,
+    product: &str,
+) -> Result<models::MarketWatermarks, MarketReadError> {
+    let result = finance
+        .read(|cfg| async move { market_read_api::watermarks(&cfg, source, product).await })
         .await?;
-    check_product(&result.access, &query.source, &query.product)?;
-    Ok(Json(result))
+    check_product(&result.access, source, product)?;
+    Ok(result)
 }
 
 #[derive(Deserialize)]
@@ -318,6 +341,7 @@ async fn gaps(
 }
 
 pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
+    views::register_openapi(spec);
     for (path, source, operation_id) in [
         (PRODUCTS, PRODUCTS, "marketProducts"),
         (WAL, WAL, "marketWal"),

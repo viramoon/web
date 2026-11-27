@@ -9,6 +9,7 @@ use finance_client::models::{Event, MarketWalPage, Message};
 use serde::Serialize;
 use std::{ops::AsyncFnOnce, sync::Arc, time::Duration};
 use tokio::time::{Instant, sleep_until};
+use utoipa::ToSchema;
 
 const PAGE_LIMIT: u64 = 64;
 const MAX_BACKLOG: u64 = 512;
@@ -47,7 +48,7 @@ pub enum ReplayError {
     ResetRequired(ResetReason),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ResetReason {
     ConsumerLagged,
@@ -79,6 +80,10 @@ impl MarketReplay {
             blocked: None,
             next_poll: Instant::now(),
         }
+    }
+
+    pub(super) fn position(&self) -> u64 {
+        self.after
     }
 
     /// Read a page of committed events, capped by the WAL backlog and poll interval.
@@ -200,7 +205,7 @@ fn authorize(access: &WriteAccess, headers: &HeaderMap) -> Result<(), ReplayErro
         .map_err(|_| ReplayError::Unauthorized)
 }
 
-fn cursor(value: &str) -> Result<u64, ReplayError> {
+pub(super) fn cursor(value: &str) -> Result<u64, ReplayError> {
     if value.is_empty()
         || (value.len() > 1 && value.starts_with('0'))
         || !value.bytes().all(|byte| byte.is_ascii_digit())

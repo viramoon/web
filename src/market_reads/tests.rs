@@ -365,3 +365,169 @@ async fn market_event_bodies_require_display_license_and_failures_are_redacted()
     }
     fixture.upstream_expectations_met();
 }
+
+#[tokio::test]
+async fn browser_market_views_query_real_f10a_data_and_keep_exact_values() {
+    let path = format!("{WAL}?source={SOURCE}&product={PRODUCT}&after=0&limit=128");
+    let query = format!("source={SOURCE}&product={PRODUCT}&channel=fixture&after=0");
+    let stock = format!("{query}&instrument_id={INSTRUMENT}");
+    let perpetual = format!("{query}&instrument_id=SYNTH.XHYP");
+    let rows = wal_rows(vec![
+        book_snapshot(),
+        book_delta(),
+        event(
+            "bar_closed",
+            json!({
+                "open_ts": "1", "open": PRICE, "high": PRICE, "low": PRICE,
+                "close": PRICE, "volume": SIZE
+            }),
+        ),
+        event("trade", trade()),
+        event(
+            "perpetual_context",
+            json!({
+                "funding_rate": "-0.000100", "mark_price": PRICE, "open_interest": SIZE
+            }),
+        ),
+    ]);
+    let mut script = vec![Exchange::ok(
+        "/api/v1/market/status".into(),
+        json!({
+            "source": SOURCE, "state": "ready", "updated_at": AS_OF,
+            "instruments": [{"instrument": INSTRUMENT, "age_seconds": null, "stale": false}]
+        }),
+    )];
+    script.extend((0..5).map(|_| Exchange::ok(path.clone(), rows.clone())));
+    script.push(Exchange::ok(
+        format!("{WATERMARKS}?source={SOURCE}&product={PRODUCT}"),
+        json!({
+            "as_of": AS_OF, "access": access(true),
+            "watermarks": {"local_durable": "5", "projected": "0", "remote_verified": null, "source_latest": null}
+        }),
+    ));
+    script.push(Exchange::ok(
+        format!("{WAL}?source={SOURCE}&product={PRODUCT}&after=3&through=5&limit=2"),
+        json!({
+            "as_of": AS_OF, "access": access(true),
+            "durable_through": "5", "through": "5", "next_after": null,
+            "records": [rows["records"][3], rows["records"][4]]
+        }),
+    ));
+    let fixture = Fixture::start(script).await;
+    let instruments = fixture
+        .get_json("/api/v1/market/instruments?limit=1", StatusCode::OK)
+        .await;
+    assert_eq!(instruments["items"][0]["instrument"], INSTRUMENT);
+    assert_eq!(instruments["items"][0]["age_seconds"], Value::Null);
+    assert_eq!(instruments["next_offset"], Value::Null);
+    assert_eq!(instruments["as_of"], AS_OF);
+    let bars = fixture
+        .get_json(&format!("/api/v1/market/bars?{stock}"), StatusCode::OK)
+        .await;
+    assert_eq!(bars["records"], json!([rows["records"][2]]));
+    assert_eq!(bars["coverage"]["scanned_records"], 5);
+    assert_eq!(bars["access"]["license"], LICENSE);
+    let trades = fixture
+        .get_json(&format!("/api/v1/market/trades?{stock}"), StatusCode::OK)
+        .await;
+    assert_eq!(trades["records"], json!([rows["records"][3]]));
+    let derivatives = fixture
+        .get_json(
+            &format!("/api/v1/market/derivatives?{perpetual}"),
+            StatusCode::OK,
+        )
+        .await;
+    assert_eq!(derivatives["records"], json!([rows["records"][4]]));
+    let indicators = fixture.get_json("/api/v1/indicators", StatusCode::OK).await;
+    assert_eq!(indicators["items"][0]["id"], "close");
+    let values = fixture
+        .get_json(
+            &format!("/api/v1/indicators/values?{stock}&indicator=close"),
+            StatusCode::OK,
+        )
+        .await;
+    assert_eq!(values["items"][0]["value"], PRICE);
+    assert_eq!(values["items"][0]["record"], rows["records"][2]);
+    let quotes = fixture
+        .get_json(&format!("/api/v1/market/quotes?{stock}"), StatusCode::OK)
+        .await;
+    assert_eq!(quotes["state"], "observed");
+    assert_eq!(quotes["observation"]["seq"], POSITION);
+    assert_eq!(quotes["bid"]["price"], "99.9");
+    assert_eq!(quotes["ask"]["quantity"], SIZE);
+    let recent = format!(
+        "source={SOURCE}&product={PRODUCT}&channel=fixture&instrument_id={INSTRUMENT}&limit=2"
+    );
+    let book = fixture
+        .get_json(&format!("/api/v1/market/book?{recent}"), StatusCode::OK)
+        .await;
+    assert_eq!(book["coverage"]["after"], "3");
+    assert_eq!(book["coverage"]["through"], "5");
+    assert_eq!(book["state"], "unknown");
+    assert_eq!(book["bids"], Value::Null);
+    fixture.upstream_expectations_met();
+}
+
+#[tokio::test]
+async fn depth_focus_selects_a_real_wal_book_then_clear_requires_an_instrument() {
+    const FOCUS: &str = "/api/v1/market/depth-focus";
+    let path = format!("{WAL}?source={SOURCE}&product={PRODUCT}&after=0&limit=128");
+    let fixture = Fixture::start(vec![Exchange::ok(path, wal_rows(vec![book_snapshot()]))]).await;
+    async fn put(gateway: &Gateway, body: Value) -> Value {
+        let request = Request::put(FOCUS)
+            .header(header::AUTHORIZATION, gateway.authorization.clone())
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = gateway.app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap()
+    }
+    assert_eq!(
+        put(
+            &fixture.gateway,
+            json!({"action": "set", "instrument_id": INSTRUMENT})
+        )
+        .await,
+        json!({"instrument_id": INSTRUMENT})
+    );
+    let query =
+        format!("/api/v1/market/book?source={SOURCE}&product={PRODUCT}&channel=fixture&after=0");
+    let book = fixture.get_json(&query, StatusCode::OK).await;
+    assert_eq!(book["instrument_id"], INSTRUMENT);
+    assert_eq!(book["state"], "observed");
+    assert_eq!(book["observation"]["venue"], "XNYS");
+    let cleared = put(&fixture.gateway, json!({"action": "clear"})).await;
+    assert_eq!(cleared, json!({"instrument_id": null}));
+    let missing = fixture.get_json(&query, StatusCode::BAD_REQUEST).await;
+    assert_eq!(missing["error"]["code"], "depth_focus_required");
+    fixture.upstream_expectations_met();
+}
+
+#[tokio::test]
+async fn browser_market_views_reject_incomplete_queries_before_reading_finance() {
+    let gateway = Gateway::new("http://127.0.0.1:1".into());
+    let base = format!("instrument_id={INSTRUMENT}&source={SOURCE}&product={PRODUCT}");
+    for route in [
+        format!("/api/v1/market/trades?{base}&limit=129"),
+        format!("/api/v1/market/trades?{base}&after=2&through=1"),
+        format!(
+            "/api/v1/market/trades?{base}&from=2026-01-02T00%3A00%3A00Z&until=2026-01-01T00%3A00%3A00Z"
+        ),
+        format!("/api/v1/market/quotes?{base}"),
+    ] {
+        let value = gateway.get_json(&route, StatusCode::BAD_REQUEST).await;
+        assert_eq!(value["error"]["code"], "market_query_invalid");
+    }
+    let missing_indicator = gateway
+        .get_json(
+            &format!("/api/v1/indicators/values?{base}&indicator=not_present"),
+            StatusCode::NOT_FOUND,
+        )
+        .await;
+    assert_eq!(
+        missing_indicator["error"]["code"],
+        "market_indicator_not_found"
+    );
+}

@@ -99,7 +99,8 @@ async fn read(
     request_body = UpdateWatchlist, security(("adminSession" = []), ("adminBearer" = [])),
     responses((status = 200, body = Watchlist), (status = 400, body = ErrorBody),
         (status = 401, body = ErrorBody), (status = 403, body = ErrorBody),
-        (status = 409, body = ErrorBody), (status = 429, body = ErrorBody),
+        (status = 409, body = ErrorBody), (status = 413, body = ErrorBody),
+        (status = 429, body = ErrorBody),
         (status = 503, body = ErrorBody), (status = 504, body = ErrorBody)))]
 async fn update(
     State(state): State<AppState>,

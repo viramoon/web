@@ -1,15 +1,21 @@
 use super::fixture::{SEQ, delta, page, snapshot};
 use super::*;
-use crate::{auth::WriteAccess, config::Settings, database::Database, finance::Finance, router};
+use crate::{
+    auth::WriteAccess, config::Settings, database::Database, finance::Finance,
+    market_preferences::MarketPreferences, router,
+};
 use axum::{
+    Extension, Json,
     body::{Body, to_bytes},
+    extract::Query,
     http::{HeaderValue, Request, header, request::Builder},
+    routing::get,
 };
 use chrono::Utc;
 use serde_json::Value;
 use std::{
-    cell::Cell, fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt, path::Path, sync::Arc,
-    time::Duration,
+    cell::Cell, collections::BTreeMap, fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt,
+    path::Path, sync::Arc, time::Duration,
 };
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -190,4 +196,277 @@ async fn market_stream_replay_reauthenticates_each_poll_and_lag_resets_the_reade
         replay.poll_with(access, &headers, fetch).await,
         Err(ReplayError::Unauthorized)
     );
+}
+
+const SUBSCRIBE: &str = r#"{"type":"subscribe","source":"synthetic","product":"book","channel":"l2","instrument_id":"SYNTH.XNYS"}"#;
+const FOCUS_SUBSCRIPTION: &str = r#"{"type":"subscribe","source":"synthetic","product":"book","channel":"l2","use_depth_focus":true}"#;
+
+#[tokio::test]
+async fn market_stream_commands_share_quota_and_release_it_on_reset() {
+    let fixture = StreamTestApp::new();
+    let mut headers = HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, fixture.bearer);
+    let preferences = Arc::new(MarketPreferences::default());
+    let mut first = MarketStreamSession::open(
+        fixture.state.write_access.clone(),
+        &headers,
+        preferences.clone(),
+    )
+    .unwrap();
+    let mut second =
+        MarketStreamSession::open(fixture.state.write_access, &headers, preferences.clone())
+            .unwrap();
+    let held: Vec<_> = std::iter::from_fn(|| preferences.acquire())
+        .take(7)
+        .collect();
+    assert_eq!(held.len(), 7);
+    assert_eq!(
+        first.command(r#"{"type":"unsubscribe","unknown":1}"#),
+        Err(MarketStreamError::InvalidSubscription)
+    );
+    assert!(preferences.acquire().is_some());
+    assert_eq!(first.command(SUBSCRIBE), Ok(None));
+    assert_eq!(first.command(SUBSCRIBE), Ok(None));
+    assert_eq!(
+        second.command(SUBSCRIBE),
+        Err(MarketStreamError::SubscriptionQuotaExceeded)
+    );
+
+    let output = first
+        .poll_with(async |_, after, through| {
+            assert_eq!((after, through), (0, None));
+            Ok(page(1, 1, None, vec![snapshot(1, 1, SEQ)]))
+        })
+        .await;
+    assert_eq!(output.len(), 2);
+    let frame: Value = serde_json::from_str(&output[0].to_text().unwrap()).unwrap();
+    assert_eq!(frame["schema_version"], "1.0");
+    assert_eq!(frame["kind"], "snapshot");
+    assert_eq!(frame["seq"], SEQ.to_string());
+    assert_eq!(frame["source"], "synthetic");
+    assert_eq!(frame["product"], "book");
+    assert_eq!(frame["exchange_ts"], Value::Null);
+    assert_eq!(
+        output[1].to_text().unwrap(),
+        r#"{"type":"checkpoint","after":"1"}"#
+    );
+    let output = first
+        .poll_with(async |_, after, through| {
+            assert_eq!((after, through), (1, None));
+            Ok(page(514, 514, Some(2), vec![delta(2, 1, SEQ + 1)]))
+        })
+        .await;
+    assert_eq!(output.len(), 1);
+    assert_eq!(
+        output[0].to_text().unwrap(),
+        r#"{"type":"reset","reason":"consumer_lagged"}"#
+    );
+    assert!(!first.is_subscribed());
+    assert!(preferences.acquire().is_some());
+    assert_eq!(second.command(SUBSCRIBE), Ok(None));
+    assert_eq!(
+        second.command(r#"{"type":"unsubscribe"}"#),
+        Ok(Some(MarketStreamControl::Unsubscribed))
+    );
+    assert!(preferences.acquire().is_some());
+}
+
+#[tokio::test]
+async fn market_stream_application_reauthenticates_subscription_and_resume() {
+    let fixture = StreamTestApp::new();
+    let access = fixture.state.write_access.clone();
+    let app = router(fixture.state);
+    let csrf_cookie = send(
+        &app,
+        Request::post(SESSION_PATH)
+            .header(header::AUTHORIZATION, fixture.bearer)
+            .header(header::ORIGIN, ORIGIN),
+    )
+    .await;
+    assert_eq!(csrf_cookie.status(), StatusCode::CREATED);
+    let cookie = csrf_cookie.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let credentials: Value =
+        serde_json::from_slice(&to_bytes(csrf_cookie.into_body(), 4096).await.unwrap()).unwrap();
+    let csrf = credentials["csrf_token"].as_str().unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(header::COOKIE, cookie.parse().unwrap());
+    headers.insert(header::ORIGIN, ORIGIN.parse().unwrap());
+    let preferences = Arc::new(MarketPreferences::default());
+
+    let mut first =
+        MarketStreamSession::open(access.clone(), &headers, preferences.clone()).unwrap();
+    assert_eq!(first.command(SUBSCRIBE), Ok(None));
+    drop(first);
+    let mut resumed =
+        MarketStreamSession::open(access.clone(), &headers, preferences.clone()).unwrap();
+    let resume = SUBSCRIBE.replace('}', ",\"after\":\"3\"}");
+    assert_eq!(resumed.command(&resume), Ok(None));
+    let output = resumed
+        .poll_with(async |_, after, _| {
+            assert_eq!(after, 3);
+            let mut unrelated = snapshot(4, 1, SEQ);
+            unrelated.event.instrument_id = "OTHER.XNYS".into();
+            Ok(page(5, 5, None, vec![unrelated, snapshot(5, 1, SEQ)]))
+        })
+        .await;
+    assert_eq!(output.len(), 2);
+    let delivered: Value = serde_json::from_str(&output[0].to_text().unwrap()).unwrap();
+    assert_eq!(delivered["instrument_id"], "SYNTH.XNYS");
+    assert_eq!(
+        output[1].to_text().unwrap(),
+        r#"{"type":"checkpoint","after":"5"}"#
+    );
+    let resume = SUBSCRIBE.replace('}', ",\"after\":\"5\"}");
+    assert_eq!(resumed.command(&resume), Ok(None));
+    let output = resumed
+        .poll_with(async |_, after, _| {
+            assert_eq!(after, 5);
+            Ok(page(6, 6, None, vec![delta(6, 1, SEQ + 1)]))
+        })
+        .await;
+    assert_eq!(output.len(), 1);
+    assert_eq!(
+        output[0].to_text().unwrap(),
+        r#"{"type":"reset","reason":"snapshot_required"}"#
+    );
+    assert_eq!(resumed.command(SUBSCRIBE), Ok(None));
+    let deleted = send(
+        &app,
+        Request::delete(SESSION_PATH)
+            .header(header::COOKIE, cookie)
+            .header(header::ORIGIN, ORIGIN)
+            .header("x-csrf-token", csrf),
+    )
+    .await;
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        resumed.command(SUBSCRIBE),
+        Err(MarketStreamError::AuthorizationRevoked)
+    );
+    assert!(matches!(
+        MarketStreamSession::open(access, &headers, preferences.clone()),
+        Err(MarketStreamError::AuthorizationRevoked)
+    ));
+    assert!(preferences.acquire().is_some());
+}
+
+#[tokio::test]
+async fn market_stream_focused_selection_uses_http_preference_and_updates_quota() {
+    let fixture = StreamTestApp::new();
+    let preferences = Arc::new(MarketPreferences::default());
+    let app = crate::with_controls(
+        crate::market_preferences::routes().layer(Extension(preferences.clone())),
+        fixture.state.clone(),
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, fixture.bearer.clone());
+    let mut session =
+        MarketStreamSession::open(fixture.state.write_access, &headers, preferences).unwrap();
+    assert_eq!(
+        session.command(FOCUS_SUBSCRIPTION),
+        Err(MarketStreamError::InvalidSubscription)
+    );
+    let selection = app
+        .clone()
+        .oneshot(
+            Request::put(crate::market_preferences::DEPTH_FOCUS)
+                .header(header::AUTHORIZATION, fixture.bearer.clone())
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"action":"set","instrument_id":"SYNTH.XNYS"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(selection.status(), StatusCode::OK);
+    assert_eq!(session.command(FOCUS_SUBSCRIPTION), Ok(None));
+    let output = session
+        .poll_with(async |partition, _, _| {
+            let expected = MarketPartition::new("synthetic", "book", "l2", "SYNTH.XNYS").unwrap();
+            assert!(*partition == expected);
+            Ok(page(1, 1, None, vec![snapshot(1, 1, SEQ)]))
+        })
+        .await;
+    let wire: Value = serde_json::from_str(&output[0].to_text().unwrap()).unwrap();
+    assert_eq!(wire["instrument_id"], "SYNTH.XNYS");
+    assert_eq!(wire["seq"], SEQ.to_string());
+
+    for active in [1, 0] {
+        let slots = send(
+            &app,
+            Request::get(crate::market_preferences::SUBSCRIPTIONS)
+                .header(header::AUTHORIZATION, fixture.bearer.clone()),
+        )
+        .await;
+        assert_eq!(slots.status(), StatusCode::OK);
+        let slots: Value =
+            serde_json::from_slice(&to_bytes(slots.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(slots["web"]["active"], active);
+        assert_eq!(slots["web"]["available"], 8 - active);
+        assert_eq!(
+            session.command(r#"{"type":"unsubscribe"}"#),
+            Ok(Some(MarketStreamControl::Unsubscribed))
+        );
+    }
+}
+
+#[tokio::test]
+async fn market_stream_application_connects_to_synthetic_finance_and_filters_display_policy() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fixture_app = Router::new().route(
+        "/api/v1/market/wal",
+        get(
+            |Query(params): Query<BTreeMap<String, String>>, headers: HeaderMap| async move {
+                assert!(!headers.contains_key(header::AUTHORIZATION));
+                assert!(!headers.contains_key(header::COOKIE));
+                assert_eq!(params["source"], "synthetic");
+                assert_eq!(params["after"], "0");
+                assert_eq!(params["limit"], "64");
+                let mut reply = page(1, 1, None, vec![snapshot(1, 1, SEQ)]);
+                if params["product"] == "record_only" {
+                    reply.access.display_live = false;
+                    reply.access.product = "record_only".into();
+                    reply.records[0].event.product = "record_only".into();
+                } else {
+                    assert_eq!(params["product"], "book");
+                }
+                Json(reply)
+            },
+        ),
+    );
+    let fixture = StreamTestApp::new();
+    let mut config = fixture.state.config.finance.clone();
+    config.base_url = format!("http://{}", listener.local_addr().unwrap());
+    config.max_retries = 0;
+    let finance = Finance::new(&config).unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, fixture_app).await.unwrap() });
+    let mut headers = HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, fixture.bearer);
+    let preferences = Arc::new(MarketPreferences::default());
+    let mut session =
+        MarketStreamSession::open(fixture.state.write_access, &headers, preferences).unwrap();
+    assert_eq!(session.command(SUBSCRIBE), Ok(None));
+    let output = session.poll(&finance).await;
+    let snapshot: Value = serde_json::from_str(&output[0].to_text().unwrap()).unwrap();
+    assert_eq!(snapshot["seq"], SEQ.to_string());
+    assert_eq!(snapshot["kind"], "snapshot");
+    assert_eq!(
+        session.command(&SUBSCRIBE.replace("\"book\"", "\"record_only\"")),
+        Ok(None)
+    );
+    let denied = session.poll(&finance).await;
+    assert_eq!(denied.len(), 1);
+    assert_eq!(
+        denied[0].to_text().unwrap(),
+        r#"{"type":"error","code":"product_unavailable"}"#
+    );
+    assert!(!session.is_subscribed());
+    server.abort();
 }

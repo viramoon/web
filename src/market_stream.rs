@@ -11,7 +11,12 @@ use axum::{
 use utoipa::OpenApi;
 
 mod replay;
+mod session;
 pub use replay::{MarketPartition, MarketReplay, ReplayError, ResetReason};
+pub use session::{
+    MAX_COMMAND_BYTES, MarketStreamCommand, MarketStreamControl, MarketStreamError,
+    MarketStreamFrame, MarketStreamSession,
+};
 
 pub(crate) const MARKET_STREAM: &str = "/api/v1/stream/market";
 
@@ -36,7 +41,15 @@ async fn market_stream(State(s): State<AppState>, headers: HeaderMap) -> Respons
 }
 
 #[derive(OpenApi)]
-#[openapi(paths(market_stream))]
+#[openapi(
+    paths(market_stream),
+    components(schemas(
+        MarketStreamCommand,
+        MarketStreamControl,
+        MarketStreamError,
+        ResetReason
+    ))
+)]
 pub(crate) struct MarketStreamApi;
 
 #[cfg(test)]

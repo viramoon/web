@@ -453,6 +453,13 @@
     ],
     "type": "object"
    },
+   "BarIndicator": {
+    "enum": [
+     "close",
+     "volume"
+    ],
+    "type": "string"
+   },
    "BlockedOrder": {
     "properties": {
      "bar_volume": {
@@ -544,6 +551,14 @@
      "asks"
     ],
     "type": "object"
+   },
+   "BookState": {
+    "enum": [
+     "observed",
+     "snapshot_required",
+     "unknown"
+    ],
+    "type": "string"
    },
    "BookUpdate": {
     "additionalProperties": false,
@@ -1726,6 +1741,12 @@
     ],
     "type": "object"
    },
+   "FinanceLineState": {
+    "enum": [
+     "finance_contract_pending"
+    ],
+    "type": "string"
+   },
    "FinanceStatus": {
     "properties": {
      "circuit": {
@@ -1753,6 +1774,24 @@
      "verified"
     ],
     "type": "string"
+   },
+   "FocusSelection": {
+    "properties": {
+     "instrument_id": {
+      "oneOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/components/schemas/InstrumentId"
+       }
+      ]
+     }
+    },
+    "required": [
+     "instrument_id"
+    ],
+    "type": "object"
    },
    "Gap": {
     "additionalProperties": false,
@@ -2125,6 +2164,60 @@
     ],
     "type": "string"
    },
+   "MarketBook": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/MarketViewMetadata"
+     },
+     {
+      "properties": {
+       "asks": {
+        "oneOf": [
+         {
+          "items": {
+           "$ref": "#/components/schemas/BookLevel"
+          },
+          "type": "array"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "bids": {
+        "oneOf": [
+         {
+          "items": {
+           "$ref": "#/components/schemas/BookLevel"
+          },
+          "type": "array"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "observation": {
+        "oneOf": [
+         {
+          "type": "null"
+         },
+         {
+          "$ref": "#/components/schemas/Observation"
+         }
+        ]
+       },
+       "state": {
+        "$ref": "#/components/schemas/BookState"
+       }
+      },
+      "required": [
+       "state"
+      ],
+      "type": "object"
+     }
+    ]
+   },
    "MarketEvidence": {
     "properties": {
      "observation": {
@@ -2143,6 +2236,133 @@
     },
     "required": [
      "result"
+    ],
+    "type": "object"
+   },
+   "MarketHistory": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/MarketViewMetadata"
+     },
+     {
+      "properties": {
+       "records": {
+        "items": {
+         "$ref": "#/components/schemas/WalRecord"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "records"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "MarketIndicator": {
+    "properties": {
+     "id": {
+      "$ref": "#/components/schemas/BarIndicator"
+     },
+     "source_kind": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "source_kind"
+    ],
+    "type": "object"
+   },
+   "MarketIndicatorValue": {
+    "properties": {
+     "record": {
+      "$ref": "#/components/schemas/WalRecord"
+     },
+     "value": {
+      "$ref": "#/components/schemas/DecimalText"
+     }
+    },
+    "required": [
+     "record",
+     "value"
+    ],
+    "type": "object"
+   },
+   "MarketIndicatorValues": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/MarketViewMetadata"
+     },
+     {
+      "properties": {
+       "indicator": {
+        "$ref": "#/components/schemas/BarIndicator"
+       },
+       "items": {
+        "items": {
+         "$ref": "#/components/schemas/MarketIndicatorValue"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "indicator",
+       "items"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "MarketIndicators": {
+    "properties": {
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/MarketIndicator"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "items"
+    ],
+    "type": "object"
+   },
+   "MarketInstruments": {
+    "properties": {
+     "as_of": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/InstrumentStatus"
+      },
+      "type": "array"
+     },
+     "next_offset": {
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "source": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "state": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "state",
+     "items"
     ],
     "type": "object"
    },
@@ -2305,6 +2525,54 @@
     ],
     "type": "object"
    },
+   "MarketQuote": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/MarketViewMetadata"
+     },
+     {
+      "properties": {
+       "ask": {
+        "oneOf": [
+         {
+          "$ref": "#/components/schemas/BookLevel"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "bid": {
+        "oneOf": [
+         {
+          "$ref": "#/components/schemas/BookLevel"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "observation": {
+        "oneOf": [
+         {
+          "type": "null"
+         },
+         {
+          "$ref": "#/components/schemas/Observation"
+         }
+        ]
+       },
+       "state": {
+        "$ref": "#/components/schemas/BookState"
+       }
+      },
+      "required": [
+       "state"
+      ],
+      "type": "object"
+     }
+    ]
+   },
    "MarketResult": {
     "enum": [
      "verified",
@@ -2367,6 +2635,150 @@
     ],
     "type": "object"
    },
+   "MarketStreamCommand": {
+    "oneOf": [
+     {
+      "properties": {
+       "after": {
+        "description": "Exclusive decimal-string WAL offset. Omit to start at zero.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "channel": {
+        "type": "string"
+       },
+       "instrument_id": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "product": {
+        "type": "string"
+       },
+       "source": {
+        "type": "string"
+       },
+       "type": {
+        "enum": [
+         "subscribe"
+        ],
+        "type": "string"
+       },
+       "use_depth_focus": {
+        "description": "Select the saved depth focus in place of an explicit instrument.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "source",
+       "product",
+       "channel",
+       "type"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "type": {
+        "enum": [
+         "unsubscribe"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "type"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "MarketStreamControl": {
+    "description": "Web controls are distinct from the producer's F1 event envelopes.",
+    "oneOf": [
+     {
+      "properties": {
+       "after": {
+        "type": "string"
+       },
+       "type": {
+        "enum": [
+         "checkpoint"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "after",
+       "type"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "reason": {
+        "$ref": "#/components/schemas/ResetReason"
+       },
+       "type": {
+        "enum": [
+         "reset"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "reason",
+       "type"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "code": {
+        "$ref": "#/components/schemas/MarketStreamError"
+       },
+       "type": {
+        "enum": [
+         "error"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "code",
+       "type"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "type": {
+        "enum": [
+         "unsubscribed"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "type"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "MarketStreamError": {
+    "enum": [
+     "authorization_revoked",
+     "invalid_subscription",
+     "subscription_quota_exceeded",
+     "product_unavailable",
+     "finance_unavailable"
+    ],
+    "type": "string"
+   },
    "MarketSummary": {
     "properties": {
      "fresh": {
@@ -2401,6 +2813,30 @@
      "fresh",
      "instrument_count",
      "stale_count"
+    ],
+    "type": "object"
+   },
+   "MarketViewMetadata": {
+    "properties": {
+     "access": {
+      "$ref": "#/components/schemas/ProductPolicy"
+     },
+     "as_of": {
+      "description": "When finance observed the WAL page.",
+      "type": "string"
+     },
+     "coverage": {
+      "$ref": "#/components/schemas/WalCoverage"
+     },
+     "instrument_id": {
+      "$ref": "#/components/schemas/InstrumentId"
+     }
+    },
+    "required": [
+     "as_of",
+     "access",
+     "instrument_id",
+     "coverage"
     ],
     "type": "object"
    },
@@ -2726,6 +3162,43 @@
      "unavailable"
     ],
     "type": "string"
+   },
+   "Observation": {
+    "properties": {
+     "channel": {
+      "type": "string"
+     },
+     "epoch": {
+      "type": "string"
+     },
+     "exchange_ts": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "position": {
+      "type": "string"
+     },
+     "receive_ts": {
+      "type": "string"
+     },
+     "seq": {
+      "type": "string"
+     },
+     "venue": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "channel",
+     "venue",
+     "position",
+     "epoch",
+     "seq",
+     "receive_ts"
+    ],
+    "type": "object"
    },
    "ObservationDetails": {
     "oneOf": [
@@ -3349,6 +3822,16 @@
     ],
     "type": "object"
    },
+   "ResetReason": {
+    "enum": [
+     "consumer_lagged",
+     "cursor_unavailable",
+     "discontinuity",
+     "snapshot_required",
+     "unsupported_version"
+    ],
+    "type": "string"
+   },
    "Rollback": {
     "additionalProperties": false,
     "properties": {
@@ -3673,6 +4156,45 @@
      "admin"
     ],
     "type": "string"
+   },
+   "SubscriptionQuota": {
+    "properties": {
+     "active": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "available": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit": {
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "limit",
+     "active",
+     "available"
+    ],
+    "type": "object"
+   },
+   "Subscriptions": {
+    "properties": {
+     "finance_lines": {
+      "$ref": "#/components/schemas/FinanceLineState",
+      "description": "Readiness of the broker line contract. Web slots do not consume broker lines."
+     },
+     "web": {
+      "$ref": "#/components/schemas/SubscriptionQuota",
+      "description": "Allocated market subscriptions in this web process."
+     }
+    },
+    "required": [
+     "web",
+     "finance_lines"
+    ],
+    "type": "object"
    },
    "SuppressionReason": {
     "enum": [
@@ -4003,6 +4525,39 @@
      "version",
      "state",
      "settings"
+    ],
+    "type": "object"
+   },
+   "WalCoverage": {
+    "properties": {
+     "after": {
+      "description": "Exclusive beginning of the observed WAL page.",
+      "type": "string"
+     },
+     "durable_through": {
+      "type": "string"
+     },
+     "next_after": {
+      "description": "Null when the requested cutoff was reached.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "scanned_records": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "through": {
+      "description": "Inclusive cutoff for continuing the same WAL read.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "after",
+     "through",
+     "durable_through",
+     "scanned_records"
     ],
     "type": "object"
    },
@@ -5515,42 +6070,12 @@
   "/api/v1/indicators": {
    "get": {
     "operationId": "marketIndicators",
-    "parameters": [
-     {
-      "in": "query",
-      "name": "source",
-      "required": false,
-      "schema": {
-       "$ref": "#/components/schemas/ProductToken"
-      }
-     },
-     {
-      "in": "query",
-      "name": "offset",
-      "required": false,
-      "schema": {
-       "format": "int32",
-       "minimum": 0,
-       "type": "integer"
-      }
-     },
-     {
-      "in": "query",
-      "name": "limit",
-      "required": false,
-      "schema": {
-       "format": "int32",
-       "minimum": 0,
-       "type": "integer"
-      }
-     }
-    ],
     "responses": {
-     "400": {
+     "200": {
       "content": {
        "application/json": {
         "schema": {
-         "$ref": "#/components/schemas/ErrorBody"
+         "$ref": "#/components/schemas/MarketIndicators"
         }
        }
       },
@@ -5585,16 +6110,6 @@
        }
       },
       "description": ""
-     },
-     "503": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/ErrorBody"
-        }
-       }
-      },
-      "description": "Finance contract pending"
      }
     },
     "security": [
@@ -5614,6 +6129,23 @@
     "parameters": [
      {
       "in": "query",
+      "name": "source",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "in": "query",
+      "name": "product",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "Required except for depth book reads with an active focus.",
+      "in": "query",
       "name": "instrument_id",
       "required": true,
       "schema": {
@@ -5621,11 +6153,43 @@
       }
      },
      {
+      "description": "Required for quotes and book, to avoid mixing channels.",
       "in": "query",
-      "name": "indicator",
-      "required": true,
+      "name": "channel",
+      "required": false,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "The exclusive WAL position preceding this page. Defaults to the recent committed window.",
+      "in": "query",
+      "name": "after",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Inclusive WAL cutoff. Preserve it when following next_after.",
+      "in": "query",
+      "name": "through",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "format": "int32",
+       "maximum": 128,
+       "minimum": 1,
+       "type": "integer"
       }
      },
      {
@@ -5648,16 +6212,34 @@
      },
      {
       "in": "query",
-      "name": "limit",
+      "name": "as_of",
       "required": false,
       "schema": {
-       "format": "int32",
-       "minimum": 0,
-       "type": "integer"
+       "format": "date-time",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Required for the indicator values query.",
+      "in": "query",
+      "name": "indicator",
+      "required": true,
+      "schema": {
+       "type": "string"
       }
      }
     ],
     "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MarketIndicatorValues"
+        }
+       }
+      },
+      "description": ""
+     },
      "400": {
       "content": {
        "application/json": {
@@ -5688,7 +6270,27 @@
       },
       "description": ""
      },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
      "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "502": {
       "content": {
        "application/json": {
         "schema": {
@@ -5706,7 +6308,17 @@
         }
        }
       },
-      "description": "Finance contract pending"
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
      }
     },
     "security": [
@@ -7404,16 +8016,8 @@
     "parameters": [
      {
       "in": "query",
-      "name": "instrument_id",
-      "required": true,
-      "schema": {
-       "$ref": "#/components/schemas/InstrumentId"
-      }
-     },
-     {
-      "in": "query",
       "name": "source",
-      "required": false,
+      "required": true,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
       }
@@ -7421,9 +8025,58 @@
      {
       "in": "query",
       "name": "product",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "Required except for depth book reads with an active focus.",
+      "in": "query",
+      "name": "instrument_id",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/InstrumentId"
+      }
+     },
+     {
+      "description": "Required for quotes and book, to avoid mixing channels.",
+      "in": "query",
+      "name": "channel",
       "required": false,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "The exclusive WAL position preceding this page. Defaults to the recent committed window.",
+      "in": "query",
+      "name": "after",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Inclusive WAL cutoff. Preserve it when following next_after.",
+      "in": "query",
+      "name": "through",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "format": "int32",
+       "maximum": 128,
+       "minimum": 1,
+       "type": "integer"
       }
      },
      {
@@ -7446,16 +8099,25 @@
      },
      {
       "in": "query",
-      "name": "limit",
+      "name": "as_of",
       "required": false,
       "schema": {
-       "format": "int32",
-       "minimum": 0,
-       "type": "integer"
+       "format": "date-time",
+       "type": "string"
       }
      }
     ],
     "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MarketHistory"
+        }
+       }
+      },
+      "description": ""
+     },
      "400": {
       "content": {
        "application/json": {
@@ -7486,7 +8148,27 @@
       },
       "description": ""
      },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
      "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "502": {
       "content": {
        "application/json": {
         "schema": {
@@ -7504,7 +8186,17 @@
         }
        }
       },
-      "description": "Finance contract pending"
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
      }
     },
     "security": [
@@ -7524,16 +8216,8 @@
     "parameters": [
      {
       "in": "query",
-      "name": "instrument_id",
-      "required": true,
-      "schema": {
-       "$ref": "#/components/schemas/InstrumentId"
-      }
-     },
-     {
-      "in": "query",
       "name": "source",
-      "required": false,
+      "required": true,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
       }
@@ -7541,9 +8225,58 @@
      {
       "in": "query",
       "name": "product",
-      "required": false,
+      "required": true,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "Required except for depth book reads with an active focus.",
+      "in": "query",
+      "name": "instrument_id",
+      "required": false,
+      "schema": {
+       "$ref": "#/components/schemas/InstrumentId"
+      }
+     },
+     {
+      "description": "Required for quotes and book, to avoid mixing channels.",
+      "in": "query",
+      "name": "channel",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "The exclusive WAL position preceding this page. Defaults to the recent committed window.",
+      "in": "query",
+      "name": "after",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Inclusive WAL cutoff. Preserve it when following next_after.",
+      "in": "query",
+      "name": "through",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "format": "int32",
+       "maximum": 128,
+       "minimum": 1,
+       "type": "integer"
       }
      },
      {
@@ -7557,11 +8290,119 @@
      }
     ],
     "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MarketBook"
+        }
+       }
+      },
+      "description": ""
+     },
      "400": {
       "content": {
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "502": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     }
+    },
+    "security": [
+     {
+      "adminSession": []
+     },
+     {
+      "adminBearer": []
+     }
+    ],
+    "tags": [
+     "book"
+    ]
+   }
+  },
+  "/api/v1/market/depth-focus": {
+   "get": {
+    "operationId": "getMarketDepthFocus",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FocusSelection"
         }
        }
       },
@@ -7596,16 +8437,6 @@
        }
       },
       "description": ""
-     },
-     "503": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/ErrorBody"
-        }
-       }
-      },
-      "description": "Finance contract pending"
      }
     },
     "security": [
@@ -7617,9 +8448,7 @@
      }
     ],
     "tags": []
-   }
-  },
-  "/api/v1/market/depth-focus": {
+   },
    "put": {
     "operationId": "setMarketDepthFocus",
     "parameters": [
@@ -7647,6 +8476,16 @@
      "required": true
     },
     "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FocusSelection"
+        }
+       }
+      },
+      "description": ""
+     },
      "400": {
       "content": {
        "application/json": {
@@ -7677,6 +8516,16 @@
       },
       "description": ""
      },
+     "413": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
      "429": {
       "content": {
        "application/json": {
@@ -7687,7 +8536,7 @@
       },
       "description": ""
      },
-     "503": {
+     "504": {
       "content": {
        "application/json": {
         "schema": {
@@ -7695,7 +8544,7 @@
         }
        }
       },
-      "description": "Finance scheduling contract pending"
+      "description": ""
      }
     },
     "security": [
@@ -7715,16 +8564,8 @@
     "parameters": [
      {
       "in": "query",
-      "name": "instrument_id",
-      "required": true,
-      "schema": {
-       "$ref": "#/components/schemas/InstrumentId"
-      }
-     },
-     {
-      "in": "query",
       "name": "source",
-      "required": false,
+      "required": true,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
       }
@@ -7732,9 +8573,76 @@
      {
       "in": "query",
       "name": "product",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "Required except for depth book reads with an active focus.",
+      "in": "query",
+      "name": "instrument_id",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/InstrumentId"
+      }
+     },
+     {
+      "description": "Required for quotes and book, to avoid mixing channels.",
+      "in": "query",
+      "name": "channel",
       "required": false,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "The exclusive WAL position preceding this page. Defaults to the recent committed window.",
+      "in": "query",
+      "name": "after",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Inclusive WAL cutoff. Preserve it when following next_after.",
+      "in": "query",
+      "name": "through",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "format": "int32",
+       "maximum": 128,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "from",
+      "required": false,
+      "schema": {
+       "format": "date-time",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "until",
+      "required": false,
+      "schema": {
+       "format": "date-time",
+       "type": "string"
       }
      },
      {
@@ -7748,6 +8656,16 @@
      }
     ],
     "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MarketHistory"
+        }
+       }
+      },
+      "description": ""
+     },
      "400": {
       "content": {
        "application/json": {
@@ -7778,7 +8696,27 @@
       },
       "description": ""
      },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
      "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "502": {
       "content": {
        "application/json": {
         "schema": {
@@ -7796,7 +8734,17 @@
         }
        }
       },
-      "description": "Finance contract pending"
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
      }
     },
     "security": [
@@ -7838,12 +8786,23 @@
       "required": false,
       "schema": {
        "format": "int32",
-       "minimum": 0,
+       "maximum": 128,
+       "minimum": 1,
        "type": "integer"
       }
      }
     ],
     "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MarketInstruments"
+        }
+       }
+      },
+      "description": ""
+     },
      "400": {
       "content": {
        "application/json": {
@@ -7884,6 +8843,16 @@
       },
       "description": ""
      },
+     "502": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
      "503": {
       "content": {
        "application/json": {
@@ -7892,7 +8861,17 @@
         }
        }
       },
-      "description": "Finance contract pending"
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
      }
     },
     "security": [
@@ -8206,16 +9185,8 @@
     "parameters": [
      {
       "in": "query",
-      "name": "instrument_id",
-      "required": true,
-      "schema": {
-       "$ref": "#/components/schemas/InstrumentId"
-      }
-     },
-     {
-      "in": "query",
       "name": "source",
-      "required": false,
+      "required": true,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
       }
@@ -8223,9 +9194,58 @@
      {
       "in": "query",
       "name": "product",
-      "required": false,
+      "required": true,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "Required except for depth book reads with an active focus.",
+      "in": "query",
+      "name": "instrument_id",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/InstrumentId"
+      }
+     },
+     {
+      "description": "Required for quotes and book, to avoid mixing channels.",
+      "in": "query",
+      "name": "channel",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "The exclusive WAL position preceding this page. Defaults to the recent committed window.",
+      "in": "query",
+      "name": "after",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Inclusive WAL cutoff. Preserve it when following next_after.",
+      "in": "query",
+      "name": "through",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "format": "int32",
+       "maximum": 128,
+       "minimum": 1,
+       "type": "integer"
       }
      },
      {
@@ -8239,6 +9259,16 @@
      }
     ],
     "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MarketQuote"
+        }
+       }
+      },
+      "description": ""
+     },
      "400": {
       "content": {
        "application/json": {
@@ -8269,7 +9299,27 @@
       },
       "description": ""
      },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
      "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "502": {
       "content": {
        "application/json": {
         "schema": {
@@ -8287,7 +9337,17 @@
         }
        }
       },
-      "description": "Finance contract pending"
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
      }
     },
     "security": [
@@ -8298,7 +9358,9 @@
       "adminBearer": []
      }
     ],
-    "tags": []
+    "tags": [
+     "book"
+    ]
    }
   },
   "/api/v1/market/status": {
@@ -8354,42 +9416,12 @@
   "/api/v1/market/subscriptions": {
    "get": {
     "operationId": "marketSubscriptions",
-    "parameters": [
-     {
-      "in": "query",
-      "name": "source",
-      "required": false,
-      "schema": {
-       "$ref": "#/components/schemas/ProductToken"
-      }
-     },
-     {
-      "in": "query",
-      "name": "offset",
-      "required": false,
-      "schema": {
-       "format": "int32",
-       "minimum": 0,
-       "type": "integer"
-      }
-     },
-     {
-      "in": "query",
-      "name": "limit",
-      "required": false,
-      "schema": {
-       "format": "int32",
-       "minimum": 0,
-       "type": "integer"
-      }
-     }
-    ],
     "responses": {
-     "400": {
+     "200": {
       "content": {
        "application/json": {
         "schema": {
-         "$ref": "#/components/schemas/ErrorBody"
+         "$ref": "#/components/schemas/Subscriptions"
         }
        }
       },
@@ -8424,16 +9456,6 @@
        }
       },
       "description": ""
-     },
-     "503": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/ErrorBody"
-        }
-       }
-      },
-      "description": "Finance contract pending"
      }
     },
     "security": [
@@ -8453,16 +9475,8 @@
     "parameters": [
      {
       "in": "query",
-      "name": "instrument_id",
-      "required": true,
-      "schema": {
-       "$ref": "#/components/schemas/InstrumentId"
-      }
-     },
-     {
-      "in": "query",
       "name": "source",
-      "required": false,
+      "required": true,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
       }
@@ -8470,9 +9484,58 @@
      {
       "in": "query",
       "name": "product",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "Required except for depth book reads with an active focus.",
+      "in": "query",
+      "name": "instrument_id",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/InstrumentId"
+      }
+     },
+     {
+      "description": "Required for quotes and book, to avoid mixing channels.",
+      "in": "query",
+      "name": "channel",
       "required": false,
       "schema": {
        "$ref": "#/components/schemas/ProductToken"
+      }
+     },
+     {
+      "description": "The exclusive WAL position preceding this page. Defaults to the recent committed window.",
+      "in": "query",
+      "name": "after",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Inclusive WAL cutoff. Preserve it when following next_after.",
+      "in": "query",
+      "name": "through",
+      "required": false,
+      "schema": {
+       "pattern": "^(?:0|[1-9][0-9]{0,19})$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "format": "int32",
+       "maximum": 128,
+       "minimum": 1,
+       "type": "integer"
       }
      },
      {
@@ -8495,16 +9558,25 @@
      },
      {
       "in": "query",
-      "name": "limit",
+      "name": "as_of",
       "required": false,
       "schema": {
-       "format": "int32",
-       "minimum": 0,
-       "type": "integer"
+       "format": "date-time",
+       "type": "string"
       }
      }
     ],
     "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MarketHistory"
+        }
+       }
+      },
+      "description": ""
+     },
      "400": {
       "content": {
        "application/json": {
@@ -8535,7 +9607,27 @@
       },
       "description": ""
      },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
      "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "502": {
       "content": {
        "application/json": {
         "schema": {
@@ -8553,7 +9645,17 @@
         }
        }
       },
-      "description": "Finance contract pending"
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
      }
     },
     "security": [
@@ -10383,6 +11485,16 @@
       "description": ""
      },
      "409": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "413": {
       "content": {
        "application/json": {
         "schema": {

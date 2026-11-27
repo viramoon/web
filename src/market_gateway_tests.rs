@@ -1,5 +1,6 @@
 use crate::{
-    AppState, auth::WriteAccess, config::Settings, database::Database, finance::Finance, router,
+    AppState, auth::WriteAccess, config::Settings, database::Database, finance::Finance,
+    market_preferences::MarketPreferences, router_with_market_preferences,
 };
 use axum::{
     Router,
@@ -7,19 +8,27 @@ use axum::{
     http::{HeaderValue, Request, StatusCode, header, request::Builder},
     response::Response,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{io::Write, path::Path, sync::Arc, time::Duration};
 use tower::ServiceExt;
 use uuid::Uuid;
 
 const ORIGIN: &str = "https://web.example.test";
+const MAX_BODY_BYTES: usize = 512;
 
-fn test_app() -> (Router, HeaderValue, tempfile::NamedTempFile) {
+fn test_app() -> (
+    Router,
+    HeaderValue,
+    tempfile::NamedTempFile,
+    Arc<MarketPreferences>,
+) {
     let mut token_file = tempfile::NamedTempFile::new_in("/tmp").unwrap();
     let token = Uuid::new_v4();
     writeln!(token_file, "WEB_ADMIN_TOKEN={token}").unwrap();
     let timeout = Duration::from_secs(1);
-    let config = Arc::new(Settings::load(Path::new("config"), |_| None).unwrap());
+    let mut config = Settings::load(Path::new("config"), |_| None).unwrap();
+    config.server.max_body_bytes = MAX_BODY_BYTES;
+    let config = Arc::new(config);
     let state = AppState {
         db: Database::new(&config.database.url, timeout, timeout).unwrap(),
         finance: Finance::new(&config.finance).unwrap(),
@@ -33,7 +42,13 @@ fn test_app() -> (Router, HeaderValue, tempfile::NamedTempFile) {
     };
     let mut authorization = HeaderValue::from_str(&format!("Bearer {token}")).unwrap();
     authorization.set_sensitive(true);
-    (router(state), authorization, token_file)
+    let preferences = Arc::new(MarketPreferences::default());
+    (
+        router_with_market_preferences(state, Arc::clone(&preferences)),
+        authorization,
+        token_file,
+        preferences,
+    )
 }
 
 async fn send(app: &Router, request: Builder, body: impl Into<Body>) -> Response {
@@ -54,7 +69,7 @@ async fn response_json(response: Response) -> Value {
 
 #[tokio::test]
 async fn market_gateway_blocks_anonymous_routes_and_cache_bypass() {
-    let (app, _, _fixture) = test_app();
+    let (app, _, _fixture, _) = test_app();
     for path in [
         "/api/v1/market/products",
         "/api/v1/market/wal",
@@ -68,6 +83,7 @@ async fn market_gateway_blocks_anonymous_routes_and_cache_bypass() {
         "/api/v1/market/trades",
         "/api/v1/market/derivatives",
         "/api/v1/market/subscriptions",
+        "/api/v1/market/depth-focus",
         "/api/v1/indicators",
         "/api/v1/indicators/values",
         "/api/v1/options/chain",
@@ -101,7 +117,7 @@ async fn market_gateway_blocks_anonymous_routes_and_cache_bypass() {
 
 #[tokio::test]
 async fn market_gateway_checks_focus_contract_and_throttles_authorized_reads() {
-    let (app, admin, _fixture) = test_app();
+    let (app, admin, _fixture, _) = test_app();
     let focus = |request| {
         Request::put("/api/v1/market/depth-focus")
             .header(header::AUTHORIZATION, admin.clone())
@@ -114,21 +130,21 @@ async fn market_gateway_checks_focus_contract_and_throttles_authorized_reads() {
         (
             ORIGIN,
             r#"{"action":"set","instrument_id":"SYN-A.XTEST"}"#,
-            503,
+            200,
         ),
     ] {
         let response = send(&app, focus(origin), body).await;
         assert_eq!(response.status().as_u16(), expected);
         assert_no_store(&response);
-        if expected == 503 {
+        if expected == 200 {
             assert_eq!(
-                response_json(response).await["error"]["code"],
-                "finance_contract_pending"
+                response_json(response).await,
+                json!({"instrument_id":"SYN-A.XTEST"})
             );
         }
     }
-    let pending = "/api/v1/market/subscriptions";
-    let cross_origin = Request::get(pending)
+    let subscriptions = "/api/v1/market/subscriptions";
+    let cross_origin = Request::get(subscriptions)
         .header(header::AUTHORIZATION, admin.clone())
         .header(header::ORIGIN, "https://foreign.example.test");
     assert_eq!(
@@ -136,10 +152,10 @@ async fn market_gateway_checks_focus_contract_and_throttles_authorized_reads() {
         StatusCode::FORBIDDEN
     );
     for _ in 0..120 {
-        let request = Request::get(pending).header(header::AUTHORIZATION, admin.clone());
+        let request = Request::get(subscriptions).header(header::AUTHORIZATION, admin.clone());
         assert_eq!(
             send(&app, request, Body::empty()).await.status(),
-            StatusCode::SERVICE_UNAVAILABLE
+            StatusCode::OK
         );
     }
     let request = Request::get("/api/v1/options/chain?instrument_id=SYN-A.XTEST")
@@ -156,7 +172,7 @@ async fn market_gateway_checks_focus_contract_and_throttles_authorized_reads() {
 
 #[tokio::test]
 async fn market_gateway_checks_browser_origin_and_csrf_before_focus_and_watchlist_changes() {
-    let (app, admin, _fixture) = test_app();
+    let (app, admin, _fixture, _) = test_app();
     let session = send(
         &app,
         Request::post("/api/v1/admin/session")
@@ -195,5 +211,87 @@ async fn market_gateway_checks_browser_origin_and_csrf_before_focus_and_watchlis
         r#"{"action":"clear"}"#,
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await,
+        json!({"instrument_id": null})
+    );
+}
+
+#[tokio::test]
+async fn market_gateway_persists_focus_in_process_and_reports_shared_subscription_quota() {
+    let (app, admin, _fixture, preferences) = test_app();
+    let focus = "/api/v1/market/depth-focus";
+    let read = |path| Request::get(path).header(header::AUTHORIZATION, admin.clone());
+    let change = || {
+        Request::put(focus)
+            .header(header::AUTHORIZATION, admin.clone())
+            .header(header::CONTENT_TYPE, "application/json")
+    };
+    for (command, expected) in [
+        (
+            r#"{"action":"set","instrument_id":"SYN-B.XTEST"}"#,
+            json!("SYN-B.XTEST"),
+        ),
+        (r#"{"action":"clear"}"#, Value::Null),
+    ] {
+        let updated = send(&app, change(), command).await;
+        assert_eq!(updated.status(), StatusCode::OK);
+        assert_eq!(response_json(updated).await["instrument_id"], expected);
+        let readback = send(&app, read(focus), Body::empty()).await;
+        assert_eq!(readback.status(), StatusCode::OK);
+        assert_eq!(response_json(readback).await["instrument_id"], expected);
+    }
+
+    let subscriptions = "/api/v1/market/subscriptions";
+    let quota = response_json(send(&app, read(subscriptions), Body::empty()).await).await;
+    assert_eq!(
+        quota,
+        json!({"web": {"limit": 8, "available": 8, "active": 0},
+        "finance_lines": "finance_contract_pending"})
+    );
+    let mut leases: Vec<_> = (0..8).map(|_| preferences.acquire().unwrap()).collect();
+    assert!(preferences.acquire().is_none());
+    let saturated = response_json(send(&app, read(subscriptions), Body::empty()).await).await;
+    assert_eq!(
+        saturated["web"],
+        json!({"limit": 8, "available": 0, "active": 8})
+    );
+    drop(leases.pop());
+    let released = response_json(send(&app, read(subscriptions), Body::empty()).await).await;
+    assert_eq!(
+        released["web"],
+        json!({"limit": 8, "available": 1, "active": 7})
+    );
+    assert!(preferences.acquire().is_some());
+}
+
+#[tokio::test]
+async fn market_gateway_documents_and_returns_413_for_oversize_focus_and_watchlists() {
+    let (app, admin, _fixture, _) = test_app();
+    let spec = crate::openapi();
+    for (url, doc_path) in [
+        ("/api/v1/watchlists/default", "/api/v1/watchlists/{id}"),
+        ("/api/v1/market/depth-focus", "/api/v1/market/depth-focus"),
+    ] {
+        let response = send(
+            &app,
+            Request::put(url)
+                .header(header::AUTHORIZATION, admin.clone())
+                .header(header::CONTENT_TYPE, "application/json"),
+            " ".repeat(MAX_BODY_BYTES + 1),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_no_store(&response);
+        assert_eq!(
+            response_json(response).await["error"]["code"],
+            "body_too_large"
+        );
+        assert_eq!(
+            spec["paths"][doc_path]["put"]["responses"]["413"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            "#/components/schemas/ErrorBody"
+        );
+    }
 }

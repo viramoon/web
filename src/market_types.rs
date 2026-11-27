@@ -38,6 +38,28 @@ pub(crate) fn valid_token(value: &str) -> bool {
         && bytes.all(|byte| lower_digit(byte) || matches!(byte, b'_' | b'-' | b'.'))
 }
 
+#[derive(Clone, Serialize, ToSchema)]
+#[serde(transparent)]
+#[schema(value_type = String, pattern = r"^[a-z0-9][a-z0-9_.-]{0,63}(?![\s\S])")]
+pub(crate) struct ProductToken(String);
+
+impl ProductToken {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ProductToken {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        if valid_token(&value) {
+            Ok(Self(value))
+        } else {
+            Err(de::Error::custom("invalid market token"))
+        }
+    }
+}
+
 #[derive(Clone, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub(crate) struct InstrumentId(String);

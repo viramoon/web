@@ -54,3 +54,45 @@ pub(super) fn wal_reply(record: Value, display: bool) -> Value {
         "records": [{"position": POSITION, "generation": "1", "event": record}]
     })
 }
+
+pub(super) fn wal_rows(events: Vec<Value>) -> Value {
+    let through = events.len().to_string();
+    let records: Vec<_> = events
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut event)| {
+            let position = (index + 1).to_string();
+            event["seq"] = json!((9_007_199_254_740_992_u64 + index as u64).to_string());
+            json!({"position": position, "generation": "1", "event": event})
+        })
+        .collect();
+    json!({
+        "as_of": AS_OF,
+        "access": access(true),
+        "durable_through": through,
+        "through": through,
+        "next_after": null,
+        "records": records
+    })
+}
+
+pub(super) fn book_snapshot() -> Value {
+    use finance_client::models::{BookLevel, BookSnapshot};
+    let snapshot = BookSnapshot::new(
+        vec![BookLevel::new("101.01".into(), "4.70".into())],
+        vec![
+            BookLevel::new("100.10000".into(), "5.20".into()),
+            BookLevel::new("99.9".into(), "2.0".into()),
+        ],
+    );
+    event("snapshot", serde_json::to_value(snapshot).unwrap())
+}
+
+pub(super) fn book_delta() -> Value {
+    use finance_client::models::{BookDelta, BookSide, BookUpdate};
+    let delta = BookDelta::new(vec![
+        BookUpdate::new("100.10".into(), "0.000".into(), BookSide::Bid),
+        BookUpdate::new("101.01".into(), SIZE.into(), BookSide::Ask),
+    ]);
+    event("delta", serde_json::to_value(delta).unwrap())
+}

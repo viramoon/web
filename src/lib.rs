@@ -11,6 +11,7 @@ mod market;
 #[cfg(test)]
 mod market_gateway_tests;
 mod market_pending;
+pub mod market_preferences;
 mod market_reads;
 pub mod market_stream;
 mod market_types;
@@ -256,7 +257,12 @@ fn read_product(path: &str) -> Option<auth::Product> {
 fn is_market_rest(path: &str) -> bool {
     market_pending::is_private(path)
         || market_reads::is_private(path)
-        || path == watchlists::WATCHLIST
+        || matches!(
+            path,
+            watchlists::WATCHLIST
+                | market_preferences::DEPTH_FOCUS
+                | market_preferences::SUBSCRIPTIONS
+        )
 }
 
 fn is_stream(path: &str) -> bool {
@@ -290,7 +296,7 @@ async fn check_access(State(s): State<AppState>, req: Request, next: Next) -> Re
         )
         | (&Method::PATCH, "/api/v1/integrations/{id}")
         | (&Method::PUT | &Method::DELETE, "/api/v1/integrations/{id}/credential")
-        | (&Method::PUT, watchlists::WATCHLIST | market_pending::DEPTH_FOCUS)
+        | (&Method::PUT, watchlists::WATCHLIST | market_preferences::DEPTH_FOCUS)
         | (&Method::PUT, notification_http::RULE)
         | (&Method::POST, notification_http::ACK | notification_http::CHANNEL_TESTS) => {
             s.write_access.authorize_same_origin(headers)
@@ -314,6 +320,9 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
     let write_timeout_hint = match (req.method(), path) {
         (&Method::PUT, watchlists::WATCHLIST) => {
             Some("Watchlist update outcome unknown. Read the current revision before retrying")
+        }
+        (&Method::PUT, market_preferences::DEPTH_FOCUS) => {
+            Some("Focus update outcome unknown. Read the current focus before retrying")
         }
         (&Method::PUT, notification_http::RULE) => {
             Some("Rule update outcome unknown; read the rule revision before retrying")
@@ -408,6 +417,16 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
 }
 
 pub fn router(s: AppState) -> Router {
+    router_with_market_preferences(
+        s,
+        Arc::new(market_preferences::MarketPreferences::default()),
+    )
+}
+
+fn router_with_market_preferences(
+    s: AppState,
+    market_preferences: Arc<market_preferences::MarketPreferences>,
+) -> Router {
     let routes = Router::new()
         .route("/healthz/live", get(live))
         .route("/healthz/ready", get(ready))
@@ -431,10 +450,12 @@ pub fn router(s: AppState) -> Router {
         .merge(ops::routes())
         .merge(watchlists::routes())
         .merge(market_pending::routes())
+        .merge(market_preferences::routes())
         .merge(market_reads::routes())
         .merge(market_stream::routes())
         .merge(events::routes())
-        .fallback(spa::serve);
+        .fallback(spa::serve)
+        .layer(Extension(market_preferences));
     with_controls(routes, s)
 }
 
@@ -516,6 +537,7 @@ pub fn openapi() -> serde_json::Value {
     let mut spec = WebApi::openapi();
     spec.merge(watchlists::WatchlistApi::openapi());
     spec.merge(market_pending::MarketPendingApi::openapi());
+    spec.merge(market_preferences::MarketPreferencesApi::openapi());
     spec.merge(market_stream::MarketStreamApi::openapi());
     spec.merge(events::EventsApi::openapi());
     // The repository has no declared license. OpenAPI requires a name if the object exists.

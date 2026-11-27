@@ -70,16 +70,24 @@ Cookie 使用 `HttpOnly; Secure; SameSite=Strict; Path=/`，作用域为当前�
 | `GET /market/projection/latest` | 按 `source`、`product`、`channel`、`instrument_id`、`epoch` 和 `seq` 精确读取投影事件或修订。 |
 | `GET /market/watermarks` | 按源和产品读取 WAL 与投影水位。 |
 | `GET /quality/finance-gaps` | finance F3 授权产品的缺口、覆盖和分页。按源、产品及可选频道、标的和窗口筛选。F10a 接受 UTC Unix 纳秒的半开窗口 `[from_ts, to_ts)`。 |
+| `GET /market/instruments` | 从 finance 行情状态分页读取已观测的标的。可按来源筛选。 |
+| `GET /market/bars`、`/market/trades`、`/market/derivatives` | 分别读取已提交的 bar、成交和永续上下文。保留 F1 数据与更正信封。 |
+| `GET /market/book`、`/market/quotes` | 对指定来源、产品、标的和频道按快照与连续增量还原盘口，可由同一盘口取得最佳买卖档。 |
+| `GET /indicators`、`/indicators/values` | 列出 WAL bar 支持的 `close` 和 `volume` 数列，按 `indicator` 读取对应十进制文本。 |
 
-响应沿用对应的 finance 结构。许可标签、源和产品、`as_of`、部分覆盖、可空字段、精确十进制值及大整数文本保留其上游语义。WAL 和投影事件需通过本机记录与显示许可检查。F10a 不提供调度额度，预留的 `GET /market/subscriptions` 返回 503 及 `finance_contract_pending`。部署预算 9/16/45/30 行及深度 2 + 1 属于 finance 调度设计，不能当作当前实测配额。既有 `GET /quality/gaps` 仍从 web 的获准质量快照读取。
+直接查询保留 finance 的许可标签、源和产品、`as_of`、部分覆盖、可空字段、精确十进制值及大整数文本。WAL 和投影事件需通过本机记录与显示许可检查。既有 `GET /quality/gaps` 从 web 的获准质量快照读取。
 
-自选用 `GET /watchlists/{id}` 读取，用 `PUT /watchlists/{id}` 以 `{revision, instrument_ids}` 替换有序列表。未保存的自选返回 revision 0 和空列表。每次成功提交增加 revision，陈旧 revision 返回 409。接受最多 64 个不重复的 F1 标的 ID，ID 校验限规范语法。标的发现和向 finance 提交订阅需求需后续契约。
+WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价还须指定 `channel`。视图每页最多扫描 128 条 WAL 记录，响应给出实际覆盖和继续游标。历史列表可用带时区的半开区间 `[from, until)` 筛选 bar 的开盘时间或事件的交易所时间，`as_of` 按首次可用时间筛选。盘口状态为 `observed`、`snapshot_required` 或 `unknown`，失同步后盘口及最佳档为空。报价为所选频道的观察。它的时效以观测时间与 WAL 覆盖为准。
 
-`GET /market/instruments`、`/market/bars`、`/market/quotes`、`/market/book`、`/market/trades`、`/market/derivatives`、`/market/subscriptions`、`/indicators`、`/indicators/values`、`/options/chain`、`/options/flow`、`/options/exposure` 和 `PUT /market/depth-focus` 已定义类型化请求，返回 `finance_contract_pending`。focus 接受 `action: set` 加 F1 标的 ID，或 `action: clear`。有效请求在本批次不分配行或深度。预留时间窗为带时区的 `[from, until)`。后续接入时由 finance 返回实际额度、许可、覆盖、OI 日期和未知值。
+自选用 `GET /watchlists/{id}` 读取，用 `PUT /watchlists/{id}` 以 `{revision, instrument_ids}` 替换有序列表。未保存的自选返回 revision 0 和空列表。每次成功提交增加 revision，陈旧 revision 返回 409。接受最多 64 个不重复的 F1 标的 ID，ID 校验限规范语法。按完整注册表验证标的和向 finance 提交订阅需求需后续契约。
+
+`GET /market/depth-focus` 读取当前标的。`PUT /market/depth-focus` 接受 `action: set` 加 F1 标的 ID，或 `action: clear`，返回保存后的 `instrument_id`。盘口请求省略标的时使用该选择，清除后同一请求返回 `depth_focus_required`。自选和 focus 的 PUT 超过正文上限时返回 413 `body_too_large`。
+
+`GET /market/subscriptions` 返回进程内单管理员额度 `web.limit`、`web.active` 与 `web.available`。浏览器会话与 bearer 共用 8 个 web 订阅槽。`finance_lines` 为 `finance_contract_pending`，当前券商线路使用量待 finance 提供。期权链、flow 和 exposure 的三个查询返回 503 `finance_contract_pending`。
 
 `GET /events` 返回 `text/event-stream`。事件数据为含 `schema_version: "1.0"` 和 `kind` 的 JSON，事件名称为 `job`、`alert`、`backup`、`permissions`、`reset`。作业、告警和备份来自现有只读来源，流只给最小状态字段。首次订阅收到权限状态与 `snapshot_required`；客户端通过 REST 取得初始快照。使用 `Last-Event-ID` 接续最近 128 个保留事件，ID 格式为 `<UUID>:<十进制序号>`。游标超出保留窗、进程代际变化、慢端掉队时返回 `cursor_unavailable`，告警窗口溢出返回 `alert_window_overrun`。收到重置后重取快照。流每秒检查空闲会话且在发送数据前重新鉴权，最多同时 16 条连接。
 
-`GET /stream/market` 使用同一权限及来源校验，当前返回 503 `market_stream_unavailable`。仓内类型化 WAL 回放以源、产品、频道、标的及 F1 `epoch`+`seq` 为边界，快照建立基线，掉队、跳号或换代时重置。事件格式沿用 finance F1。当前 F10a 无实时订阅握手或临时显示 feed。
+`GET /stream/market` 当前返回 503 `market_stream_unavailable`，WS 升级等待传输依赖。会话层定义 `subscribe` 和 `unsubscribe` 命令，订阅指定源、产品、频道和标的，或显式选择 `use_depth_focus`。录制数据帧沿用 F10a 的 F1 v1.0 事件格式。独立控制帧报告游标、错误和重置。重连重新鉴权，使用已确认的 WAL `after` 游标；续接时缺少可验证的盘口基线会要求新快照。
 
 ## 集成配置
 

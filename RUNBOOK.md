@@ -118,7 +118,9 @@ curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 
 `/api/v1/events` 使用现有 web 端口。入口代理应关闭 SSE 响应缓冲并允许 15 秒心跳，转发 `Last-Event-ID`。收到 `reset` 时从受保护的 REST 路径重取快照，断线后 EventSource 会携带最近游标重连。进程重启清空 SSE 回放，进程退出时主动关闭流。无效或过期的会话需重新登录。避免采集流正文、查询参数、身份头和付费数据。
 
-`/api/v1/stream/market` 当前返回 `market_stream_unavailable`。盘口 focus、期权和调度等返回 `finance_contract_pending`。更新自选前读取当前 revision，写超时后先查再重试。各路径、节流和接续语义见 [W2a 接口](docs/api.md#行情自选与推送)。
+`GET /api/v1/market/subscriptions` 返回单管理员共享的 web 订阅额度和券商线路契约状态。focus 是进程内的盘口选择，重启后重新设置。读取盘口时显式标的优先于 focus。更新自选前读取当前 revision，写超时后先查自选或 focus 再重试。如果盘口响应为 `snapshot_required`，客户端应清空旧盘口。
+
+`/api/v1/stream/market` 当前返回 `market_stream_unavailable`。Axum WebSocket 传输依赖补齐后才能在同一服务端口升级。期权查询返回 `finance_contract_pending`。各路径、节流和接续语义见 [W2a 接口](docs/api.md#行情自选与推送)。
 
 ## 集成配置及凭据
 
