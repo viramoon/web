@@ -235,7 +235,7 @@ impl Delivery {
         }
         let epoch = cursor(&event.epoch)?;
         let seq = cursor(&event.seq)?;
-        let reset = matches!(*event.message, Message::MessageOneOf2(_));
+        let reset = matches!(*event.message, Message::MessageOneOf4(_));
         let discontinuity = ReplayError::ResetRequired(ResetReason::Discontinuity);
         if epoch == 0 || (reset && seq != 0) {
             return Err(discontinuity);
@@ -264,7 +264,7 @@ impl Delivery {
             Message::MarketMessageOneOf3(_) if !self.has_book_snapshot => {
                 return Err(ReplayError::ResetRequired(ResetReason::SnapshotRequired));
             }
-            Message::MessageOneOf1(_) | Message::MessageOneOf2(_) => self.has_book_snapshot = false,
+            Message::MessageOneOf3(_) | Message::MessageOneOf4(_) => self.has_book_snapshot = false,
             _ => {}
         }
         let event = Arc::new(event);

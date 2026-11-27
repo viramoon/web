@@ -16,26 +16,23 @@ pub struct MessageOneOf5 {
     #[serde(rename = "kind")]
     pub kind: Kind,
     #[serde(rename = "payload")]
-    pub payload: Box<models::PerpetualContext>,
+    pub payload: serde_json::Value,
 }
 
 impl MessageOneOf5 {
-    pub fn new(kind: Kind, payload: models::PerpetualContext) -> MessageOneOf5 {
-        MessageOneOf5 {
-            kind,
-            payload: Box::new(payload),
-        }
+    pub fn new(kind: Kind, payload: serde_json::Value) -> MessageOneOf5 {
+        MessageOneOf5 { kind, payload }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Kind {
-    #[serde(rename = "perpetual_context")]
-    PerpetualContext,
+    #[serde(rename = "heartbeat")]
+    Heartbeat,
 }
 
 impl Default for Kind {
     fn default() -> Kind {
-        Self::PerpetualContext
+        Self::Heartbeat
     }
 }

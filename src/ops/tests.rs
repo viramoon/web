@@ -302,8 +302,7 @@ fn ops_paths_are_absolute_private_and_require_a_status_for_restore() {
     assert!(config.validate(&public).is_err());
 }
 
-#[tokio::test]
-async fn ops_routes_require_admin_and_forbid_caching_and_invalid_queries() {
+fn quality_test_router() -> (tempfile::TempDir, axum::Router, String) {
     let directory = tempfile::tempdir_in("/tmp").unwrap();
     let bearer = uuid::Uuid::new_v4().to_string();
     let token_file = directory.path().join("admin.env");
@@ -333,6 +332,12 @@ async fn ops_routes_require_admin_and_forbid_caching_and_invalid_queries() {
         config: Arc::new(config),
         started_at: Utc::now(),
     });
+    (directory, app, bearer)
+}
+
+#[tokio::test]
+async fn ops_routes_require_admin_and_forbid_caching_and_invalid_queries() {
+    let (_directory, app, bearer) = quality_test_router();
     for route in [BACKUP_STATUS, QUALITY_GAPS] {
         let response = app
             .clone()
@@ -384,4 +389,120 @@ async fn ops_routes_require_admin_and_forbid_caching_and_invalid_queries() {
             value
         );
     }
+}
+
+fn referenced_schema<'a>(document: &'a Value, schema: &Value) -> &'a Value {
+    let reference = schema["$ref"].as_str().expect("local schema reference");
+    document
+        .pointer(reference.strip_prefix('#').unwrap())
+        .unwrap_or_else(|| panic!("missing component {reference}"))
+}
+
+fn assert_schema_object(schema: &Value, response: &Value) {
+    assert_eq!(schema["type"], "object");
+    let fields = response.as_object().expect("response object");
+    let properties = schema["properties"].as_object().expect("schema properties");
+    for field in schema["required"].as_array().expect("required fields") {
+        let field = field.as_str().unwrap();
+        assert!(
+            fields.contains_key(field),
+            "response lacks required field {field}"
+        );
+    }
+    for field in fields.keys() {
+        assert!(
+            properties.contains_key(field),
+            "response field {field} is undocumented"
+        );
+    }
+}
+
+fn non_null_branch(schema: &Value) -> &Value {
+    let branches = schema["oneOf"]
+        .as_array()
+        .expect("nullable schema branches");
+    assert_eq!(branches.len(), 2);
+    assert_eq!(
+        branches
+            .iter()
+            .filter(|branch| branch["type"] == "null")
+            .count(),
+        1
+    );
+    branches
+        .iter()
+        .find(|branch| branch["type"] != "null")
+        .unwrap()
+}
+
+fn assert_exact_count(document: &Value, schema: &Value, response: &Value) {
+    assert_eq!(schema["$ref"], "#/components/schemas/ExactCount");
+    assert_eq!(referenced_schema(document, schema)["type"], "string");
+    let text = response.as_str().expect("decimal count as text");
+    assert_eq!(text.parse::<u64>().unwrap().to_string(), text);
+}
+
+#[tokio::test]
+async fn quality_gaps_response_matches_exported_watermarks_schema() {
+    let (_directory, app, bearer) = quality_test_router();
+    let response = app
+        .oneshot(
+            Request::get(QUALITY_GAPS)
+                .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["state"], "available");
+
+    let document = crate::openapi();
+    let response_schema = &document["paths"][QUALITY_GAPS]["get"]["responses"]["200"]["content"]["application/json"]
+        ["schema"];
+    let page = referenced_schema(&document, response_schema);
+    assert_schema_object(page, &body);
+    let coverage = &page["properties"]["coverage"];
+    assert_eq!(coverage["type"], "array");
+    let [trades, book] = body["coverage"].as_array().unwrap().as_slice() else {
+        panic!("expected coverage for both synthetic products");
+    };
+    let coverage_item = referenced_schema(&document, &coverage["items"]);
+    for item in [trades, book] {
+        assert_schema_object(coverage_item, item);
+    }
+    let watermarks_branch = non_null_branch(&coverage_item["properties"]["watermarks"]);
+    assert!(book["watermarks"].is_null());
+    let marks_schema = referenced_schema(&document, watermarks_branch);
+    let marks = &trades["watermarks"];
+    assert_schema_object(marks_schema, marks);
+    let properties = &marks_schema["properties"];
+    for field in ["local_durable", "projected"] {
+        assert_exact_count(&document, &properties[field], &marks[field]);
+    }
+    assert!(marks["remote_verified"].is_null());
+    assert_eq!(
+        non_null_branch(&properties["remote_verified"])["$ref"],
+        "#/components/schemas/ExactCount"
+    );
+
+    let observation_schema =
+        referenced_schema(&document, non_null_branch(&properties["source_latest"]));
+    let observation = &marks["source_latest"];
+    assert_schema_object(observation_schema, observation);
+    let properties = &observation_schema["properties"];
+    for field in ["channel", "instrument_id"] {
+        assert_eq!(properties[field]["type"], "string");
+        assert!(observation[field].is_string());
+    }
+    for field in ["epoch", "seq", "receive_ts"] {
+        assert_exact_count(&document, &properties[field], &observation[field]);
+    }
+    assert!(observation["exchange_ts"].is_null());
+    assert_eq!(
+        non_null_branch(&properties["exchange_ts"])["$ref"],
+        "#/components/schemas/ExactCount"
+    );
 }

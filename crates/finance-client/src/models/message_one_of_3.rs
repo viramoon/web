@@ -16,23 +16,26 @@ pub struct MessageOneOf3 {
     #[serde(rename = "kind")]
     pub kind: Kind,
     #[serde(rename = "payload")]
-    pub payload: serde_json::Value,
+    pub payload: Box<models::Gap>,
 }
 
 impl MessageOneOf3 {
-    pub fn new(kind: Kind, payload: serde_json::Value) -> MessageOneOf3 {
-        MessageOneOf3 { kind, payload }
+    pub fn new(kind: Kind, payload: models::Gap) -> MessageOneOf3 {
+        MessageOneOf3 {
+            kind,
+            payload: Box::new(payload),
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Kind {
-    #[serde(rename = "heartbeat")]
-    Heartbeat,
+    #[serde(rename = "gap")]
+    Gap,
 }
 
 impl Default for Kind {
     fn default() -> Kind {
-        Self::Heartbeat
+        Self::Gap
     }
 }

@@ -1,4 +1,4 @@
-use super::fixture::{SEQ, delta, page, snapshot};
+use super::fixture::{SEQ, delta, page, reset, snapshot};
 use super::*;
 use crate::{
     auth::WriteAccess, config::Settings, database::Database, finance::Finance,
@@ -203,6 +203,30 @@ async fn market_stream_replay_reauthenticates_each_poll_and_lag_resets_the_reade
 }
 
 const SUBSCRIBE: &str = r#"{"type":"subscribe","source":"synthetic","product":"book","channel":"l2","instrument_id":"SYNTH.XNYS"}"#;
+
+#[tokio::test]
+async fn market_websocket_resets_at_a_v2_control_without_delivering_it() {
+    let fixture = StreamTestApp::new();
+    let mut headers = HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, fixture.bearer);
+    let preferences = Arc::new(MarketPreferences::default());
+    let mut session =
+        MarketStreamSession::open(fixture.state.write_access, &headers, preferences).unwrap();
+    assert_eq!(session.command(SUBSCRIBE), Ok(None));
+
+    let mut v2_reset = reset(1, 2);
+    v2_reset.event.schema_version = finance_client::models::SchemaVersion::Variant20;
+    v2_reset.event.asset_kind = finance_client::models::AssetKind::Perpetual;
+    let frames = session
+        .poll_with(async move |_, _, _| Ok(page(1, 1, None, vec![v2_reset])))
+        .await;
+    assert_eq!(frames.len(), 1);
+    assert_eq!(
+        frames[0].to_text().unwrap(),
+        r#"{"type":"reset","reason":"unsupported_version"}"#
+    );
+    assert!(!session.is_subscribed());
+}
 const FOCUS_SUBSCRIPTION: &str = r#"{"type":"subscribe","source":"synthetic","product":"book","channel":"l2","use_depth_focus":true}"#;
 
 #[tokio::test]

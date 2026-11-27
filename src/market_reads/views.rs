@@ -329,8 +329,8 @@ impl HistoryKind {
         match (self, event.message.as_ref()) {
             (Self::Bars, Message::MarketMessageOneOf(bar)) => Some(Some(&bar.payload.open_ts)),
             (Self::Trades, Message::MarketMessageOneOf1(_))
-            | (Self::Derivatives, Message::MessageOneOf5(_)) => Some(event.exchange_ts.as_deref()),
-            (Self::Bars | Self::Trades, Message::MessageOneOf(correction)) => {
+            | (Self::Derivatives, Message::MessageOneOf7(_)) => Some(event.exchange_ts.as_deref()),
+            (Self::Bars | Self::Trades, Message::MessageOneOf2(correction)) => {
                 match (self, correction.payload.replacement.as_ref()) {
                     (Self::Bars, MarketMessage::MarketMessageOneOf(bar)) => {
                         Some(Some(&bar.payload.open_ts))
@@ -497,7 +497,7 @@ async fn indicator_values(
         .filter_map(|record| {
             let bar = match record.event.message.as_ref() {
                 Message::MarketMessageOneOf(bar) => &bar.payload,
-                Message::MessageOneOf(correction) => {
+                Message::MessageOneOf2(correction) => {
                     match correction.payload.replacement.as_ref() {
                         MarketMessage::MarketMessageOneOf(bar) => &bar.payload,
                         _ => return None,

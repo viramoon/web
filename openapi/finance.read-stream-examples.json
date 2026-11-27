@@ -1,0 +1,322 @@
+{
+  "market_status_sse": [
+    {
+      "data": {
+        "schema_version": "1.0",
+        "status": {
+          "instruments": [
+            {
+              "age_seconds": 0,
+              "instrument": "SYNTH.XNYS",
+              "last_bar_at": "2025-10-09T08:53:20Z",
+              "stale": false
+            }
+          ],
+          "max_age_seconds": 10,
+          "source": "replay",
+          "state": "ready",
+          "updated_at": "2025-10-09T08:53:20Z"
+        }
+      },
+      "event": "market_status",
+      "id": "18446744073709551614"
+    },
+    {
+      "data": {
+        "schema_version": "1.0",
+        "status": {
+          "instruments": [],
+          "max_age_seconds": null,
+          "source": null,
+          "state": "missing",
+          "updated_at": null
+        }
+      },
+      "event": "market_status",
+      "id": "18446744073709551615"
+    }
+  ],
+  "market_ws": [
+    {
+      "asset_kind": "etf",
+      "channel": "trades",
+      "cursor": "fixture:arca:first",
+      "epoch": "41",
+      "exchange_ts": "1760000000123456789",
+      "first_available_ts": "1760001200123456789",
+      "instrument_id": "SPY.ARCA",
+      "kind": "trade",
+      "license": "fixture.synthetic",
+      "native_id": "t-001",
+      "payload": {
+        "price": "663.1200",
+        "quantity": "4",
+        "side": "buy"
+      },
+      "product": "us-etf-delayed",
+      "receive_ts": "1760001200123457789",
+      "revision": "0",
+      "schema_version": "1.0",
+      "seq": "9007199254740992",
+      "source": "fixture",
+      "venue": "ARCA"
+    },
+    {
+      "asset_kind": "etf",
+      "channel": "trades",
+      "cursor": "fixture:arca:second",
+      "epoch": "41",
+      "exchange_ts": "1760000000123456789",
+      "first_available_ts": "1760001200123456789",
+      "instrument_id": "SPY.ARCA",
+      "kind": "trade",
+      "license": "fixture.synthetic",
+      "native_id": "t-002",
+      "payload": {
+        "price": "663.13",
+        "quantity": "7",
+        "side": "unknown"
+      },
+      "product": "us-etf-delayed",
+      "receive_ts": "1760001200123457790",
+      "revision": "0",
+      "schema_version": "1.0",
+      "seq": "9007199254740993",
+      "source": "fixture",
+      "venue": "ARCA"
+    },
+    {
+      "asset_kind": "etf",
+      "channel": "trades",
+      "cursor": "fixture:arca:correction",
+      "epoch": "41",
+      "exchange_ts": "1760000000123456789",
+      "first_available_ts": "1760001300123456789",
+      "instrument_id": "SPY.ARCA",
+      "kind": "correction",
+      "license": "fixture.synthetic",
+      "native_id": "t-001-c1",
+      "payload": {
+        "replacement": {
+          "kind": "trade",
+          "payload": {
+            "price": "663.1100",
+            "quantity": "3",
+            "side": "buy"
+          }
+        },
+        "target_epoch": "41",
+        "target_seq": "9007199254740992"
+      },
+      "product": "us-etf-delayed",
+      "receive_ts": "1760001300123457789",
+      "revision": "1",
+      "schema_version": "1.0",
+      "seq": "9007199254740994",
+      "source": "fixture",
+      "venue": "ARCA"
+    },
+    {
+      "asset_kind": "etf",
+      "channel": "trades",
+      "cursor": "fixture:arca:gap",
+      "epoch": "41",
+      "exchange_ts": null,
+      "first_available_ts": "1760001400000000000",
+      "instrument_id": "SPY.ARCA",
+      "kind": "gap",
+      "license": "fixture.synthetic",
+      "payload": {
+        "from_ts": "1760000100000000000",
+        "reason": "upstream_sequence_gap",
+        "to_ts": "1760000200000000000"
+      },
+      "product": "us-etf-delayed",
+      "receive_ts": "1760001400000000000",
+      "revision": "0",
+      "schema_version": "1.0",
+      "seq": "9007199254740995",
+      "source": "fixture",
+      "venue": "ARCA"
+    },
+    {
+      "asset_kind": "etf",
+      "channel": "trades",
+      "cursor": "fixture:arca:reset",
+      "epoch": "42",
+      "exchange_ts": null,
+      "first_available_ts": "1760001401000000000",
+      "instrument_id": "SPY.ARCA",
+      "kind": "reset",
+      "license": "fixture.synthetic",
+      "payload": {
+        "reason": "upstream_reconnect"
+      },
+      "product": "us-etf-delayed",
+      "receive_ts": "1760001401000000000",
+      "revision": "0",
+      "schema_version": "1.0",
+      "seq": "0",
+      "source": "fixture",
+      "venue": "ARCA"
+    },
+    {
+      "asset_kind": "etf",
+      "channel": "trades",
+      "cursor": "fixture:arca:status",
+      "epoch": "42",
+      "exchange_ts": null,
+      "first_available_ts": "1760001402000000000",
+      "instrument_id": "SPY.ARCA",
+      "kind": "status",
+      "license": "fixture.synthetic",
+      "payload": {
+        "state": "connected"
+      },
+      "product": "us-etf-delayed",
+      "receive_ts": "1760001402000000000",
+      "revision": "0",
+      "schema_version": "1.0",
+      "seq": "1",
+      "source": "fixture",
+      "venue": "ARCA"
+    },
+    {
+      "asset_kind": "etf",
+      "channel": "trades",
+      "cursor": "fixture:arca:heartbeat",
+      "epoch": "42",
+      "exchange_ts": null,
+      "first_available_ts": "1760001403000000000",
+      "instrument_id": "SPY.ARCA",
+      "kind": "heartbeat",
+      "license": "fixture.synthetic",
+      "payload": {},
+      "product": "us-etf-delayed",
+      "receive_ts": "1760001403000000000",
+      "revision": "0",
+      "schema_version": "1.0",
+      "seq": "2",
+      "source": "fixture",
+      "venue": "ARCA"
+    },
+    {
+      "asset_kind": "etf",
+      "channel": "trades",
+      "cursor": "fixture:bats:first",
+      "epoch": "2",
+      "exchange_ts": "1760000000123456789",
+      "first_available_ts": "1760001200123456789",
+      "instrument_id": "SPY.BATS",
+      "kind": "trade",
+      "license": "fixture.synthetic",
+      "native_id": "t-001",
+      "payload": {
+        "price": "663.1200",
+        "quantity": "1",
+        "side": "sell"
+      },
+      "product": "us-etf-delayed",
+      "receive_ts": "1760001200123457789",
+      "revision": "0",
+      "schema_version": "1.0",
+      "seq": "7",
+      "source": "fixture",
+      "venue": "BATS"
+    },
+    {
+      "asset_kind": "etf",
+      "channel": "bars-1d",
+      "cursor": "fixture:research:bar",
+      "epoch": "1",
+      "exchange_ts": "1760040000000000000",
+      "first_available_ts": "1760040600000000000",
+      "instrument_id": "SPY-SPLIT-NORMALIZED.RESEARCH",
+      "kind": "bar_closed",
+      "license": "fixture.synthetic",
+      "payload": {
+        "close": "663.43",
+        "high": "664.0",
+        "low": "663.1",
+        "open": "663.1234567890123400",
+        "open_ts": "1760016600000000000",
+        "volume": "1234"
+      },
+      "product": "research-replay",
+      "receive_ts": "1760126400000000000",
+      "revision": "0",
+      "schema_version": "1.0",
+      "seq": "0",
+      "source": "fixture",
+      "venue": "RESEARCH"
+    },
+    {
+      "asset_kind": "perpetual",
+      "channel": "book",
+      "cursor": "fixture:perp:snapshot",
+      "epoch": "1",
+      "exchange_ts": "1760000000123456800",
+      "first_available_ts": "1760000000123456900",
+      "instrument_id": "BTC-USDT-PERP.BINANCE",
+      "kind": "snapshot",
+      "license": "fixture.synthetic",
+      "payload": {
+        "asks": [
+          {
+            "price": "101012.2",
+            "quantity": "0.008"
+          }
+        ],
+        "bids": [
+          {
+            "price": "101012.1",
+            "quantity": "0.040"
+          },
+          {
+            "price": "101012.0",
+            "quantity": "0.020"
+          }
+        ]
+      },
+      "product": "perp-replay",
+      "receive_ts": "1760000000123456900",
+      "revision": "0",
+      "schema_version": "1.0",
+      "seq": "18446744073709551614",
+      "source": "fixture",
+      "venue": "BINANCE"
+    },
+    {
+      "asset_kind": "perpetual",
+      "channel": "book",
+      "cursor": "fixture:perp:delta",
+      "epoch": "1",
+      "exchange_ts": "1760000000123456800",
+      "first_available_ts": "1760000000123456901",
+      "instrument_id": "BTC-USDT-PERP.BINANCE",
+      "kind": "delta",
+      "license": "fixture.synthetic",
+      "payload": {
+        "updates": [
+          {
+            "price": "101012.0",
+            "quantity": "0",
+            "side": "bid"
+          },
+          {
+            "price": "101012.2",
+            "quantity": "0.012",
+            "side": "ask"
+          }
+        ]
+      },
+      "product": "perp-replay",
+      "receive_ts": "1760000000123456901",
+      "revision": "0",
+      "schema_version": "1.0",
+      "seq": "18446744073709551615",
+      "source": "fixture",
+      "venue": "BINANCE"
+    }
+  ]
+}

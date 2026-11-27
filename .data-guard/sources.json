@@ -2,10 +2,10 @@
   "version": 1,
   "fixtures": {
     "src/market_reads/tests.rs": {
-      "sha256": "b620516f4f39f4cae1fa3b7e3f457909a8f21d4b34888288e1df63585eb2d792",
+      "sha256": "e61b27f0195291a8b62b75d83478d9589c8526a3c421dca94f259a10a11b4b4c",
       "generator": "src/market_reads/tests/synthetic.rs",
       "seed": "fixed",
-      "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。"
+      "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。 W6 用相同固定值构造混合版本 WAL，包含资金费率、持仓量和控制帧。"
     },
     "src/market_stream/replay/tests.rs": {
       "sha256": "9854b024eb2cdd8a4154cfa385836021945ef215a532fb1d0d7fb7dd054a074a",
@@ -30,6 +30,12 @@
       "generator": "tests/api/notifications_worker.rs",
       "seed": "fixed",
       "source": "Run cargo test --locked --test api notifications_worker::silence. The worker test harness builds fixture rows and routes, with generated opaque IDs, fixed synthetic subject IDs, controlled UTC intervals and an in-process SMTP substitute."
+    },
+    "openapi/finance.read-stream-examples.json": {
+      "sha256": "a215f16bca7d0e70610ff589177dc732c1094fd6c7a8a43e00c2f8951ab04fbb",
+      "generator": "scripts/gen-finance-client.sh",
+      "seed": "finance fc5e153e9727181f5748659c0610b2fbc2b49769 protocol/v1/examples.json + 1760000000",
+      "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE fc5e153e9727181f5748659c0610b2fbc2b49769。finance-api export-read-stream 从已提交的合成 F1 种子构造 WS 回放，并用固定时钟、虚构标的和大整数文本生成 SSE 样本。"
     }
   }
 }

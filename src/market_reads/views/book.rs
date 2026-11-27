@@ -182,11 +182,11 @@ impl FoldedBook {
                     }
                     observation = Some(record.into());
                 }
-                Message::MessageOneOf1(_) | Message::MessageOneOf2(_) => {
+                Message::MessageOneOf3(_) | Message::MessageOneOf4(_) => {
                     levels = None;
                     observation = Some(record.into());
                 }
-                Message::MessageOneOf(correction)
+                Message::MessageOneOf2(correction)
                     if matches!(
                         correction.payload.replacement.as_ref(),
                         MarketMessage::MarketMessageOneOf2(_)
@@ -196,7 +196,7 @@ impl FoldedBook {
                     levels = None;
                     observation = Some(record.into());
                 }
-                Message::MessageOneOf4(status)
+                Message::MessageOneOf6(status)
                     if status.payload.state == ConnectionState::Disconnected =>
                 {
                     levels = None;

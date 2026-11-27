@@ -60,13 +60,13 @@ struct QualityCoverage {
     source: String,
     product: String,
     license: String,
-    watermarks: Option<MarketWatermarks>,
+    watermarks: Option<QualityWatermarks>,
 }
 
 #[derive(Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub(super) struct MarketWatermarks {
-    source_latest: Option<SourceObservation>,
+pub(super) struct QualityWatermarks {
+    source_latest: Option<QualitySourceObservation>,
     local_durable: ExactCount,
     projected: ExactCount,
     remote_verified: Option<ExactCount>,
@@ -74,7 +74,7 @@ pub(super) struct MarketWatermarks {
 
 #[derive(Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-struct SourceObservation {
+struct QualitySourceObservation {
     channel: String,
     instrument_id: String,
     epoch: ExactCount,
@@ -172,7 +172,7 @@ pub(super) struct StreamFile {
     pub(super) source: String,
     pub(super) product: String,
     pub(super) license: String,
-    pub(super) watermarks: Option<MarketWatermarks>,
+    pub(super) watermarks: Option<QualityWatermarks>,
     pub(super) reports: Vec<ReportFile>,
 }
 

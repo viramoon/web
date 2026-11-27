@@ -26,6 +26,8 @@ pub enum Message {
     MessageOneOf3(Box<models::MessageOneOf3>),
     MessageOneOf4(Box<models::MessageOneOf4>),
     MessageOneOf5(Box<models::MessageOneOf5>),
+    MessageOneOf6(Box<models::MessageOneOf6>),
+    MessageOneOf7(Box<models::MessageOneOf7>),
 }
 
 impl Default for Message {

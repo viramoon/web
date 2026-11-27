@@ -16,11 +16,11 @@ pub struct MessageOneOf {
     #[serde(rename = "kind")]
     pub kind: Kind,
     #[serde(rename = "payload")]
-    pub payload: Box<models::Correction>,
+    pub payload: Box<models::FundingRate>,
 }
 
 impl MessageOneOf {
-    pub fn new(kind: Kind, payload: models::Correction) -> MessageOneOf {
+    pub fn new(kind: Kind, payload: models::FundingRate) -> MessageOneOf {
         MessageOneOf {
             kind,
             payload: Box::new(payload),
@@ -30,12 +30,12 @@ impl MessageOneOf {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Kind {
-    #[serde(rename = "correction")]
-    Correction,
+    #[serde(rename = "funding_rate")]
+    FundingRate,
 }
 
 impl Default for Kind {
     fn default() -> Kind {
-        Self::Correction
+        Self::FundingRate
     }
 }

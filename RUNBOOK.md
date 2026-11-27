@@ -71,7 +71,7 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 网页出现 502、503、504 时，先查 /api/v1/system/status 中的 finance.ok、latency_ms、circuit，再查 finance 的监听和 ready。熔断打开后等待对应 profile 的 circuit_open_ms，下一次访问会试探，成功后自动恢复。若请求为写操作，超时后先查作业状态，重交时沿用同一幂等键。
 
-finance 的接口变动须使用同一锁定提交重新生成客户端；脚本与输入说明见[生成客户端说明](src/finance_client/README.md)。
+finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W6 使用 `fc5e153`，web 升级无额外迁移、环境变量、端口、进程或数据目录要求。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约差异](docs/api.md#finance-契约版本)
 
 ## 管理员写权限
 
