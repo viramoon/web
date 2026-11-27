@@ -4,6 +4,8 @@ Rust 客户端在 [crates/finance-client](../../crates/finance-client/Cargo.toml
 
 在 web 仓库运行以下命令。需要 Bash、Git、curl、tar、unzip、patch、sha256sum、Java 21 JDK 和仓库锁定的 Rust/rustfmt。脚本默认将 OpenAPI Generator 7.27.0 缓存于 XDG_CACHE_HOME/openapi-generator（默认 ~/.cache/openapi-generator），每次执行都校验 SHA-256。离线环境可将 OPENAPI_GENERATOR_JAR 指向已取得的同版本 JAR。
 
+[Finance client generation 工作流](../../.github/workflows/finance-client.yml)从生成脚本读取版本、SHA-256 和 Maven 下载地址，并按版本和 SHA-256 缓存 runner 临时目录中的单个公开 JAR。命中时直接校验本地 JAR。未命中时，curl 最多重试 3 次，默认按指数退避，单次传输最长 30 秒，重试窗口为 90 秒。下载内容通过 SHA-256 校验后才移至缓存路径，作业成功后保存缓存。校验失败时作业停止，缓存损坏时可删除对应键后重跑。生成步骤通过 `OPENAPI_GENERATOR_JAR` 使用该文件，仍由脚本再次校验并运行 `--check`。
+
 ```sh
 # 直接从指定 finance 提交导出 HTTP 与读流快照，并更新来源记录和生成 crate。
 scripts/gen-finance-client.sh from-finance ../finance "$(git -C ../finance rev-parse HEAD)"

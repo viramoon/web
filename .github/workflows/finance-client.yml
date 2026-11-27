@@ -25,6 +25,49 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt
+      - name: Read the pinned OpenAPI Generator metadata
+        id: generator-pin
+        shell: bash
+        run: |
+          generator=scripts/gen-finance-client.sh
+          version=$(sed -n 's/^version=//p' "$generator")
+          sha256=$(sed -n 's/^checksum=//p' "$generator")
+          url=$(sed -nE 's|^[[:space:]]*"(https://[^"]+)" -o "\$download"$|\1|p' "$generator")
+          url=${url//\$version/$version}
+          if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! $sha256 =~ ^[0-9a-f]{64}$ ||
+                ! $url =~ ^https://[^[:space:]]+$ || $url == *'$'* ]]; then
+            echo "::error::Cannot read the OpenAPI Generator version, SHA-256 and HTTPS URL from $generator."
+            exit 1
+          fi
+          printf 'version=%s\nsha256=%s\nurl=%s\njar=%s/openapi-generator-cli-%s.jar\n' \
+            "$version" "$sha256" "$url" "$RUNNER_TEMP" "$version" >> "$GITHUB_OUTPUT"
+      - name: Cache the pinned OpenAPI Generator JAR
+        id: generator-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.generator-pin.outputs.jar }}
+          key: web-openapi-generator-${{ steps.generator-pin.outputs.version }}-${{ steps.generator-pin.outputs.sha256 }}
+      - name: Download or verify the pinned OpenAPI Generator JAR
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.generator-cache.outputs.cache-hit }}
+          GENERATOR_URL: ${{ steps.generator-pin.outputs.url }}
+          GENERATOR_SHA256: ${{ steps.generator-pin.outputs.sha256 }}
+          OPENAPI_GENERATOR_JAR: ${{ steps.generator-pin.outputs.jar }}
+        run: |
+          candidate="$OPENAPI_GENERATOR_JAR"
+          if [[ $CACHE_HIT != true ]]; then
+            candidate=$(mktemp "$OPENAPI_GENERATOR_JAR.XXXXXX")
+            trap 'rm -f -- "$candidate"' EXIT
+            curl --fail --location --silent --show-error --retry 3 --retry-all-errors \
+              --retry-max-time 90 --max-time 30 "$GENERATOR_URL" -o "$candidate"
+          fi
+          printf '%s  %s\n' "$GENERATOR_SHA256" "$candidate" | sha256sum --check
+          if [[ $CACHE_HIT != true ]]; then
+            mv -- "$candidate" "$OPENAPI_GENERATOR_JAR"
+          fi
       - name: Regenerate from the recorded finance contract
+        env:
+          OPENAPI_GENERATOR_JAR: ${{ steps.generator-pin.outputs.jar }}
         run: |
           sh scripts/ci-check.sh finance-client-generation scripts/gen-finance-client.sh --check
