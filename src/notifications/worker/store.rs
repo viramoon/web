@@ -16,6 +16,18 @@ use uuid::Uuid;
 // SMTP and completion, with no SQL transaction held over the network request.
 const SENDER_LOCK: i64 = 6_758_026_211_706_146_534;
 
+const SMTP_ROUTE: &str = "
+    SELECT version.smtp_snapshot_id AS active_snapshot,
+           CASE WHEN version.version IS NOT NULL THEN version.smtp_snapshot_id IS NOT NULL
+                ELSE NOT EXISTS (
+                    SELECT FROM app.integration_audit audit
+                    WHERE audit.integration_id = config.id AND audit.action = 'disabled'
+                ) END AS delivery_enabled
+    FROM (VALUES (1)) fallback(row)
+    LEFT JOIN app.integration_configs config ON config.connector = 'smtp'
+    LEFT JOIN app.integration_versions version
+      ON version.integration_id = config.id AND version.state = 'active'";
+
 const RETIRABLE_SUMMARIES: &str = "
     summary.status = 'pending' AND summary.kind = 'alert' AND EXISTS (
         SELECT FROM app.notification_outbox member
@@ -89,25 +101,41 @@ pub(super) enum SmtpTransport {
     Unavailable(&'static str),
 }
 
+#[derive(PartialEq, sqlx::FromRow)]
+struct SmtpRoute {
+    active_snapshot: Option<Uuid>,
+    delivery_enabled: bool,
+}
+
+impl SmtpRoute {
+    async fn read(db: &mut PgConnection) -> Result<Self, sqlx::Error> {
+        sqlx::query_as(SMTP_ROUTE).fetch_one(db).await
+    }
+}
+
 pub(super) async fn smtp_transport(
     db: &mut PgConnection,
     channel: &impl NotificationChannel,
 ) -> Result<SmtpTransport, sqlx::Error> {
-    let (snapshot_id, delivery_enabled): (Option<Uuid>, bool) = sqlx::query_as(
-        "SELECT version.smtp_snapshot_id,
-                CASE WHEN version.version IS NOT NULL THEN version.smtp_snapshot_id IS NOT NULL
-                     ELSE NOT EXISTS (
-                         SELECT FROM app.integration_audit audit
-                         WHERE audit.integration_id = config.id AND audit.action = 'disabled'
-                     ) END
-         FROM (VALUES (1)) fallback(row)
-         LEFT JOIN app.integration_configs config ON config.connector = 'smtp'
-         LEFT JOIN app.integration_versions version
-           ON version.integration_id = config.id AND version.state = 'active'",
+    let route = SmtpRoute::read(db).await?;
+    Ok(resolve_smtp_transport(route.active_snapshot, route.delivery_enabled, channel).await)
+}
+
+// The schema permits one SMTP integration, one pending test and one outbox row per test.
+pub(super) async fn pending_candidate_snapshot(
+    db: &Database,
+) -> Result<Option<(Uuid, Uuid)>, sqlx::Error> {
+    let mut connection = db.connection().await?;
+    sqlx::query_as(
+        "SELECT job.id, job.smtp_snapshot_id
+         FROM app.integration_configs config
+         JOIN app.integration_tests test ON test.integration_id = config.id
+         JOIN app.notification_outbox job ON job.integration_test_id = test.id
+         WHERE config.connector = 'smtp' AND test.status = 'pending'
+           AND job.status IN ('pending', 'sending') AND job.smtp_snapshot_id IS NOT NULL",
     )
-    .fetch_one(db)
-    .await?;
-    Ok(resolve_smtp_transport(snapshot_id, delivery_enabled, channel).await)
+    .fetch_optional(&mut *connection)
+    .await
 }
 
 async fn resolve_smtp_transport(
@@ -136,6 +164,7 @@ pub(super) async fn claim(
     db: &Database,
     policy: &NotificationPolicy,
     channel: &impl NotificationChannel,
+    paused_candidate: Option<Uuid>,
     clock: impl Fn() -> DateTime<Utc>,
 ) -> Result<Option<(PoolConnection<Postgres>, Job)>, sqlx::Error> {
     let has_work = {
@@ -165,12 +194,11 @@ pub(super) async fn claim(
     }
     let mut tx = lock.begin().await?;
     lock_rule_updates(&mut tx).await?;
-    // Reserve and send using the same resolved transport if the active
-    // version changes or the snapshot file is removed during delivery.
+    let route = SmtpRoute::read(&mut tx).await?;
     let SmtpTransport::Available {
         delivery_enabled,
         active_snapshot,
-    } = smtp_transport(&mut tx, channel).await?
+    } = resolve_smtp_transport(route.active_snapshot, route.delivery_enabled, channel).await
     else {
         tx.rollback().await?;
         unlock_sender(&mut lock).await?;
@@ -192,9 +220,7 @@ pub(super) async fn claim(
         } else {
             ABANDONED_AFTER
         };
-        if (active.integration_test_id.is_some() && !snapshot_storage_available)
-            || active.send_started_at + abandonment > now
-        {
+        if active.send_started_at + abandonment > now {
             tx.rollback().await?;
             unlock_sender(&mut lock).await?;
             return Ok(None);
@@ -221,23 +247,40 @@ pub(super) async fn claim(
         .execute(&mut *tx)
         .await?;
     }
-    replace_suppressed_summaries(&mut tx, now).await?;
-    apply_policy(&mut tx, policy, now, snapshot_storage_available).await?;
-    let Some(pending) = sqlx::query_as::<_, Pending>(
-        "SELECT job.id, job.kind, event.condition, job.priority, job.attempts,
+    if delivery_enabled {
+        replace_suppressed_summaries(&mut tx, now).await?;
+        apply_delivery_policy(&mut tx, policy, now).await?;
+    }
+    apply_hourly_limits(
+        &mut tx,
+        policy,
+        now,
+        delivery_enabled,
+        snapshot_storage_available,
+        paused_candidate,
+    )
+    .await?;
+    // The statement that locks the job also reads the current SMTP route. A
+    // disable or rotation committed during preflight invalidates the prepared transport.
+    let Some(pending) = sqlx::query_as::<_, Pending>(&format!(
+        "WITH smtp AS ({SMTP_ROUTE})
+         SELECT job.id, job.kind, event.condition, job.priority, job.attempts,
                 job.digest_count, job.integration_test_id,
                 (job.defer_reason IS NOT NULL OR
                     app.notification_silence_overlaps(job.rule_id, job.event_id, job.created_at, $1)
                 ) AS was_deferred,
                 candidate.settings->>'profile' AS candidate_profile, job.smtp_snapshot_id AS snapshot_id
          FROM app.notification_outbox job
+         CROSS JOIN smtp
          LEFT JOIN app.alert_events event ON event.id = job.event_id
          LEFT JOIN app.integration_tests test ON test.id = job.integration_test_id
          LEFT JOIN app.integration_versions candidate
            ON candidate.integration_id = test.integration_id AND candidate.version = test.config_version
          WHERE job.status = 'pending' AND job.available_at <= $1
            AND NOT app.notification_silence_overlaps(job.rule_id, job.event_id, $1, $1)
-           AND ((job.integration_test_id IS NULL AND $2) OR (test.status = 'pending' AND $3))
+           AND smtp.active_snapshot IS NOT DISTINCT FROM $2 AND smtp.delivery_enabled = $3
+           AND ((job.integration_test_id IS NULL AND smtp.delivery_enabled)
+                OR (test.status = 'pending' AND $4 AND job.id IS DISTINCT FROM $5))
            AND (job.kind NOT IN ('reminder', 'recovery') OR NOT EXISTS (
                SELECT FROM app.notification_outbox prior
                JOIN app.alert_events previous ON previous.id = prior.event_id
@@ -253,15 +296,23 @@ pub(super) async fn claim(
                  ))
            ))
          ORDER BY job.priority DESC, job.available_at, job.created_at, job.id
-         LIMIT 1 FOR UPDATE OF job SKIP LOCKED",
-    )
+         LIMIT 1 FOR UPDATE OF job SKIP LOCKED"
+    ))
     .bind(now)
+    .bind(route.active_snapshot)
     .bind(delivery_enabled)
     .bind(snapshot_storage_available)
+    .bind(paused_candidate)
     .fetch_optional(&mut *tx)
     .await?
     else {
-        tx.commit().await?;
+        // An empty reservation may still have provisional recovery or policy
+        // updates. Only publish those if the route they were computed for still applies.
+        if SmtpRoute::read(&mut tx).await? == route {
+            tx.commit().await?;
+        } else {
+            tx.rollback().await?;
+        }
         unlock_sender(&mut lock).await?;
         return Ok(None);
     };
@@ -381,11 +432,10 @@ async fn summarize(
         .await
 }
 
-async fn apply_policy(
+async fn apply_delivery_policy(
     db: &mut PgConnection,
     policy: &NotificationPolicy,
     now: DateTime<Utc>,
-    snapshot_storage_available: bool,
 ) -> Result<(), sqlx::Error> {
     if let Some(until) = quiet_until(db, policy, now).await? {
         sqlx::query(
@@ -434,6 +484,17 @@ async fn apply_policy(
     .execute(&mut *db)
     .await?;
 
+    Ok(())
+}
+
+async fn apply_hourly_limits(
+    db: &mut PgConnection,
+    policy: &NotificationPolicy,
+    now: DateTime<Utc>,
+    delivery_enabled: bool,
+    snapshot_storage_available: bool,
+    paused_candidate: Option<Uuid>,
+) -> Result<(), sqlx::Error> {
     for (priority, limit) in [
         ("normal", policy.normal_hourly_limit),
         ("urgent", policy.urgent_hourly_limit),
@@ -451,7 +512,8 @@ async fn apply_policy(
                  UPDATE app.notification_outbox job
                  SET available_at = deadline.until, updated_at = $1, defer_reason = 'rate_limit'
                  FROM deadline WHERE job.status = 'pending' AND job.available_at <= $1 AND job.priority = $2
-                   AND (job.integration_test_id IS NULL OR $4)
+                   AND CASE WHEN job.integration_test_id IS NULL THEN $4
+                            ELSE $5 AND job.id IS DISTINCT FROM $6 END
                  RETURNING job.id, job.available_at
              )
              INSERT INTO app.notification_deferrals (outbox_id, reason, deferred_at, available_at)
@@ -460,7 +522,9 @@ async fn apply_policy(
         .bind(now)
         .bind(priority)
         .bind(limit - 1)
+        .bind(delivery_enabled)
         .bind(snapshot_storage_available)
+        .bind(paused_candidate)
         .execute(&mut *db)
         .await?;
     }

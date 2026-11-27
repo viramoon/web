@@ -325,3 +325,101 @@ async fn postgres_legacy_smtp_accepted_test_and_historical_version_require_recap
     db.close().await;
     pg.stop();
 }
+
+#[tokio::test]
+async fn smtp_disable_committed_before_reservation_preserves_the_ordinary_job() {
+    struct NoDelivery;
+    impl NotificationChannel for NoDelivery {
+        fn validate(&self) -> Result<(), ChannelConfigError> {
+            Ok(())
+        }
+        async fn test(&self, _: Uuid) -> DeliveryOutcome {
+            panic!("reserved a disabled primary transport");
+        }
+        async fn send(&self, _: Uuid, _: MailKind) -> DeliveryOutcome {
+            panic!("reserved a disabled primary transport");
+        }
+        async fn test_snapshot(&self, _: Uuid, _: Uuid) -> DeliveryOutcome {
+            panic!("reserved a disabled snapshot");
+        }
+    }
+
+    let pg = postgres::Cluster::create();
+    let db = Database::new(&pg.url(), Duration::from_secs(2), Duration::from_secs(2)).unwrap();
+    db.migrate().await.unwrap();
+    let smtp = create(&db, "smtp", json!({"profile":"primary"}))
+        .await
+        .unwrap();
+    let id = smtp.id.parse::<Uuid>().unwrap();
+    let mut observer = db.connection().await.unwrap();
+    sqlx::query(
+        "UPDATE app.integration_versions SET state = 'active', smtp_snapshot_id = $2
+         WHERE integration_id = $1",
+    )
+    .bind(id)
+    .bind(Uuid::new_v4())
+    .execute(&mut *observer)
+    .await
+    .unwrap();
+    let key = Uuid::new_v4();
+    let before = enqueue_test(&db, key).await.unwrap();
+
+    // Hold the quota query before the worker can select an outbox row. Wait
+    // for the actual PostgreSQL lock conflict before committing the admin change.
+    let mut blocker = db.write_connection().await.unwrap();
+    let mut gate = blocker.begin().await.unwrap();
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *gate)
+        .await
+        .unwrap();
+    sqlx::query("LOCK TABLE app.notification_attempts IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let waiting = async {
+        loop {
+            let blocked: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT FROM pg_stat_activity
+                 WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid)))",
+            )
+            .bind(pid)
+            .fetch_one(&mut *observer)
+            .await
+            .unwrap();
+            if blocked {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    let policy = NotificationPolicy::default();
+    let worker = dispatch_one(&db, &policy, &NoDelivery, Utc::now);
+    tokio::pin!(worker);
+    tokio::select! {
+        _ = waiting => {},
+        result = &mut worker => panic!("worker stopped before the reservation barrier: {result:?}"),
+    }
+    let disabled = change(&db, id, smtp.revision, Change::Disable)
+        .await
+        .unwrap();
+    assert!(disabled.active.is_none());
+    gate.commit().await.unwrap();
+    assert!(!worker.await.unwrap());
+    assert!(
+        !dispatch_one(&db, &policy, &NoDelivery, Utc::now)
+            .await
+            .unwrap()
+    );
+    let after = crate::notifications::store::get_test(&db, key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(after).unwrap()
+    );
+    assert_eq!(
+        crate::notifications::worker::health(&db).await.state,
+        crate::notifications::worker::NotificationState::Idle
+    );
+}

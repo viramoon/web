@@ -1,4 +1,6 @@
 //! Runs the real notifier with synthetic settings and an isolated outbox.
+mod queue;
+
 use super::{database::Server, postgres::Cluster};
 use rustix::process::{Pid, Signal, kill_process};
 use serde_json::Value;
@@ -28,7 +30,10 @@ const DISABLED: &str = "notification delivery is disabled";
 
 fn notifier() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_web-notifier"));
-    command.env_clear().env("RUST_LOG", "trace");
+    command
+        .env_clear()
+        .env("RUST_LOG", "trace")
+        .env("TOKIO_WORKER_THREADS", "2");
     command
 }
 

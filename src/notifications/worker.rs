@@ -8,6 +8,7 @@ use serde::Serialize;
 use std::time::Duration;
 use tokio::{sync::watch, time};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use super::{
     channel::{DeliveryOutcome, MailKind, NotificationChannel, PreparedSnapshot},
@@ -195,9 +196,19 @@ pub async fn run(
     if !valid_zone {
         return Err("WEB_NOTIFIER_QUIET_TIME_ZONE must name an IANA time zone".into());
     }
+    let paused_candidate = paused_candidate_at_startup(db, channel)
+        .await
+        .map_err(|_| "notifier could not read the pending SMTP candidate")?;
+    if paused_candidate.is_some() {
+        tracing::warn!(
+            stage = "smtp_configuration",
+            reason = "bound candidate SMTP snapshot is unavailable",
+            "SMTP candidate test paused"
+        );
+    }
     let mut database_failed = false;
     while !*shutdown.borrow() {
-        let result = dispatch_one(db, policy, channel, Utc::now).await;
+        let result = dispatch(db, policy, channel, paused_candidate, Utc::now).await;
         if result.is_err() != database_failed {
             database_failed = result.is_err();
             if database_failed {
@@ -217,6 +228,25 @@ pub async fn run(
     Ok(())
 }
 
+async fn paused_candidate_at_startup(
+    db: &Database,
+    channel: &impl NotificationChannel,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    if !channel.snapshot_storage_available() {
+        return Ok(None); // Reservations already exclude all candidates without storage.
+    }
+    time::timeout(DB_DEADLINE, async {
+        if let Some((job_id, snapshot)) = store::pending_candidate_snapshot(db).await?
+            && channel.prepare_snapshot(snapshot).await.is_none()
+        {
+            return Ok(Some(job_id));
+        }
+        Ok(None)
+    })
+    .await
+    .map_err(|_| sqlx::Error::PoolTimedOut)?
+}
+
 /// Processes at most one message. The clock is sampled at reservation and at
 /// completion, so tests can exercise policy boundaries without wall-clock waits.
 pub async fn dispatch_one(
@@ -225,10 +255,23 @@ pub async fn dispatch_one(
     channel: &impl NotificationChannel,
     clock: impl Fn() -> DateTime<Utc>,
 ) -> Result<bool, sqlx::Error> {
-    let Some((mut lock, mut job)) =
-        time::timeout(DB_DEADLINE, store::claim(db, policy, channel, &clock))
-            .await
-            .map_err(|_| sqlx::Error::PoolTimedOut)??
+    let paused_candidate = paused_candidate_at_startup(db, channel).await?;
+    dispatch(db, policy, channel, paused_candidate, clock).await
+}
+
+async fn dispatch(
+    db: &Database,
+    policy: &NotificationPolicy,
+    channel: &impl NotificationChannel,
+    paused_candidate: Option<Uuid>,
+    clock: impl Fn() -> DateTime<Utc>,
+) -> Result<bool, sqlx::Error> {
+    let Some((mut lock, mut job)) = time::timeout(
+        DB_DEADLINE,
+        store::claim(db, policy, channel, paused_candidate, &clock),
+    )
+    .await
+    .map_err(|_| sqlx::Error::PoolTimedOut)??
     else {
         return Ok(false);
     };
