@@ -75,11 +75,13 @@ GET /api/v1/backtests/datasets 返回标的日历、来源和首尾日期。SmaC
 
 | 方法与路径 | 请求及响应 |
 | --- | --- |
-| POST /api/v1/admin/session | 发送现有管理 Bearer 和部署配置的 HTTPS Origin。201 返回 `csrf_token`、`expires_in`（秒），并设置 `__Host-web_admin_session` Cookie |
+| POST /api/v1/admin/session | 发送现有管理 Bearer 与允许的 Origin。201 返回 `csrf_token`、`expires_in`（秒），并设置 `__Host-web_admin_session` Cookie |
 | DELETE /api/v1/admin/session | 发送会话 Cookie、Origin 与 `X-CSRF-Token`。204 撤销服务端会话并清除 Cookie |
 | GET /api/v1/me/capabilities | 200 返回 `subject`（`anonymous` 或 `admin`）及可见的 `products`。有效会话额外返回 `csrf_token`，便于页面重载恢复 |
 
 Cookie 使用 `HttpOnly; Secure; SameSite=Strict; Path=/`，作用域为当前主机。所有 Cookie 管理写入都需 Origin 精确匹配，并发送会话的 CSRF token；新集成写接口收到显式 Bearer 和 Origin 时也校验 Origin。脚本可仅发送 Bearer。权限失败为 401 或 403，管理员登录及写入共享限流。会话、能力及集成接口返回 `Cache-Control: no-store`。
+
+若设置了 `WEB_PUBLIC_ORIGIN`，会话登录和需要 Origin 的请求按该 HTTPS 值精确匹配。省略配置时，用于登录和 Cookie 会话的 Origin 仅允许 `http://127.0.0.1:<port>` 或 `http://localhost:<port>`，主机与显式端口须和唯一的 `Host` 头完全一致。代理转发头不参与判定。受保护的 REST 与 SSE 读取若省略 Origin，须有合法的回环 Host 和唯一的 `Sec-Fetch-Site: same-origin`。若请求携带 `Sec-Fetch-Site`，其值也须是 `same-origin`。WebSocket 握手、登录与写入均要求明确的 Origin。Origin 校验失败返回 403 `origin_rejected`，能力查询按匿名处理。
 
 匿名可见 `system`、`backtests`、`market_status`。管理员额外可见 `backtest_submission`、`integrations`、`restricted_market_data` 和 `notifications`。回测按原键查询、集成读取、通知读取和 W2a 行情网关使用 W1 管理员身份。
 

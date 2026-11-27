@@ -36,7 +36,7 @@ impl Connections {
 }
 
 #[utoipa::path(get, path = "/api/v1/stream/market", operation_id = "marketStream",
-    description = "RFC 6455 upgrade for authorized F10a WAL replay. See MarketStreamCommand and MarketStreamControl.",
+    description = "RFC 6455 upgrade for authorized F10a WAL replay. A session cookie requires the configured HTTPS origin or, when unset, an HTTP loopback Origin matching Host. See MarketStreamCommand and MarketStreamControl.",
     security(("adminSession" = []), ("adminBearer" = [])),
     responses((status = 101, description = "Market WebSocket opened"),
         (status = 400, body = ErrorBody), (status = 401, body = ErrorBody),

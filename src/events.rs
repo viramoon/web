@@ -3,7 +3,7 @@ mod sources;
 
 use crate::{
     AppState, ErrorBody, StreamShutdown, api_error,
-    auth::{Product, WriteAccess},
+    auth::{Product, WriteAccess, stream_auth_headers},
     ops::BackupUpdate,
 };
 use axum::{
@@ -399,23 +399,6 @@ impl Connection {
     }
 }
 
-fn auth_headers(headers: &HeaderMap) -> HeaderMap {
-    let mut retained = HeaderMap::new();
-    for name in [
-        header::AUTHORIZATION,
-        header::COOKIE,
-        header::ORIGIN,
-        header::HeaderName::from_static("sec-fetch-site"),
-    ] {
-        for value in headers.get_all(&name) {
-            let mut value = value.clone();
-            value.set_sensitive(true);
-            retained.append(name.clone(), value);
-        }
-    }
-    retained
-}
-
 pub(crate) fn routes() -> Router<AppState> {
     routes_with_hub(Arc::new(Hub::new()))
 }
@@ -444,6 +427,7 @@ fn routes_with_hub(hub: Arc<Hub>) -> Router<AppState> {
 pub(crate) struct EventsApi;
 
 #[utoipa::path(get, path = "/api/v1/events", operation_id = "readEvents",
+    description = "Without a configured HTTPS origin, the session cookie requires a matching HTTP loopback Origin, or a loopback Host and Sec-Fetch-Site: same-origin when Origin is omitted.",
     security(("adminBearer" = []), ("adminSession" = [])),
     params(("Last-Event-ID" = Option<String>, Header,
         description = "Opaque text ID from the last successfully handled event")),
@@ -495,7 +479,7 @@ async fn events(
         permissions_sent: false,
         last,
         access: state.write_access.clone(),
-        auth_headers: auth_headers(&headers),
+        auth_headers: stream_auth_headers(&headers),
         auth_tick,
         heartbeat_due,
         shutdown: shutdown.clone(),

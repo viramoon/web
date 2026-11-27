@@ -5123,7 +5123,7 @@
     "operationId": "delete_session",
     "parameters": [
      {
-      "description": "Configured HTTPS origin",
+      "description": "Configured HTTPS origin, or http://127.0.0.1:<port> or http://localhost:<port> matching Host when unset",
       "in": "header",
       "name": "Origin",
       "required": true,
@@ -5197,7 +5197,7 @@
     "operationId": "create_session",
     "parameters": [
      {
-      "description": "Configured HTTPS origin",
+      "description": "Configured HTTPS origin, or http://127.0.0.1:<port> or http://localhost:<port> matching Host when unset",
       "in": "header",
       "name": "Origin",
       "required": true,
@@ -5480,7 +5480,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -5623,7 +5623,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -5863,7 +5863,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -6098,7 +6098,7 @@
       }
      },
      {
-      "description": "Configured HTTPS origin with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -6604,6 +6604,7 @@
   },
   "/api/v1/events": {
    "get": {
+    "description": "Without a configured HTTPS origin, the session cookie requires a matching HTTP loopback Origin, or a loopback Host and Sec-Fetch-Site: same-origin when Origin is omitted.",
     "operationId": "readEvents",
     "parameters": [
      {
@@ -7157,7 +7158,7 @@
     "operationId": "create",
     "parameters": [
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -7471,7 +7472,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -7846,7 +7847,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -8023,7 +8024,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -8398,7 +8399,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -10661,7 +10662,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -11104,7 +11105,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -11291,7 +11292,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -11531,7 +11532,7 @@
       }
      },
      {
-      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "description": "Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin. With a bearer, if sent, must match the configured HTTPS origin",
       "in": "header",
       "name": "Origin",
       "required": false,
@@ -12305,7 +12306,7 @@
   },
   "/api/v1/stream/market": {
    "get": {
-    "description": "RFC 6455 upgrade for authorized F10a WAL replay. See MarketStreamCommand and MarketStreamControl.",
+    "description": "RFC 6455 upgrade for authorized F10a WAL replay. A session cookie requires the configured HTTPS origin or, when unset, an HTTP loopback Origin matching Host. See MarketStreamCommand and MarketStreamControl.",
     "operationId": "marketStream",
     "responses": {
      "101": {

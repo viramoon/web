@@ -22,19 +22,34 @@ fn test_app() -> (
     tempfile::NamedTempFile,
     Arc<MarketPreferences>,
 ) {
+    test_app_with_origin(Some(ORIGIN))
+}
+
+fn test_app_with_origin(
+    public_origin: Option<&str>,
+) -> (
+    Router,
+    HeaderValue,
+    tempfile::NamedTempFile,
+    Arc<MarketPreferences>,
+) {
     let mut token_file = tempfile::NamedTempFile::new_in("/tmp").unwrap();
     let token = Uuid::new_v4();
     writeln!(token_file, "WEB_ADMIN_TOKEN={token}").unwrap();
     let timeout = Duration::from_secs(1);
     let mut config = Settings::load(Path::new("config"), |_| None).unwrap();
     config.server.max_body_bytes = MAX_BODY_BYTES;
+    config.database.url = format!(
+        "postgresql://localhost/market_gateway_test?host={}",
+        token_file.path().display()
+    );
     let config = Arc::new(config);
     let state = AppState {
         db: Database::new(&config.database.url, timeout, timeout).unwrap(),
         finance: Finance::new(&config.finance).unwrap(),
         write_access: WriteAccess::load(token_file.path(), 10, timeout)
             .unwrap()
-            .with_sessions(Some(ORIGIN), Duration::from_secs(120))
+            .with_sessions(public_origin, Duration::from_secs(120))
             .unwrap(),
         config,
         credential_store: None,
@@ -294,4 +309,132 @@ async fn market_gateway_documents_and_returns_413_for_oversize_focus_and_watchli
             "#/components/schemas/ErrorBody"
         );
     }
+}
+
+#[tokio::test]
+async fn loopback_cookie_rest_requires_same_origin_and_csrf() {
+    const ADMIN_SESSION: &str = "/api/v1/admin/session";
+    const CATALOG: &str = "/api/v1/integrations/catalog";
+    const CAPABILITIES: &str = "/api/v1/me/capabilities";
+    const INTEGRATIONS: &str = "/api/v1/integrations";
+    const CSRF_HEADER: &str = "x-csrf-token";
+    let (app, admin, _fixture, _) = test_app_with_origin(None);
+    let host = "localhost:8090";
+    let origin = "http://localhost:8090";
+    for (host, rejected_origin) in [
+        (None, origin),
+        (Some(host), "https://localhost:8090"),
+        (Some(host), "http://localhost:8091"),
+        (Some(host), "http://user@localhost:8090"),
+        (Some("localhost.evil:8090"), "http://localhost.evil:8090"),
+    ] {
+        let mut request = Request::post(ADMIN_SESSION)
+            .header(header::AUTHORIZATION, &admin)
+            .header(header::ORIGIN, rejected_origin)
+            .header("x-forwarded-host", "localhost:8090");
+        if let Some(host) = host {
+            request = request.header(header::HOST, host);
+        }
+        let response = send(&app, request, Body::empty()).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response_json(response).await["error"]["code"],
+            "origin_rejected"
+        );
+    }
+
+    let session = send(
+        &app,
+        Request::post(ADMIN_SESSION)
+            .header(header::AUTHORIZATION, &admin)
+            .header(header::HOST, host)
+            .header(header::ORIGIN, origin),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(session.status(), StatusCode::CREATED);
+    let set_cookie = session.headers()[header::SET_COOKIE].to_str().unwrap();
+    for attribute in ["Secure", "HttpOnly", "SameSite=Strict", "Path=/"] {
+        assert!(set_cookie.split("; ").any(|part| part == attribute));
+    }
+    let cookie = set_cookie.split(';').next().unwrap().to_owned();
+    let session = response_json(session).await;
+    let csrf = session["csrf_token"].as_str().unwrap();
+
+    for path in [CATALOG, "/api/v1/market/subscriptions", CAPABILITIES] {
+        let response = send(
+            &app,
+            Request::get(path)
+                .header(header::COOKIE, &cookie)
+                .header(header::HOST, host)
+                .header("sec-fetch-site", "same-origin"),
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        if path == CAPABILITIES {
+            assert_eq!(response_json(response).await["csrf_token"], csrf);
+        }
+    }
+    for path in [CATALOG, "/api/v1/market/subscriptions"] {
+        let response = send(
+            &app,
+            Request::get(path)
+                .header(header::COOKIE, &cookie)
+                .header(header::HOST, host)
+                .header(header::ORIGIN, "http://127.0.0.1:8090"),
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(
+            response_json(response).await["error"]["code"],
+            "origin_rejected"
+        );
+    }
+
+    for (request_origin, token, reason) in [
+        (None, Some(csrf), "origin_rejected"),
+        (Some("http://localhost:8091"), Some(csrf), "origin_rejected"),
+        (Some(origin), None, "csrf_rejected"),
+        (Some(origin), Some("wrong"), "csrf_rejected"),
+    ] {
+        let mut request = Request::post(INTEGRATIONS)
+            .header(header::HOST, host)
+            .header(header::COOKIE, &cookie)
+            .header("sec-fetch-site", "same-origin")
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(origin) = request_origin {
+            request = request.header(header::ORIGIN, origin);
+        }
+        if let Some(token) = token {
+            request = request.header(CSRF_HEADER, token);
+        }
+        let response = send(&app, request, "{").await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response_json(response).await["error"]["code"], reason);
+    }
+    let response = send(
+        &app,
+        Request::post(INTEGRATIONS)
+            .header(header::HOST, host)
+            .header(header::ORIGIN, origin)
+            .header(header::COOKIE, &cookie)
+            .header(CSRF_HEADER, csrf)
+            .header(header::CONTENT_TYPE, "application/json"),
+        "{",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = send(
+        &app,
+        Request::delete(ADMIN_SESSION)
+            .header(header::HOST, host)
+            .header(header::ORIGIN, origin)
+            .header(header::COOKIE, &cookie)
+            .header(CSRF_HEADER, csrf),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
