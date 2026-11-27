@@ -638,19 +638,20 @@ async fn backtest_proxy_reuses_keys_recovers_timeout_and_keeps_legacy_deep_link(
             post(submit_stub).get({
                 let legacy = legacy.clone();
                 let configured = configured.clone();
-                move |uri: Uri| {
+                move |Query(params): Query<HashMap<String, String>>| {
                     let (legacy, configured, private_tail) =
                         (legacy.clone(), configured.clone(), private_tail.clone());
                     async move {
-                        let cursor = uri.query().and_then(|query| {
-                            url::form_urlencoded::parse(query.as_bytes())
-                                .find(|(key, _)| key == "cursor")
-                                .map(|(_, value)| value.parse::<i64>().unwrap())
-                        });
-                        let page = match cursor {
-                            None => json!({"items":[legacy,configured],"next_cursor":11}),
-                            Some(11) => json!({"items":[private_tail],"next_cursor":null}),
-                            _ => panic!("unexpected list cursor: {cursor:?}"),
+                        let cursor = params
+                            .get("cursor")
+                            .map(|value| value.parse::<i64>().unwrap());
+                        let visibility = params.get("visibility").map(String::as_str);
+                        let page = match (visibility, cursor) {
+                            (Some("legacy"), None) => json!({"items":[legacy],"next_cursor":null}),
+                            (Some("legacy"), Some(11)) => json!({"items":[],"next_cursor":null}),
+                            (None, None) => json!({"items":[legacy,configured],"next_cursor":11}),
+                            (None, Some(11)) => json!({"items":[private_tail],"next_cursor":null}),
+                            _ => panic!("unexpected list query: {params:?}"),
                         };
                         Json(page)
                     }
@@ -773,6 +774,69 @@ async fn backtest_proxy_reuses_keys_recovers_timeout_and_keeps_legacy_deep_link(
 }
 
 #[tokio::test]
+async fn f14_gateway_selects_visibility_and_reads_one_page_per_request() {
+    // Public IDs 7 and 309 enclose 301 consecutive private IDs.
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let stub = Router::new().route(JOBS, get({
+        let requests = Arc::clone(&requests);
+        move |headers: HeaderMap, Query(params): Query<HashMap<String, String>>| {
+            let requests = Arc::clone(&requests);
+            async move {
+                assert_finance_headers(&headers);
+                assert_eq!(params["limit"], "1");
+                let cursor = params.get("cursor").map(|value| value.parse::<i64>().unwrap()).unwrap_or(0);
+                let public = match params.get("visibility").map(String::as_str) {
+                    Some("legacy") => true,
+                    None => false,
+                    value => panic!("unexpected visibility: {value:?}"),
+                };
+                requests.lock().unwrap().push((cursor, public));
+                let mut ids = (7..=309).filter(|id| *id > cursor && (!public || matches!(id, 7 | 309)));
+                let items: Vec<_> = ids.next().map(|id| {
+                    let request = if matches!(id, 7 | 309) {
+                        json!({"strategy":"DemoStrategy","instrument":"TEST","params":{},"start":START,"end":END})
+                    } else {
+                        let mut request = submission(selection());
+                        request["content_sha256"] = registered()["content_sha256"].clone();
+                        request
+                    };
+                    job(id, request)
+                }).into_iter().collect();
+                let next = ids.next().map(|_| items[0]["id"].as_i64().unwrap());
+                Json(json!({"items":items,"next_cursor":next}))
+            }
+        }
+    }));
+    let web = Gateway::new(stub).await;
+    let first_path = format!("{JOBS}?limit=1");
+    let first = web
+        .json(Request::get(&first_path), Value::Null, StatusCode::OK)
+        .await;
+    assert_eq!(first["items"][0]["id"], 7);
+    assert_eq!(first["next_cursor"].as_i64(), Some(7));
+    let next_path = format!("{first_path}&cursor={}", first["next_cursor"]);
+    let next = web
+        .json(Request::get(&next_path), Value::Null, StatusCode::OK)
+        .await;
+    assert_eq!(next["items"][0]["id"], 309);
+    assert_eq!(next["items"].as_array().unwrap().len(), 1);
+    assert!(next["next_cursor"].is_null());
+    let unauthorized =
+        Request::get(&next_path).header(header::AUTHORIZATION, "Bearer invalid-fixture");
+    assert_eq!(
+        web.json(unauthorized, Value::Null, StatusCode::OK).await,
+        next
+    );
+    let admin = web.get(&next_path).await;
+    assert_eq!(admin["items"][0]["id"], 8);
+    assert_eq!(admin["next_cursor"].as_i64(), Some(8));
+    assert_eq!(
+        *requests.lock().unwrap(),
+        [(0, true), (7, true), (7, true), (7, false)]
+    );
+}
+
+#[tokio::test]
 async fn full_width_job_ids_survive_submit_timeout_key_recovery_detail_and_both_lists() {
     for (id, private) in [
         (1_i64 << 52, false),
@@ -809,8 +873,15 @@ async fn full_width_job_ids_survive_submit_timeout_key_recovery_detail_and_both_
                             assert_eq!(params["limit"], "1");
                             let cursor = params["cursor"].parse::<i64>().unwrap();
                             assert!(cursor == id - 1 || cursor == id);
-                            let items: Vec<_> =
-                                (cursor < id).then_some(expected).into_iter().collect();
+                            let visible = match params.get("visibility").map(String::as_str) {
+                                Some("legacy") => !private,
+                                None => true,
+                                other => panic!("unexpected filter: {other:?}"),
+                            };
+                            let items: Vec<_> = (cursor < id && visible)
+                                .then_some(expected)
+                                .into_iter()
+                                .collect();
                             Json(json!({"items":items, "next_cursor":null}))
                         }
                     }
@@ -1096,8 +1167,8 @@ async fn anonymous_backtest_rejects_unverifiable_cursor_before_finance() {
     let web = Gateway::with_finance_url("http://127.0.0.1:1".into());
     for (raw, status) in [
         ("-1", StatusCode::UNPROCESSABLE_ENTITY),
-        ("-4503599627370496", StatusCode::BAD_REQUEST),
-        ("-2251799813685249", StatusCode::BAD_REQUEST),
+        ("-4503599627370496", StatusCode::UNPROCESSABLE_ENTITY),
+        ("-2251799813685249", StatusCode::UNPROCESSABLE_ENTITY),
         ("9223372036854775808", StatusCode::UNPROCESSABLE_ENTITY),
         ("-9223372036854775809", StatusCode::UNPROCESSABLE_ENTITY),
     ] {
@@ -1110,6 +1181,22 @@ async fn anonymous_backtest_rejects_unverifiable_cursor_before_finance() {
             .await;
         assert_eq!(rejected["error"]["code"], "invalid_request");
         assert!(!rejected.to_string().contains(raw));
+    }
+    for invalid_query in [
+        "visibility=legacy",
+        "visibility=all",
+        "limit=0",
+        "limit=101",
+        "cursor=1&cursor=2",
+    ] {
+        let rejected = web
+            .json(
+                Request::get(format!("{JOBS}?{invalid_query}")),
+                Value::Null,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            )
+            .await;
+        assert_eq!(rejected["error"]["code"], "invalid_request");
     }
     let admin = web.admin(Request::get(format!("{JOBS}?cursor=-4503599627370496")));
     let rejected = web

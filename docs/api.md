@@ -22,7 +22,7 @@ CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.opena
 
 ## finance 契约版本
 
-[finance 来源提交](../openapi/finance.commit) 锁定为 finance main 的 `19eb173751487befc504c78f60bfbb6be68f97e6`，包含 F10d 期权流读契约。[finance OpenAPI](../openapi/finance.openapi.json) 还包含策略、作业、研究、决策和 Binance 状态端点。W8 公开 F10c 的[期权和行情所有者读取](#w8-期权场所深度与券商线路)，W9 公开 F10d 的[观察和核验读取](#w9-期权流观察与历史核验)。浏览器的 bars 和指标仍使用 W2a 的 WAL 视图。
+Web 从 finance main 的 `86dcc8604b6881d648418a25e6cd13c24d4a9b01` 生成客户端。W8 接入 F10c 的期权和行情所有者读取，W9 接入 F10d 的期权流观察与核验，W2b 使用 F14 的回测列表可见性筛选。浏览器的 bars 和指标沿用 W2a 的 WAL 视图。[来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json) · [W8 接口](#w8-期权场所深度与券商线路) · [W9 接口](#w9-期权流观察与历史核验)
 
 WAL 与投影 REST 保留 W6 的 1.0 与 2.0 `Event`、`Message` 和 `SchemaVersion`。上游返回 3.0 的 `option_history_trade` 或 `option_history_quote` 时，整条请求返回 `502 finance_invalid_response`，以保留原分页和旧客户端解码行为。原始记录仍须通过本机记录与显示许可检查。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制与大整数文本。市场 WebSocket 只发 1.0 数据帧。web 运维 SSE 使用下文的 `/events` 契约。
 
@@ -55,13 +55,11 @@ POST 写入关闭返回 403，鉴权失败返回 401，超过 token 的滑动窗
 
 作业列表、详情、提交和按键查询返回 `Cache-Control: no-store`。
 
-匿名列表每次最多读取四个 finance 页。首读遵循常规请求时限。续读从首读开始计时，最多使用总时限的一半。遇到私有作业后，后续每页最多读取 100 条。续读达到限制或遇到错误时，返回已确认的公开作业及不透明续页游标。即使 `items` 为空，也应继续使用非空的 `next_cursor`，直至其为 `null`。只有确认 finance 已耗尽才返回 `null`。
+Web 从当前请求的管理员身份决定列表范围。匿名请求和无效凭据使用 finance 的 `visibility=legacy`，只列出 `DemoStrategy`、`SmaCrossover`。管理员读取完整队列。浏览器可传的分页参数为 `limit` 和 `cursor`。
 
-`cursor` 接受从 0 到 `9223372036854775807` 的任意整数，按 finance 的排他位置查询。管理员直接读取 finance 页。匿名列表确认还有公开作业时，返回本页最后一条公开作业的原始 ID。提交、按键恢复、详情及列表都保留完整的 `int64`。JavaScript 客户端读取大于 `2^53−1` 的 JSON 整数时应使用无损整数解析，并将原十进制值传回。
+`cursor` 接受从 0 到 `9223372036854775807` 的任意整数。finance 在可见作业中按 `id > cursor` 升序查询。还有可见作业时，`next_cursor` 等于本页最后一个作业的 ID，末页为 `null`。相同公开作业之间、之前或之后的私有记录均不改变匿名页的内容与游标。
 
-匿名读取用完扫描预算时，Web 在 `[-2^52, -2^51)` 中随机签发续页句柄，在进程内保存其对应位置。Web 保存最近 4096 个句柄。重启、句柄被移出窗口或使用该区间内未签发的值时，返回 400 `invalid_request`。客户端可从首页或上次收到的公开作业 ID 重新读取。
-
-**当前权限限制。** 句柄隐藏扫描位置。空页或额外续页仍可能表明队列中存在私有历史。例如，公开作业 7 后没有记录时游标为 `null`，追加足够多的私有记录后同一请求会带续页句柄。严格隐藏存在性依赖 finance 在分页之前筛选公开作业。[架构与上游依赖](architecture.md#finance-http-调用)
+提交、按键恢复、详情和列表均保留完整的 `int64`。JavaScript 客户端读取大于 `2^53−1` 的 JSON 整数时应使用无损整数解析，并将原十进制值传回。[分页实现](architecture.md#finance-http-调用)
 
 system/status 的 market 字段包含 state、fresh、source、updated_at、instrument_count 与 stale_count。仅在状态为 ready、存在合约且均未过期时 fresh 才为 true。finance 可回复但尚未 ready 时，web 仍可读取行情以展示过期原因。应用层不可达时，state 为 unavailable，fresh 为 false。
 

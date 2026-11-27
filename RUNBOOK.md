@@ -124,7 +124,7 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 网页出现 502、503、504 时，先查 /api/v1/system/status 中的 finance.ok、latency_ms、circuit，再查 finance 的监听和 ready。熔断打开后等待对应 profile 的 circuit_open_ms，下一次访问会试探，成功后自动恢复。若请求为写操作，超时后先查作业状态，重交时沿用同一幂等键。
 
-finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W9 使用包含 F10d 的锁定契约。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约版本](docs/api.md#finance-契约版本)
+finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W9 使用 F10d 的期权流读取，W2b 的公开回测分页依赖 F14。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约版本](docs/api.md#finance-契约版本)
 
 策略版本、因子快照和幂等队列由 finance 管理。W2b 复用 web 现有配置、数据库、监听端口和进程。
 
@@ -282,7 +282,9 @@ W5 升级时，停下旧 notifier，保留迁移前快照，在共用 PostgreSQL
 
 回测页从 /api/v1/backtests/datasets 读取已审核的历史标的。配置数据后提交 SmaCrossover，并在工作台查看作业状态和历史结果。POST 超时或连接中断后，使用管理员身份和原 Idempotency-Key 请求 GET /api/v1/backtests/by-key。若查到 ID，继续轮询该作业。只有明确返回 404 后才允许带原请求及原键重试。
 
-提交与恢复返回的 ID 可达 `9223372036854775807`。排查时保留原十进制文本。试用过本分支早期正数句柄的客户端需从首页或最后已知的公开作业 ID 重新读取。当前 F10b 混合列表的私有尾段会影响匿名续页。严格隔离部署须等待 finance 提供按公开作业筛选的分页，再升级 Web 契约指针。[分页语义](docs/api.md#作业与行情)
+先上线含 F14 的 finance。在切换 Web 前，用 finance 的内部 `GET /api/v1/backtests?visibility=legacy&limit=1` 确认返回 200。新版 finance API 首次打开已有队列或新版 worker 启动时，会在原 SQLite 队列建立 `jobs_legacy_id` 部分索引。大队列应在此步骤完成建索引。若回滚至 F14 之前的 finance，应配套回滚 Web。
+
+提交与恢复返回的作业 ID 可达 `9223372036854775807`。排查时保留原十进制文本。匿名分页沿用最后一个可见作业的 ID。试用过旧分支临时句柄的客户端可从首页或最后已知公开 ID 重新读取。[分页语义](docs/api.md#作业与行情)
 
 ### 策略上传与因子报告
 

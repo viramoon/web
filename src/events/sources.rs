@@ -143,7 +143,7 @@ impl Jobs {
                 tokio::time::timeout(
                     timeout,
                     state.finance.read(|cfg| async move {
-                        jobs_api::list(&cfg, Some(discovery_limit), cursor).await
+                        jobs_api::list(&cfg, Some(discovery_limit), cursor, None).await
                     }),
                 )
                 .await

@@ -32,308 +32,264 @@ fn page(items: Vec<models::Job>, cursor: Option<i64>) -> models::Page {
     }
 }
 
-fn one_job_query(cursor: Option<i64>) -> Pagination {
-    Pagination {
+fn one_job_query(cursor: Option<i64>) -> ListQuery {
+    ListQuery {
         limit: Some(1),
         cursor,
     }
 }
 
-async fn public_body(result: ScannedPage) -> Value {
-    let response = result.into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .unwrap();
-    serde_json::from_slice(&body).unwrap()
-}
-
-fn continuation(body: &Value) -> Pagination {
-    let token = body["next_cursor"].as_i64().expect("integer cursor");
-    let uri = format!("/api/v1/backtests?limit=1&cursor={token}")
+fn continuation(body: &Value) -> ListQuery {
+    let id = body["next_cursor"].as_i64().expect("integer cursor");
+    let uri = format!("/api/v1/backtests?limit=1&cursor={id}")
         .parse()
         .unwrap();
-    Query::<ListQuery>::try_from_uri(&uri)
-        .unwrap()
-        .0
-        .pagination()
-        .unwrap()
+    let query = Query::<ListQuery>::try_from_uri(&uri).unwrap().0;
+    assert!(query.valid());
+    query
 }
 
-fn opaque_continuation(body: &Value) -> Pagination {
-    let token = body["next_cursor"].as_i64().expect("integer cursor");
-    assert!(cursor::HANDLE_RANGE.contains(&token));
-    assert!(token.unsigned_abs() < (1 << 53));
-    continuation(body)
+// The synthetic queue records visibility separately from the wire model so the
+// producer does not use the web permission check to choose its test response.
+fn finance_page(
+    jobs: &[(bool, models::Job)],
+    query: ListQuery,
+    visibility: Option<models::BacktestVisibility>,
+) -> models::Page {
+    let limit = query.limit.unwrap_or(DEFAULT_PAGE_LIMIT) as usize;
+    let mut rows = jobs
+        .iter()
+        .filter(|(public, job)| {
+            (visibility.is_none() || *public) && job.id > query.cursor.unwrap_or(0)
+        })
+        .map(|(_, job)| job.clone());
+    let items = rows.by_ref().take(limit).collect::<Vec<_>>();
+    let next = rows.next().and_then(|_| items.last().map(|job| job.id));
+    page(items, next)
 }
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-const LOOKAHEAD_BUDGET: Duration = Duration::from_millis(7500);
+async fn response_page(jobs: &[(bool, models::Job)], query: ListQuery, admin: bool) -> Value {
+    let result = list_page(query, admin, |sent, visibility| {
+        assert_eq!((sent.limit, sent.cursor), (query.limit, query.cursor));
+        assert_eq!(
+            visibility,
+            if admin {
+                None
+            } else {
+                Some(models::BacktestVisibility::Legacy)
+            }
+        );
+        std::future::ready(Ok(finance_page(jobs, sent, visibility)))
+    })
+    .await;
+    json!(result.ok().unwrap())
+}
 
 #[tokio::test]
 async fn public_backtest_cursor_only_refers_to_visible_jobs_across_private_pages() {
-    let read = |_, cursor| async move {
-        let page = match cursor {
-            None => page(vec![bundle(1), bundle(3)], Some(3)),
-            Some(3) => page(vec![legacy(7), bundle(11)], Some(11)),
-            Some(7) => page(vec![bundle(11), bundle(12)], Some(12)),
-            Some(11) => page(vec![bundle(12), legacy(13)], Some(13)),
-            Some(12) => page(vec![legacy(13), bundle(17)], Some(17)),
-            Some(17) => page(vec![bundle(19)], None),
-            _ => panic!("unexpected upstream cursor: {cursor:?}"),
-        };
-        Ok(page)
-    };
-
-    let first = public_page(one_job_query(None), LOOKAHEAD_BUDGET, read)
-        .await
-        .ok()
-        .unwrap();
-    let first = public_body(first).await;
+    let second = job(
+        13,
+        json!({"strategy":"SmaCrossover","instrument":"TEST","params":{}}),
+    );
+    let jobs = vec![
+        (false, bundle(1)),
+        (false, bundle(3)),
+        (true, legacy(7)),
+        (false, bundle(11)),
+        (false, bundle(12)),
+        (true, second.clone()),
+        (false, bundle(17)),
+        (false, bundle(19)),
+    ];
+    let first = response_page(&jobs, one_job_query(None), false).await;
     assert_eq!(first, json!({"items":[legacy(7)], "next_cursor":7}));
     for query in [continuation(&first), one_job_query(Some(7))] {
-        let second = public_page(query, LOOKAHEAD_BUDGET, read)
-            .await
-            .ok()
-            .unwrap();
         assert_eq!(
-            public_body(second).await,
-            json!({"items":[legacy(13)], "next_cursor":null})
+            response_page(&jobs, query, false).await,
+            json!({"items":[second], "next_cursor":null})
         );
     }
-    let private_only = public_page(one_job_query(Some(17)), LOOKAHEAD_BUDGET, read)
-        .await
-        .ok()
-        .unwrap();
     assert_eq!(
-        public_body(private_only).await,
+        response_page(&jobs, one_job_query(Some(17)), false).await,
         json!({"items":[], "next_cursor":null})
     );
+    let admin = response_page(&jobs, one_job_query(Some(7)), true).await;
+    assert_eq!(admin, json!({"items":[bundle(11)], "next_cursor":11}));
 }
 
 #[tokio::test]
 async fn public_backtest_page_rejects_invalid_upstream_continuations() {
+    let query = ListQuery {
+        limit: Some(2),
+        cursor: Some(11),
+    };
     for bad_page in [
         page(vec![bundle(11)], Some(11)),
         page(vec![bundle(13)], Some(12)),
         page(vec![], Some(13)),
+        page(vec![legacy(13)], Some(14)),
+        page(vec![legacy(13), legacy(13)], Some(13)),
+        page(vec![legacy(15), legacy(13)], None),
+        page(vec![legacy(13), legacy(14), legacy(15)], None),
+        page(vec![legacy(13), bundle(14)], Some(14)),
+        page(
+            vec![job(
+                13,
+                json!({"strategy":"FuturePrivate","instrument":"TEST","params":{}}),
+            )],
+            None,
+        ),
     ] {
-        let result = public_page(one_job_query(Some(11)), LOOKAHEAD_BUDGET, |_, cursor| {
-            let page = bad_page.clone();
-            async move {
-                assert_eq!(cursor, Some(11));
-                Ok(page)
-            }
-        })
-        .await;
-        assert_eq!(result.err().unwrap().status, StatusCode::BAD_GATEWAY);
+        let result = list_page(query, false, |_, _| std::future::ready(Ok(bad_page))).await;
+        let error = result.err().unwrap().into_response();
+        assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
+        let body = axum::body::to_bytes(error.into_body(), 512).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"error":{"code":"finance_invalid_response","message":"Invalid finance response"}})
+        );
     }
-}
-
-fn finance_page(jobs: &[models::Job], limit: Option<u32>, cursor: Option<i64>) -> models::Page {
-    let limit = limit.unwrap_or(DEFAULT_PAGE_LIMIT) as usize;
-    let mut jobs: Vec<_> = jobs
-        .iter()
-        .filter(|job| job.id > cursor.unwrap_or(0))
-        .take(limit + 1)
-        .cloned()
-        .collect();
-    let cursor = if jobs.len() > limit {
-        jobs.pop();
-        jobs.last().map(|job| job.id)
-    } else {
-        None
-    };
-    page(jobs, cursor)
 }
 
 #[tokio::test(start_paused = true)]
 async fn slow_private_backtest_history_keeps_the_public_response_and_bounds_reads() {
-    for (private_count, expected_reads) in [(0, 1), (30, 3), (1000, 4)] {
-        let mut jobs = vec![legacy(7)];
-        jobs.extend((8..8 + private_count).map(bundle));
-        let mut reads = Vec::new();
-        let result = tokio::time::timeout(
-            REQUEST_TIMEOUT,
-            public_page(one_job_query(None), LOOKAHEAD_BUDGET, |limit, cursor| {
-                reads.push((limit, cursor));
-                let reply = finance_page(&jobs, limit, cursor);
-                async move {
-                    tokio::time::sleep(Duration::from_millis(520)).await;
-                    Ok(reply)
-                }
-            }),
-        )
-        .await;
-        let actual = public_body(
-            result
-                .expect("public list must finish before HTTP deadline")
-                .ok()
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(actual["items"], json!([legacy(7)]), "{private_count}");
-        if private_count == 1000 {
-            assert_eq!(opaque_continuation(&actual).cursor, Some(208));
-        } else {
-            assert!(actual["next_cursor"].is_null(), "{private_count}");
-        }
-        assert_eq!(reads.len(), expected_reads, "{private_count}");
-        assert_eq!(reads[0], (Some(1), None));
-        if private_count > 0 {
-            assert_eq!(reads[1], (Some(1), Some(7)));
-            assert_eq!(reads[2], (Some(100), Some(8)));
+    use tokio::time::{Duration, Instant, sleep, timeout};
+    for count in [0, 30, 301, 1000, 10_000] {
+        let mut jobs = vec![(true, legacy(7))];
+        jobs.extend((8..8 + count).map(|id| (false, bundle(id))));
+        for (cursor, expected) in [
+            (None, json!({"items":[legacy(7)], "next_cursor":null})),
+            (Some(7), json!({"items":[], "next_cursor":null})),
+        ] {
+            let start = Instant::now();
+            let mut reads = Vec::new();
+            let result = timeout(
+                Duration::from_secs(15),
+                list_page(one_job_query(cursor), false, |sent, visibility| {
+                    reads.push((sent.limit, sent.cursor, visibility));
+                    let reply = finance_page(&jobs, sent, visibility);
+                    async move {
+                        sleep(Duration::from_millis(520)).await;
+                        Ok(reply)
+                    }
+                }),
+            )
+            .await
+            .expect("public list must finish before HTTP deadline");
+            assert_eq!(json!(result.ok().unwrap()), expected, "{count}");
+            assert_eq!(
+                reads,
+                [(Some(1), cursor, Some(models::BacktestVisibility::Legacy))]
+            );
+            assert_eq!(start.elapsed(), Duration::from_millis(520));
         }
     }
 }
 
 #[tokio::test(start_paused = true)]
 async fn public_backtest_lookahead_time_budget_keeps_confirmed_jobs() {
+    use tokio::time::{Duration, Instant, sleep};
     let start = Instant::now();
-    let mut reads = Vec::new();
-    let result = tokio::time::timeout(
-        REQUEST_TIMEOUT,
-        public_page(one_job_query(None), LOOKAHEAD_BUDGET, |_, cursor| {
-            reads.push(cursor);
-            async move {
-                let (delay, reply) = match cursor {
-                    None => (Duration::from_millis(520), page(vec![legacy(7)], Some(7))),
-                    Some(7) => (Duration::from_secs(3), page(vec![bundle(8)], Some(8))),
-                    Some(8) => (Duration::from_secs(3), page(vec![bundle(108)], Some(108))),
-                    Some(108) => (Duration::from_secs(3), page(vec![legacy(109)], None)),
-                    _ => panic!("unexpected upstream cursor: {cursor:?}"),
-                };
-                tokio::time::sleep(delay).await;
-                Ok(reply)
-            }
-        }),
-    )
-    .await
-    .unwrap()
-    .ok()
-    .unwrap();
-    assert_eq!(reads, [None, Some(7), Some(8), Some(108)]);
-    assert_eq!(start.elapsed(), LOOKAHEAD_BUDGET);
-    let actual = public_body(result).await;
-    assert_eq!(actual["items"], json!([legacy(7)]));
-    assert_eq!(opaque_continuation(&actual).cursor, Some(108));
-    let resumed = public_page(
-        continuation(&actual),
-        LOOKAHEAD_BUDGET,
-        |_, cursor| async move {
-            assert_eq!(cursor, Some(108));
-            Ok(page(vec![legacy(109)], None))
-        },
-    )
-    .await
-    .ok()
-    .unwrap();
+    let read = |sent: ListQuery, visibility| async move {
+        assert_eq!(visibility, Some(models::BacktestVisibility::Legacy));
+        let (delay, reply) = match sent.cursor {
+            None => (Duration::from_millis(520), page(vec![legacy(7)], Some(7))),
+            Some(7) => (Duration::from_secs(3), page(vec![legacy(109)], None)),
+            _ => panic!("unexpected cursor"),
+        };
+        sleep(delay).await;
+        Ok(reply)
+    };
+    let first = list_page(one_job_query(None), false, read)
+        .await
+        .ok()
+        .unwrap();
+    assert_eq!(start.elapsed(), Duration::from_millis(520));
+    let first = json!(first);
+    assert_eq!(first, json!({"items":[legacy(7)], "next_cursor":7}));
+    let next = list_page(continuation(&first), false, read)
+        .await
+        .ok()
+        .unwrap();
     assert_eq!(
-        public_body(resumed).await,
+        json!(next),
         json!({"items":[legacy(109)],"next_cursor":null})
     );
 }
 
 #[tokio::test]
 async fn failed_backtest_lookahead_keeps_the_successful_initial_page() {
-    let result = public_page(
-        one_job_query(None),
-        LOOKAHEAD_BUDGET,
-        |_, cursor| async move {
-            match cursor {
-                None => Ok(page(vec![legacy(7)], Some(7))),
-                Some(7) => Err(Fault::invalid_response()),
-                _ => panic!("unexpected upstream cursor: {cursor:?}"),
-            }
-        },
-    )
+    let first = list_page(one_job_query(None), false, |sent, _| {
+        assert_eq!(sent.cursor, None);
+        std::future::ready(Ok(page(vec![legacy(7)], Some(7))))
+    })
     .await
     .ok()
     .unwrap();
-    let actual = public_body(result).await;
-    assert_eq!(actual["items"], json!([legacy(7)]));
-    assert_eq!(opaque_continuation(&actual).cursor, Some(7));
+    let first = json!(first);
+    assert_eq!(first, json!({"items":[legacy(7)], "next_cursor":7}));
+    let query = continuation(&first);
+    let failed = list_page(query, false, |_, _| {
+        std::future::ready(Err(Fault::invalid_response()))
+    })
+    .await;
+    assert_eq!(failed.err().unwrap().status, StatusCode::BAD_GATEWAY);
+    let next = response_page(&[(true, legacy(13))], query, false).await;
+    assert_eq!(next, json!({"items":[legacy(13)],"next_cursor":null}));
 }
 
 #[tokio::test]
 async fn anonymous_cursor_reaches_the_public_job_after_301_private_jobs() {
-    let mut jobs = vec![legacy(7)];
-    jobs.extend((8..309).map(bundle));
-    jobs.push(legacy(309));
-    let read = |limit, cursor| {
-        let reply = finance_page(&jobs, limit, cursor);
-        async move { Ok(reply) }
-    };
-    let first = public_page(one_job_query(None), LOOKAHEAD_BUDGET, read)
-        .await
-        .ok()
-        .unwrap();
-    let first = public_body(first).await;
+    let mut jobs = vec![(true, legacy(7))];
+    jobs.extend((8..309).map(|id| (false, bundle(id))));
+    jobs.push((true, legacy(309)));
+    let first = response_page(&jobs, one_job_query(None), false).await;
     assert_eq!(first["items"], json!([legacy(7)]));
     let issued = first["next_cursor"].as_i64().unwrap();
     assert!(!(8..309).contains(&issued));
-    let next = opaque_continuation(&first);
-    assert_eq!(next.cursor, Some(208));
-    let tampered = ListQuery {
-        limit: Some(1),
-        cursor: Some(issued ^ 1),
-    }
-    .pagination()
-    .err()
-    .unwrap()
-    .into_response();
-    assert_eq!(tampered.status(), StatusCode::BAD_REQUEST);
-
-    // A legacy numeric cursor starts within the same gap and must also remain resumable.
-    for mut query in [next, one_job_query(Some(7))] {
-        let mut public_ids = Vec::new();
-        for _ in 0..3 {
-            let result = public_page(query, LOOKAHEAD_BUDGET, read)
-                .await
-                .ok()
-                .unwrap();
-            let body = public_body(result).await;
-            let items: Vec<models::Job> = serde_json::from_value(body["items"].clone()).unwrap();
-            assert!(items.iter().all(is_legacy));
-            public_ids.extend(items.into_iter().map(|job| job.id));
-            if body["next_cursor"].is_null() {
-                break;
-            }
-            assert!(!(8..309).contains(&body["next_cursor"].as_i64().unwrap()));
-            assert!(public_ids.is_empty(), "the final public job is the tail");
-            query = opaque_continuation(&body);
-        }
-        assert_eq!(public_ids, [309]);
+    assert_eq!(issued, 7);
+    for query in [
+        continuation(&first),
+        one_job_query(Some(7)),
+        one_job_query(Some(208)),
+    ] {
+        assert_eq!(
+            response_page(&jobs, query, false).await,
+            json!({"items":[legacy(309)],"next_cursor":null})
+        );
     }
 }
 
 #[tokio::test]
 async fn empty_anonymous_page_can_continue_across_multiple_scan_windows() {
-    let mut jobs: Vec<_> = (1..1001).map(bundle).collect();
-    jobs.push(legacy(1001));
-    let read = |limit, cursor| {
-        let reply = finance_page(&jobs, limit, cursor);
-        async move { Ok(reply) }
-    };
-    let mut query = one_job_query(None);
-    for expected_position in [301, 602, 903] {
-        let page = public_page(query, LOOKAHEAD_BUDGET, read)
-            .await
-            .ok()
-            .unwrap();
-        let body = public_body(page).await;
-        assert_eq!(body["items"], json!([]));
-        query = opaque_continuation(&body);
-        assert_eq!(query.cursor, Some(expected_position));
+    let mut jobs: Vec<_> = (1..1001).map(|id| (false, bundle(id))).collect();
+    assert_eq!(
+        response_page(&jobs, one_job_query(None), false).await,
+        json!({"items":[], "next_cursor":null})
+    );
+    jobs.push((true, legacy(1001)));
+    for cursor in [None, Some(301), Some(602), Some(903)] {
+        assert_eq!(
+            response_page(&jobs, one_job_query(cursor), false).await,
+            json!({"items":[legacy(1001)], "next_cursor":null})
+        );
     }
-    let tail = public_page(query, LOOKAHEAD_BUDGET, read)
+}
+
+#[tokio::test]
+async fn terminal_pages_serialize_a_null_cursor_even_when_the_optional_field_is_absent() {
+    for admin in [false, true] {
+        let result = list_page(one_job_query(None), admin, |_, _| {
+            std::future::ready(Ok(models::Page::new(vec![legacy(7)])))
+        })
         .await
         .ok()
         .unwrap();
-    assert_eq!(
-        public_body(tail).await,
-        json!({"items":[legacy(1001)],"next_cursor":null})
-    );
+        assert_eq!(
+            json!(result),
+            json!({"items":[legacy(7)],"next_cursor":null})
+        );
+    }
 }
 
 #[test]
@@ -341,6 +297,8 @@ fn openapi_preserves_the_baseline_numeric_cursor_contract() {
     let spec = crate::openapi();
     let operation = &spec["paths"]["/api/v1/backtests"]["get"];
     let parameters = operation["parameters"].as_array().unwrap();
+    assert_eq!(parameters.len(), 2);
+    assert!(parameters.iter().all(|p| p["name"] != "visibility"));
     let cursor = parameters.iter().find(|p| p["name"] == "cursor").unwrap();
     assert_eq!(
         cursor["schema"],
@@ -374,30 +332,20 @@ fn openapi_preserves_the_baseline_numeric_cursor_contract() {
 
 #[tokio::test]
 async fn invalid_finance_ids_fail_on_first_and_followup_pages() {
-    for bad_page in [
-        page(vec![legacy(0)], None),
-        page(vec![bundle(i64::MIN)], None),
-        page(vec![legacy(7)], Some(-1)),
-    ] {
-        assert_eq!(
-            validate_page_ids(&bad_page).err().unwrap().status,
-            StatusCode::BAD_GATEWAY
-        );
-        let first = public_page(one_job_query(None), LOOKAHEAD_BUDGET, |_, _| {
-            std::future::ready(Ok(bad_page.clone()))
-        })
-        .await;
-        assert_eq!(first.err().unwrap().status, StatusCode::BAD_GATEWAY);
-        let followup = public_page(one_job_query(None), LOOKAHEAD_BUDGET, |_, cursor| {
-            let reply = if cursor.is_none() {
-                page(vec![legacy(7)], Some(7))
-            } else {
-                bad_page.clone()
-            };
-            std::future::ready(Ok(reply))
-        })
-        .await;
-        assert_eq!(followup.err().unwrap().status, StatusCode::BAD_GATEWAY);
+    for cursor in [None, Some(7)] {
+        for admin in [false, true] {
+            for bad_page in [
+                page(vec![legacy(0)], None),
+                page(vec![bundle(i64::MIN)], None),
+                page(vec![legacy(9)], Some(-1)),
+            ] {
+                let result = list_page(one_job_query(cursor), admin, |_, _| {
+                    std::future::ready(Ok(bad_page))
+                })
+                .await;
+                assert_eq!(result.err().unwrap().status, StatusCode::BAD_GATEWAY);
+            }
+        }
     }
 }
 
@@ -446,16 +394,20 @@ async fn full_width_cursors_return_the_same_public_pages_with_or_without_private
     let first = 1_i64 << 52;
     let second = (1_i64 << 53) + 1;
     let last = i64::MAX;
-    let visible = [legacy(first), legacy(second), legacy(last)];
-    let mixed = [
-        bundle(first - 1),
-        legacy(first),
-        bundle(first + 1),
-        legacy(second),
-        bundle(last - 1),
-        legacy(last),
+    let visible = vec![
+        (true, legacy(first)),
+        (true, legacy(second)),
+        (true, legacy(last)),
     ];
-    for jobs in [visible.as_slice(), mixed.as_slice()] {
+    let mixed = vec![
+        (false, bundle(first - 1)),
+        (true, legacy(first)),
+        (false, bundle(first + 1)),
+        (true, legacy(second)),
+        (false, bundle(last - 1)),
+        (true, legacy(last)),
+    ];
+    for jobs in [&visible, &mixed] {
         for (cursor, expected) in [
             (None, json!({"items":[legacy(first)], "next_cursor":first})),
             (
@@ -468,54 +420,78 @@ async fn full_width_cursors_return_the_same_public_pages_with_or_without_private
             ),
             (Some(last), json!({"items":[], "next_cursor":null})),
         ] {
-            let query = ListQuery {
-                limit: Some(1),
-                cursor,
+            let query = one_job_query(cursor);
+            assert!(query.valid());
+            assert_eq!(response_page(jobs, query, false).await, expected);
+        }
+    }
+    let admin = response_page(&mixed, one_job_query(Some(last - 2)), true).await;
+    assert_eq!(
+        admin,
+        json!({"items":[bundle(last-1)],"next_cursor":last-1})
+    );
+}
+
+#[tokio::test]
+async fn bounded_mixed_pages_cannot_distinguish_a_private_tail_from_a_later_public_job() {
+    let mut jobs = vec![(true, legacy(7))];
+    jobs.extend((8..309).map(|id| (false, bundle(id))));
+    let private_tail = jobs.clone();
+    jobs.push((true, legacy(309)));
+    for (limit, cursor) in [(1, None), (1, Some(7)), (100, Some(8)), (100, Some(108))] {
+        let query = ListQuery {
+            limit: Some(limit),
+            cursor,
+        };
+        assert_eq!(
+            finance_page(&private_tail, query, None),
+            finance_page(&jobs, query, None)
+        );
+    }
+    for (history, next) in [(&private_tail, None), (&jobs, Some(7))] {
+        assert_eq!(
+            response_page(history, one_job_query(None), false).await,
+            json!({"items":[legacy(7)], "next_cursor":next})
+        );
+    }
+}
+
+#[test]
+fn cursor_parser_keeps_legacy_nonnegative_decimal_input() {
+    let neighbors = [1_i64 << 52, 1_i64 << 53]
+        .into_iter()
+        .flat_map(|n| (n - 1)..=(n + 1));
+    for id in [0, 7, i64::MAX].into_iter().chain(neighbors) {
+        assert_eq!(continuation(&json!({"next_cursor":id})).cursor, Some(id));
+    }
+}
+
+#[test]
+fn invalid_negative_cursors_and_their_neighbors_are_rejected() {
+    for value in [i64::MIN, -(1_i64 << 52), -(1_i64 << 51), -1] {
+        for delta in [-1, 0, 1] {
+            if let Some(negative) = value.checked_add(delta).filter(|n| *n < 0) {
+                assert!(!one_job_query(Some(negative)).valid());
             }
-            .pagination()
-            .unwrap();
-            assert_eq!(query.cursor, cursor);
-            let result = public_page(query, LOOKAHEAD_BUDGET, |limit, cursor| {
-                std::future::ready(Ok(finance_page(jobs, limit, cursor)))
-            })
-            .await
-            .ok()
-            .unwrap();
-            assert_eq!(public_body(result).await, expected);
         }
     }
 }
 
 #[tokio::test]
-async fn bounded_mixed_pages_cannot_distinguish_a_private_tail_from_a_later_public_job() {
-    // Both producers answer every read in the budget identically, including their cursors.
-    // Their correct *public* next_cursor after job 7 would be null and 7, respectively.
-    let mut jobs = vec![legacy(7)];
-    jobs.extend((8..309).map(bundle));
-    let hidden_tail = jobs.clone();
-    jobs.push(legacy(309));
-    let mut observations = Vec::new();
-    for (history, expected_public_cursor) in [(&hidden_tail, None), (&jobs, Some(7))] {
-        let visible: Vec<_> = history
-            .iter()
-            .filter(|job| is_legacy(job))
-            .cloned()
-            .collect();
-        let public = finance_page(&visible, Some(1), None);
-        assert_eq!(public.next_cursor.flatten(), expected_public_cursor);
-        let mut observed = Vec::new();
-        let first = public_page(one_job_query(None), LOOKAHEAD_BUDGET, |limit, cursor| {
-            let reply = finance_page(history, limit, cursor);
-            observed.push((limit, cursor, reply.clone()));
-            std::future::ready(Ok(reply))
-        })
-        .await
-        .ok()
-        .unwrap();
-        let first = public_body(first).await;
-        assert_eq!(first["items"], json!([legacy(7)]));
-        assert_eq!(observed.len(), MAX_PUBLIC_PAGE_READS);
-        observations.push(observed);
+async fn public_cursor_remains_valid_after_unrelated_pages_and_for_other_readers() {
+    let jobs = vec![(true, legacy(7)), (true, legacy(309))];
+    let first = response_page(&jobs, one_job_query(None), false).await;
+    for position in 10_000..14_097 {
+        let others = [(true, legacy(position + 1)), (true, legacy(position + 2))];
+        let page = response_page(&others, one_job_query(Some(position)), false).await;
+        assert_eq!(page["next_cursor"].as_i64(), Some(position + 1));
     }
-    assert_eq!(observations[0], observations[1]);
+    assert_eq!(
+        response_page(&jobs, one_job_query(None), false).await,
+        first
+    );
+    assert_eq!(
+        response_page(&jobs.clone(), continuation(&first), false).await,
+        json!({"items":[legacy(309)],"next_cursor":null})
+    );
 }
