@@ -1,11 +1,29 @@
 {
   "version": 1,
   "fixtures": {
+    "src/market_reads/tests.rs": {
+      "sha256": "b620516f4f39f4cae1fa3b7e3f457909a8f21d4b34888288e1df63585eb2d792",
+      "generator": "src/market_reads/tests/synthetic.rs",
+      "seed": "fixed",
+      "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。"
+    },
+    "src/market_stream/replay/tests.rs": {
+      "sha256": "9854b024eb2cdd8a4154cfa385836021945ef215a532fb1d0d7fb7dd054a074a",
+      "generator": "src/market_stream/fixture.rs",
+      "seed": "fixed",
+      "source": "运行 cargo test --locked --offline market_stream::replay。用固定时钟、十进制和超出 JavaScript 安全整数的序号构造合成快照、增量、重置和永续合约上下文。"
+    },
+    "src/market_stream/transport_tests.rs": {
+      "sha256": "081cbb4a16ef523f766e26c799b37b1466c8ebe5335c0c5e67706ef1400be538",
+      "generator": "src/market_stream/fixture.rs",
+      "seed": "fixed",
+      "source": "运行 cargo test --lib --locked --offline websocket_。通过随机数字回环端口投递固定 F1 快照和 WAL 位置，验证浏览器升级、许可、续接、重置与额度。"
+    },
     "tests/api/database.rs": {
-      "sha256": "6db9c2e3c6fbfef50b95a4cd6383dd46373c4875472a8b405bf8bac110d1b3c8",
+      "sha256": "ae247ff845a2bf689d49afe4b0544167f0b1943fc6ca3c9ef7033996cb33f37f",
       "generator": "tests/api/postgres.rs",
       "seed": "fixed",
-      "source": "Run cargo test --locked --test api database. An isolated Unix-socket cluster is initialized in a temporary directory. The migration test writes a fixed synthetic schema marker using SQL and exercises only test configuration and local service stubs."
+      "source": "运行 cargo test --test api --locked --offline postgres_integration_migration_upgrades_existing_schema。隔离 PostgreSQL 由版本化 SQL 和固定的 schema 标识构造。"
     },
     "tests/api/notifications_worker/silence.rs": {
       "sha256": "d2ad0480b84be6c32702fad9b9901f7c9494c0f693e9c157a63c47cd1a2f8e07",

@@ -1,5 +1,6 @@
 use chrono::Utc;
 use std::{
+    io::{self, Write},
     path::{Path, PathBuf},
     process::ExitCode,
     sync::Arc,
@@ -12,7 +13,7 @@ use tokio::{
 };
 use web::{
     AppState, config::Settings, credentials::CredentialStore, database::Database, finance::Finance,
-    openapi, router, telemetry,
+    openapi, router_with_shutdown, telemetry,
 };
 
 type Failure = (&'static str, Option<&'static str>);
@@ -41,10 +42,12 @@ fn main() -> ExitCode {
 fn run() -> Result<(), Failure> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if args == ["export-openapi"] {
-        let document = openapi()
-            .to_pretty_json()
+        let mut output = io::stdout().lock();
+        let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+        let mut serializer = serde_json::Serializer::with_formatter(&mut output, formatter);
+        serde::Serialize::serialize(&openapi(), &mut serializer)
             .map_err(|_| ("openapi_export", None))?;
-        println!("{document}");
+        writeln!(output).map_err(|_| ("openapi_export", None))?;
         return Ok(());
     }
     let command = match args.as_slice() {
@@ -143,7 +146,7 @@ async fn serve_or_migrate(s: Settings, migrate: bool) -> Result<(), &'static str
         started_at: Utc::now(),
     };
     tracing::info!(%address, "listening");
-    let serving = axum::serve(listener, router(state))
+    let serving = axum::serve(listener, router_with_shutdown(state, rx.clone()))
         .with_graceful_shutdown(async move {
             let _ = rx.wait_for(|v| *v).await;
         })

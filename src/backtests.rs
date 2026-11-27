@@ -91,6 +91,7 @@ pub(crate) async fn submit(
     let Some(input) = input else {
         return invalid("Invalid backtest submission");
     };
+    let input = models::SubmitRequest::JobRequest(Box::new(input));
     match s
         .finance
         .write(|cfg| {

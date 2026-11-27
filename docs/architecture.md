@@ -20,10 +20,13 @@ frontend 不独立运行，由配置指定的静态目录提供资源，按 fert
 
 ## W2 契约来源
 
-后续 W2 使用与 [finance 来源提交](../openapi/finance.commit)一致的以下契约。阶段 0 仅记录来源和版本。
+W2a 从 [finance 来源提交](../openapi/finance.commit) 生成 F10a 客户端，浏览器可访问管理员专用的 WAL、投影、产品和质量读取。现有系统与行情状态保持原权限，F10a 生成物中的因子研究查询由 W2b 集成。
 
 - F1 行情协议 `1.0`。标的、事件与能力的 JSON Schema 及样本 `examples.json` 来自 [`protocol/v1/`](https://github.com/viramoon/finance/tree/b21f24150dae968a147b57eefbe4ffde0f3b4809/protocol/v1)。
+- F10a 的市场 WS 数据帧使用 [`market-ws.schema.json`](https://github.com/viramoon/finance/blob/617ed833f469640b1be2a83200f30fef67087eb9/protocol/v1/market-ws.schema.json)。浏览器订阅命令和 web 控制帧由网关契约定义。
 - F2 StrategyBundle v1，`apiVersion` 为 `fertile.finance/strategy/v1`。Bundle schema `strategy-bundle-v1.schema.json` 与组件注册表 `component-registry-v1.json` 来自 [`strategies/schema/`](https://github.com/viramoon/finance/tree/b21f24150dae968a147b57eefbe4ffde0f3b4809/strategies/schema)。
+
+SSE 按需轮询已有 finance 作业、PostgreSQL 告警及备份状态，仅保留这三类的有限状态数据。局部回放在内存中，使用进程代际和事件序号。重连、回放和单帧发送均校验 W1 身份。自选使用 PostgreSQL revision 条件写入，focus 为进程内盘口选择。WAL 视图保留单页覆盖，盘口要求同一分区存在可用快照和连续增量。客户端经 Axum WebSocket 进入市场流会话，按单管理员分配订阅额度，再按 finance 产品许可回放已提交 WAL。finance 实时显示流和券商线路数据等待后续契约。[W2a 接口](api.md#行情自选与推送)
 
 ## 集成控制面
 

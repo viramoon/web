@@ -204,6 +204,7 @@ async fn postgres_integration_migration_upgrades_existing_schema() {
             20261127010000,
             20261127020000,
             20261127030000,
+            20261127040000,
             20261127074531,
         ]
     );
@@ -259,6 +260,12 @@ async fn postgres_integration_migration_upgrades_existing_schema() {
     .await
     .unwrap();
     assert_eq!(replaces_id_type, "uuid");
+    let watchlists_table: bool =
+        sqlx::query_scalar("SELECT to_regclass('app.market_watchlists') IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(watchlists_table);
     pool.close().await;
     pg.stop();
 }

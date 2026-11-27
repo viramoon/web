@@ -33,6 +33,7 @@ struct Policy {
     limit: usize,
     window: Duration,
     accepted: Mutex<VecDeque<Instant>>,
+    market_reads: Mutex<VecDeque<Instant>>,
 }
 
 pub const SESSION_COOKIE_NAME: &str = "__Host-web_admin_session";
@@ -69,7 +70,7 @@ pub enum Product {
 }
 
 impl Product {
-    const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::System,
         Self::Backtests,
         Self::MarketStatus,
@@ -294,6 +295,7 @@ pub enum WriteDenied {
     OriginRejected,
     CsrfRejected,
     RateLimited(u64),
+    MarketReadRateLimited(u64),
 }
 impl IntoResponse for WriteDenied {
     fn into_response(self) -> Response {
@@ -334,12 +336,14 @@ impl IntoResponse for WriteDenied {
                 "csrf_rejected",
                 "A valid CSRF token is required",
             ),
-            Self::RateLimited(seconds) => {
-                let mut response = api_error(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "rate_limited",
-                    "Write rate limit reached",
-                );
+            Self::RateLimited(seconds) | Self::MarketReadRateLimited(seconds) => {
+                let message = if matches!(self, Self::MarketReadRateLimited(_)) {
+                    "Market read rate limit reached"
+                } else {
+                    "Write rate limit reached"
+                };
+                let mut response =
+                    api_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", message);
                 response
                     .headers_mut()
                     .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
@@ -359,6 +363,7 @@ impl WriteAccess {
                 limit: max_requests as usize,
                 window,
                 accepted: Mutex::new(VecDeque::new()),
+                market_reads: Mutex::new(VecDeque::new()),
             }),
             sessions: None,
         })
@@ -418,6 +423,33 @@ impl WriteAccess {
         self.authenticate(headers)
     }
 
+    pub(crate) fn authorize_stream(
+        &self,
+        headers: &HeaderMap,
+        require_session_origin: bool,
+    ) -> Result<(), WriteDenied> {
+        let session = matches!(self.identity(headers)?, Identity::Session(_));
+        if session {
+            let fetch_site = header::HeaderName::from_static("sec-fetch-site");
+            if headers.contains_key(&fetch_site)
+                && unique_header(headers, fetch_site)
+                    .is_none_or(|site| site != HeaderValue::from_static("same-origin"))
+            {
+                return Err(WriteDenied::OriginRejected);
+            }
+        }
+        if headers.contains_key(header::ORIGIN) || (session && require_session_origin) {
+            self.session_policy()?.check_origin(headers)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn authorize_market_read(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+        self.authorize_stream(headers, false)?;
+        consume_quota(&self.bearer.market_reads, 120, Duration::from_secs(60))
+            .map_err(WriteDenied::MarketReadRateLimited)
+    }
+
     pub fn authorize(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
         self.authorize_write(headers, false)
     }
@@ -456,26 +488,32 @@ impl WriteAccess {
 
     fn consume_write_quota(&self) -> Result<(), WriteDenied> {
         let policy = &self.bearer;
-        // Only the provisioned credential owns this queue. Network addresses and
-        // caller-controlled forwarding headers cannot create additional buckets.
-        let mut accepted = policy.accepted.lock().unwrap_or_else(|e| e.into_inner());
-        let now = Instant::now();
-        while accepted
-            .front()
-            .is_some_and(|time| now.duration_since(*time) >= policy.window)
-        {
-            accepted.pop_front();
-        }
-        if accepted.len() >= policy.limit {
-            let remaining = policy
-                .window
-                .saturating_sub(now.duration_since(accepted[0]));
-            let seconds = remaining.as_secs() + u64::from(remaining.subsec_nanos() != 0);
-            return Err(WriteDenied::RateLimited(seconds.max(1)));
-        }
-        accepted.push_back(now);
-        Ok(())
+        consume_quota(&policy.accepted, policy.limit, policy.window)
+            .map_err(WriteDenied::RateLimited)
     }
+}
+
+fn consume_quota(
+    accepted: &Mutex<VecDeque<Instant>>,
+    limit: usize,
+    window: Duration,
+) -> Result<(), u64> {
+    // All authorized requests share the single v1 administrator's quotas.
+    let mut accepted = accepted.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    while accepted
+        .front()
+        .is_some_and(|time| now.duration_since(*time) >= window)
+    {
+        accepted.pop_front();
+    }
+    if accepted.len() >= limit {
+        let remaining = window.saturating_sub(now.duration_since(accepted[0]));
+        let seconds = remaining.as_secs() + u64::from(remaining.subsec_nanos() != 0);
+        return Err(seconds.max(1));
+    }
+    accepted.push_back(now);
+    Ok(())
 }
 
 #[utoipa::path(post, path = "/api/v1/admin/session", security(("adminBearer" = [])),

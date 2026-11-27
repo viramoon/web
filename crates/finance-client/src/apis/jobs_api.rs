@@ -46,6 +46,7 @@ pub enum ListError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SubmitError {
+    Status404(models::ErrorBody),
     Status409(models::ErrorBody),
     Status422(models::ErrorBody),
     Status429(models::ErrorBody),
@@ -198,11 +199,11 @@ pub async fn list(
 pub async fn submit(
     configuration: &configuration::Configuration,
     idempotency_key: &str,
-    job_request: models::JobRequest,
+    submit_request: models::SubmitRequest,
 ) -> Result<models::Accepted, Error<SubmitError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_header_idempotency_key = idempotency_key;
-    let p_body_job_request = job_request;
+    let p_body_submit_request = submit_request;
 
     let uri_str = format!("{}/api/v1/backtests", configuration.base_path);
     let mut req_builder = configuration
@@ -213,7 +214,7 @@ pub async fn submit(
         req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.header("Idempotency-Key", p_header_idempotency_key.to_string());
-    req_builder = req_builder.json(&p_body_job_request);
+    req_builder = req_builder.json(&p_body_submit_request);
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;

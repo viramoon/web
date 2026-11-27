@@ -4,6 +4,8 @@ fertile 的后端网关与 submodule。使用 axum 提供浏览器 API、通过 
 
 本仓库按 issue #1 方案 v2 初始化。axum 服务提供健康检查、带行情新鲜度的系统状态、静态托管与 PostgreSQL 迁移，并经 finance 客户端提供只读查询和管理员回测作业提交。管理接口支持短期同源会话、产品权限查询、加密凭据录入和集成候选测试、启用与回滚。运维页面可读取备份恢复点和授权的采集缺口。`web publish-quality` 将本机 F3 观测发布为缺口快照。`web-notifier` 消费 PostgreSQL outbox，并按活动 SMTP 版本绑定的加密配置投递邮件。见 [issue #1 方案 v2](https://github.com/viramoon/web/issues/1#issuecomment-6834604360)、[运行手册](RUNBOOK.md) 和 [AGENTS.md](AGENTS.md)。
 
+W2a 提供管理员专用的 F10a 行情读取与 WAL 视图、PostgreSQL 自选、盘口 focus 和运维 SSE。市场 WebSocket 在同一服务端口提供授权的有界 WAL 回放、共享订阅额度和重置帧。期权查询和券商线路额度等待 finance 后续契约。见 [行情、自选与推送](docs/api.md#行情自选与推送)。
+
 ## 系统中的位置
 
 | 仓库 | 在 fertile 系统中的职责 |

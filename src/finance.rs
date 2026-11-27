@@ -8,7 +8,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use finance_client::{
-    apis::{Error, configuration::Configuration, default_api},
+    apis::{
+        Error,
+        configuration::Configuration,
+        default_api::{self, ReadyError},
+    },
     models,
 };
 use serde::Serialize;
@@ -228,18 +232,7 @@ impl Finance {
         // The health budget is independent of normal GET retries.
         let response = self
             .execute(
-                |cfg| async move {
-                    match default_api::ready(&cfg).await {
-                        Ok(_) => Ok(true),
-                        // A valid not-ready response still permits querying the cause, e.g. expired market data.
-                        Err(Error::ResponseError(r))
-                            if matches!(r.entity, Some(default_api::ReadyError::Status503(_))) =>
-                        {
-                            Ok(false)
-                        }
-                        Err(e) => Err(e),
-                    }
-                },
+                |cfg| async move { classify_readiness(default_api::ready(&cfg).await) },
                 0,
                 self.policy.ready_timeout_ms,
             )
@@ -256,6 +249,22 @@ impl Finance {
     }
 }
 
+fn classify_readiness(
+    response: Result<models::Health, Error<ReadyError>>,
+) -> Result<bool, Error<ReadyError>> {
+    match response {
+        Ok(_) => Ok(true),
+        // The generated error enum matches the body without checking the HTTP status.
+        Err(Error::ResponseError(r))
+            if r.status == StatusCode::SERVICE_UNAVAILABLE
+                && matches!(r.entity, Some(ReadyError::Status503(_))) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn loopback_endpoint(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|url| {
         matches!(url.scheme(), "http" | "https")
@@ -269,4 +278,31 @@ fn loopback_endpoint(value: &str) -> bool {
                 _ => false,
             }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use finance_client::apis::ResponseContent;
+
+    #[test]
+    fn finance_readiness_requires_http_503_to_accept_a_not_ready_health_body() {
+        let health = models::Health::new(Vec::new(), "degraded".into());
+        let body = serde_json::to_string(&health).unwrap();
+        let upstream_error = |status, content: &str| {
+            Err(Error::ResponseError(ResponseContent {
+                status,
+                content: content.into(),
+                entity: serde_json::from_str(content).ok(),
+            }))
+        };
+
+        assert!(matches!(classify_readiness(Ok(health)), Ok(true)));
+        assert!(classify_readiness(upstream_error(StatusCode::BAD_GATEWAY, &body)).is_err());
+        assert!(matches!(
+            classify_readiness(upstream_error(StatusCode::SERVICE_UNAVAILABLE, &body)),
+            Ok(false)
+        ));
+        assert!(classify_readiness(upstream_error(StatusCode::SERVICE_UNAVAILABLE, "{}")).is_err());
+    }
 }

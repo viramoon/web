@@ -35,6 +35,32 @@ finance_http:
   stable: {connect_timeout_ms: 1000, request_timeout_ms: 2000, backoff_ms: 100, circuit_failure_threshold: 5, circuit_open_ms: 5000}
   max_read_retries: 2
   write_retries: 0
+market_gateway:
+  finance_contract: openapi/finance.commit
+  access: administrator
+  cache_control: no-store
+  rest_reads: {max_requests: 120, window_seconds: 60, identity: single_admin}
+  watchlists: {table: app.market_watchlists, migration: "20261127040000", max_instruments: 64}
+  depth_focus: {path: /api/v1/market/depth-focus, state: process_local}
+  subscriptions:
+    path: /api/v1/market/subscriptions
+    web_limit: 8
+    identity: single_admin
+    finance_lines: finance_contract_pending
+  events:
+    path: /api/v1/events
+    protocol: sse
+    heartbeat_seconds: 15
+    retained_events: 128
+    max_connections: 16
+    alert_window: 32
+  market_stream:
+    path: /api/v1/stream/market
+    protocol: websocket
+    source: finance_committed_wal
+    max_connections: 16
+    max_command_bytes: 4096
+  interface: docs/api.md
 maintenance:
   publish_quality:
     command: web publish-quality INPUTS
