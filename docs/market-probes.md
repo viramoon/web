@@ -1,6 +1,6 @@
 # 行情集成的本机测试契约
 
-Web 将候选 UUID、版本和标的交给 finance 的行情所有者，由该所有者完成只读观察。部署通过数字回环地址 `FINANCE_BASE_URL` 配置适配连接。该客户端关闭代理、重定向和自动重试，探测期限独立于常规 finance 请求的熔断器。锁定的 finance 快照缺少这组路由，探测结果为 `adapter_unavailable`。Web 的启用和回滚记录活动版本。部署端的真实 paper 观察、各源验证及活动版本应用依赖 F10 后续批次。[finance #43](https://github.com/viramoon/finance/issues/43)
+Web 将候选 UUID、版本和标的交给 finance 的行情所有者，由该所有者完成只读观察。部署通过数字回环地址 `FINANCE_BASE_URL` 配置适配连接。探测与常规 finance 请求共享连接池，客户端关闭代理、重定向和自动重试。探测期限独立于常规 finance 请求的熔断器。锁定的 finance 快照缺少这组路由，探测结果为 `adapter_unavailable`。Web 的启用和回滚记录活动版本。部署端的真实 paper 观察、各源验证及活动版本应用依赖 F10 后续批次。[finance #43](https://github.com/viramoon/finance/issues/43)
 
 | `connector` | `symbol` |
 | --- | --- |

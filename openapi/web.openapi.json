@@ -7243,7 +7243,7 @@
 },
 "/api/v1/backtests": {
 "get": {
-"description": "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pagination counts only public jobs and returns the last public id as next_cursor when more public jobs exist.",
+"description": "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pagination reads at most four finance pages. Additional reads stop halfway to the request deadline, measured from the initial read. It returns the last public id as next_cursor only if another public job is found. If lookahead stops early, confirmed public jobs are returned with a null cursor.",
 "operationId": "list",
 "parameters": [
 {

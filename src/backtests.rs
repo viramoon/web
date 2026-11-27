@@ -14,9 +14,12 @@ use finance_client::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::time::Duration;
+use tokio::time::{Instant, timeout_at};
 
 const DEFAULT_PAGE_LIMIT: u32 = 20;
 const MAX_PAGE_LIMIT: u32 = 100;
+const MAX_PUBLIC_PAGE_READS: usize = 4;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -234,7 +237,7 @@ pub(crate) async fn detail(
 }
 
 #[utoipa::path(get, path = "/api/v1/backtests",
-    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pagination counts only public jobs and returns the last public id as next_cursor when more public jobs exist.",
+    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pagination reads at most four finance pages. Additional reads stop halfway to the request deadline, measured from the initial read. It returns the last public id as next_cursor only if another public job is found. If lookahead stops early, confirmed public jobs are returned with a null cursor.",
     security((), ("adminBearer" = []), ("adminSession" = [])),
     params(("limit" = Option<u32>, Query, description="1..100, default 20"),
         ("cursor" = Option<i64>, Query, description="Exclusive last id in ascending order")),
@@ -261,11 +264,12 @@ pub(crate) async fn list(
     if !(1..=MAX_PAGE_LIMIT).contains(&limit) || p.cursor.is_some_and(|cursor| cursor < 0) {
         return invalid("Invalid pagination");
     }
-    public_page(p.cursor, limit as usize, |cursor| {
+    let lookahead_budget = Duration::from_millis(s.config.server.request_timeout_ms) / 2;
+    public_page(p, lookahead_budget, |limit, cursor| {
         let finance = &s.finance;
         async move {
             finance
-                .read(|cfg| async move { jobs_api::list(&cfg, p.limit, cursor).await })
+                .read(|cfg| async move { jobs_api::list(&cfg, limit, cursor).await })
                 .await
         }
     })
@@ -275,24 +279,45 @@ pub(crate) async fn list(
 }
 
 async fn public_page<Fut>(
-    mut cursor: Option<i64>,
-    limit: usize,
-    mut read: impl FnMut(Option<i64>) -> Fut,
+    query: Pagination,
+    lookahead_budget: Duration,
+    mut read: impl FnMut(Option<u32>, Option<i64>) -> Fut,
 ) -> Result<models::Page, Fault>
 where
     Fut: Future<Output = Result<models::Page, Fault>> + Send,
 {
+    let limit = query.limit.unwrap_or(DEFAULT_PAGE_LIMIT) as usize;
+    let mut upstream_limit = query.limit;
+    let mut cursor = query.cursor;
     let mut items: Vec<models::Job> = Vec::with_capacity(limit);
-    // Read ahead to the next public job under the request's overall deadline.
-    loop {
-        let page = read(cursor).await?;
+    let deadline = Instant::now() + lookahead_budget;
+    for index in 0..MAX_PUBLIC_PAGE_READS {
+        let page = if index == 0 {
+            read(upstream_limit, cursor).await?
+        } else {
+            if Instant::now() >= deadline {
+                break;
+            }
+            // The initial page succeeded. Optional lookahead can only add public results.
+            let Ok(Ok(page)) = timeout_at(deadline, read(upstream_limit, cursor)).await else {
+                break;
+            };
+            page
+        };
         let next = page.next_cursor.flatten();
         if let Some(next) = next
             && (next <= cursor.unwrap_or(0) || page.items.last().is_none_or(|job| job.id != next))
         {
-            return Err(Fault::invalid_response());
+            if index == 0 {
+                return Err(Fault::invalid_response());
+            }
+            break;
         }
-        for job in page.items.into_iter().filter(is_legacy) {
+        for job in page.items {
+            if !is_legacy(&job) {
+                upstream_limit = Some(MAX_PAGE_LIMIT);
+                continue;
+            }
             if items.len() == limit {
                 return Ok(models::Page {
                     next_cursor: Some(items.last().map(|job| job.id)),
@@ -302,13 +327,14 @@ where
             items.push(job);
         }
         let Some(next) = next else {
-            return Ok(models::Page {
-                items,
-                next_cursor: Some(None),
-            });
+            break;
         };
         cursor = Some(next);
     }
+    Ok(models::Page {
+        items,
+        next_cursor: Some(None),
+    })
 }
 
 #[cfg(test)]

@@ -36,4 +36,5 @@ zeroize = "1"
 tempfile = "3"
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 tokio-tungstenite = "=0.29.0"
