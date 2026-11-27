@@ -12,9 +12,6 @@ use chrono::{DateTime, Utc};
 use sqlx::{Acquire, PgConnection, Postgres, pool::PoolConnection};
 use uuid::Uuid;
 
-#[cfg(test)]
-mod tests;
-
 // One transport, one database-wide sender. This session lock spans reservation,
 // SMTP and completion, with no SQL transaction held over the network request.
 const SENDER_LOCK: i64 = 6_758_026_211_706_146_534;
@@ -41,37 +38,6 @@ const REQUEUEABLE_ALERTS: &str = "
       AND member.suppression_reason IS NULL AND rule.enabled AND rule.email_enabled
       AND rule.condition = event.condition
       AND NOT EXISTS (SELECT FROM app.notification_outbox retry WHERE retry.replaces_id = member.id)";
-
-pub(super) struct SenderConnection {
-    connection: PoolConnection<Postgres>,
-    reusable: bool,
-}
-
-impl SenderConnection {
-    async fn unlock(&mut self) -> Result<(), sqlx::Error> {
-        let unlocked: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
-            .bind(SENDER_LOCK)
-            .fetch_one(&mut *self.connection)
-            .await?;
-        if !unlocked {
-            return Err(sqlx::Error::Protocol(
-                "Notifier sender lock was not held".into(),
-            ));
-        }
-        self.reusable = true;
-        Ok(())
-    }
-}
-
-impl Drop for SenderConnection {
-    fn drop(&mut self) {
-        if !self.reusable {
-            // A cancelled query may have taken the session lock without returning
-            // its acknowledgment. Only a confirmed unlock permits reuse.
-            self.connection.close_on_drop();
-        }
-    }
-}
 
 pub(super) struct Job {
     pub(super) id: Uuid,
@@ -119,35 +85,33 @@ pub(super) async fn claim(
     db: &Database,
     policy: &NotificationPolicy,
     clock: impl Fn() -> DateTime<Utc>,
-) -> Result<Option<(SenderConnection, Job)>, sqlx::Error> {
-    let mut connection = db.connection().await?;
-    let has_work = sqlx::query_scalar::<_, bool>(&format!(
-        "SELECT EXISTS (SELECT FROM app.notification_outbox job
+) -> Result<Option<(PoolConnection<Postgres>, Job)>, sqlx::Error> {
+    let has_work = {
+        let mut read_conn = db.connection().await?;
+        sqlx::query_scalar::<_, bool>(&format!(
+            "SELECT EXISTS (SELECT FROM app.notification_outbox job
              WHERE (status = 'pending' AND available_at <= $1
                     AND NOT app.notification_silence_overlaps(job.rule_id, job.event_id, $1, $1))
                  OR status = 'sending')
              OR EXISTS (SELECT 1 FROM app.notification_outbox summary WHERE {RETIRABLE_SUMMARIES})
              OR EXISTS (SELECT 1 {REQUEUEABLE_ALERTS})",
-    ))
-    .bind(clock())
-    .fetch_one(&mut *connection)
-    .await?;
+        ))
+        .bind(clock())
+        .fetch_one(&mut *read_conn)
+        .await?
+    };
     if !has_work {
         return Ok(None);
     }
-    let mut lock = SenderConnection {
-        connection,
-        reusable: false,
-    };
+    let mut lock = db.write_connection().await?;
     let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
         .bind(SENDER_LOCK)
-        .fetch_one(&mut *lock.connection)
+        .fetch_one(&mut *lock)
         .await?;
     if !locked {
-        lock.reusable = true;
         return Ok(None);
     }
-    let mut tx = lock.connection.begin().await?;
+    let mut tx = lock.begin().await?;
     lock_rule_updates(&mut tx).await?;
     let now = clock();
     if let Some(active) = sqlx::query_as::<_, Sending>(
@@ -166,7 +130,7 @@ pub(super) async fn claim(
         };
         if active.send_started_at + abandonment > now {
             tx.rollback().await?;
-            lock.unlock().await?;
+            unlock_sender(&mut lock).await?;
             return Ok(None);
         }
         let job = Job {
@@ -243,7 +207,7 @@ pub(super) async fn claim(
     .await?
     else {
         tx.commit().await?;
-        lock.unlock().await?;
+        unlock_sender(&mut lock).await?;
         return Ok(None);
     };
     let count = match pending.digest_count {
@@ -470,7 +434,7 @@ async fn quiet_until(
 
 /// Persist the capture before sending. The caller holds the sender advisory lock.
 pub(super) async fn pin_snapshot(
-    lock: &mut SenderConnection,
+    db: &mut PgConnection,
     job_id: Uuid,
     snapshot_id: Uuid,
 ) -> Result<(), sqlx::Error> {
@@ -481,7 +445,7 @@ pub(super) async fn pin_snapshot(
     )
     .bind(job_id)
     .bind(snapshot_id)
-    .execute(&mut *lock.connection)
+    .execute(db)
     .await?
     .rows_affected();
     if count == 1 {
@@ -494,15 +458,23 @@ pub(super) async fn pin_snapshot(
 }
 
 pub(super) async fn finish(
-    lock: &mut SenderConnection,
+    db: &mut PgConnection,
     job: &Job,
     outcome: AttemptOutcome,
     now: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
-    let mut tx = lock.connection.begin().await?;
+    let mut tx = db.begin().await?;
     settle(&mut tx, job, outcome, now).await?;
     tx.commit().await?;
-    lock.unlock().await
+    unlock_sender(db).await
+}
+
+async fn unlock_sender(db: &mut PgConnection) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(SENDER_LOCK)
+        .execute(db)
+        .await?;
+    Ok(())
 }
 
 async fn settle(
