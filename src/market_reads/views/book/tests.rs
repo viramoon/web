@@ -93,8 +93,8 @@ fn book_reset_clears_old_levels_even_without_a_followup_delta() {
     let reset = record(
         2,
         instrument,
-        Message::MessageOneOf2(Box::new(models::MessageOneOf2::new(
-            models::message_one_of_2::Kind::Reset,
+        Message::MessageOneOf4(Box::new(models::MessageOneOf4::new(
+            models::message_one_of_4::Kind::Reset,
             models::Reset::new("synthetic_reset".into()),
         ))),
     );

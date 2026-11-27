@@ -126,6 +126,63 @@
         ],
         "type": "object"
       },
+      "BarProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "calendar_id": {
+            "$ref": "#/components/schemas/CalendarId"
+          },
+          "delay_tier": {
+            "$ref": "#/components/schemas/DelayTier"
+          },
+          "display": {
+            "$ref": "#/components/schemas/DisplayPolicy"
+          },
+          "license": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "market_timezone": {
+            "description": "Market timezone label assigned by the publisher. Query times are UTC RFC3339.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "license",
+          "delay_tier",
+          "calendar_id",
+          "market_timezone",
+          "display"
+        ],
+        "type": "object"
+      },
+      "BarSeriesKey": {
+        "additionalProperties": false,
+        "properties": {
+          "adjustment": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "instrument_id": {
+            "$ref": "#/components/schemas/InstrumentId"
+          },
+          "product": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "timeframe": {
+            "$ref": "#/components/schemas/Token"
+          }
+        },
+        "required": [
+          "instrument_id",
+          "source",
+          "product",
+          "timeframe",
+          "adjustment"
+        ],
+        "type": "object"
+      },
       "BlockedOrder": {
         "properties": {
           "bar_volume": {
@@ -300,6 +357,181 @@
         ],
         "type": "object"
       },
+      "CalendarId": {
+        "pattern": "^[A-Z0-9][A-Z0-9_-]{0,31}(?![\\s\\S])",
+        "type": "string"
+      },
+      "ChartBar": {
+        "properties": {
+          "bar": {
+            "$ref": "#/components/schemas/ProjectedBar"
+          },
+          "indicator_values": {
+            "items": {
+              "$ref": "#/components/schemas/ChartValue"
+            },
+            "type": "array"
+          },
+          "provisional": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bar",
+          "provisional",
+          "indicator_values"
+        ],
+        "type": "object"
+      },
+      "ChartBars": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ChartContext"
+          },
+          {
+            "properties": {
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/ChartBar"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "rows"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ChartContext": {
+        "properties": {
+          "as_of": {
+            "description": "Publication time of the latest revision-resolved snapshot.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/ChartCoverage"
+          },
+          "indicators": {
+            "description": "In request order, with the same indexes as each row's indicator values.",
+            "items": {
+              "$ref": "#/components/schemas/IndicatorRequest"
+            },
+            "type": "array"
+          },
+          "next_start": {
+            "description": "Inclusive start time for the next page, or null when exhausted.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/BarProvenance"
+          },
+          "series": {
+            "$ref": "#/components/schemas/BarSeriesKey"
+          }
+        },
+        "required": [
+          "series",
+          "provenance",
+          "as_of",
+          "coverage",
+          "next_start",
+          "indicators"
+        ],
+        "type": "object"
+      },
+      "ChartCoverage": {
+        "properties": {
+          "closed_bars": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_closed_open_ts": {
+            "description": "Earliest closed bar in the snapshot, if any. Internal gaps may exist.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history_complete": {
+            "description": "All closed observations from the publisher's declared calculation origin.",
+            "type": "boolean"
+          },
+          "last_closed_end_ts": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "returned_closed_bars": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "returned_provisional": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "history_complete",
+          "first_closed_open_ts",
+          "last_closed_end_ts",
+          "closed_bars",
+          "returned_closed_bars",
+          "returned_provisional"
+        ],
+        "type": "object"
+      },
+      "ChartValue": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/ValueStatus"
+          },
+          "values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Named exact decimal strings. Empty while warming up or when undefined.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "status",
+          "values"
+        ],
+        "type": "object"
+      },
+      "ChartValues": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ChartContext"
+          },
+          {
+            "properties": {
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/ValueRow"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "rows"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "Check": {
         "properties": {
           "name": {
@@ -455,6 +687,20 @@
         "pattern": "^(?=-?(?:[0-9][.]?){1,28}(?![\\s\\S]))-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?![\\s\\S])",
         "type": "string"
       },
+      "DelayTier": {
+        "enum": [
+          "realtime",
+          "delayed",
+          "replay"
+        ],
+        "type": "string"
+      },
+      "DisplayPolicy": {
+        "enum": [
+          "authorized_display"
+        ],
+        "type": "string"
+      },
       "ErrorBody": {
         "properties": {
           "error": {
@@ -595,7 +841,11 @@
                 "properties": {
                   "kind": {
                     "not": {
-                      "const": "perpetual_context"
+                      "enum": [
+                        "perpetual_context",
+                        "funding_rate",
+                        "open_interest"
+                      ]
                     }
                   },
                   "schema_version": {
@@ -609,7 +859,15 @@
                     "const": "perpetual"
                   },
                   "kind": {
-                    "const": "perpetual_context"
+                    "enum": [
+                      "perpetual_context",
+                      "funding_rate",
+                      "open_interest",
+                      "gap",
+                      "reset",
+                      "heartbeat",
+                      "status"
+                    ]
                   },
                   "revision": {
                     "const": "0"
@@ -1250,6 +1508,30 @@
         ],
         "type": "object"
       },
+      "FundingRate": {
+        "additionalProperties": false,
+        "properties": {
+          "next_funding_ts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)(?![\\s\\S])",
+                "type": "string"
+              }
+            ]
+          },
+          "rate": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "rate",
+          "next_funding_ts"
+        ],
+        "type": "object"
+      },
       "Gap": {
         "additionalProperties": false,
         "properties": {
@@ -1333,6 +1615,135 @@
           "cost_bps",
           "rule",
           "comparisons"
+        ],
+        "type": "object"
+      },
+      "IndicatorCatalog": {
+        "properties": {
+          "definitions": {
+            "items": {
+              "$ref": "#/components/schemas/IndicatorDefinition"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "definitions"
+        ],
+        "type": "object"
+      },
+      "IndicatorDefinition": {
+        "properties": {
+          "ddof": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "decimal_places": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable component identifier with an explicit algorithm version.",
+            "type": "string"
+          },
+          "inputs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "missing_bar": {
+            "type": "string"
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "parameters": {
+            "items": {
+              "$ref": "#/components/schemas/IndicatorParameter"
+            },
+            "type": "array"
+          },
+          "price_basis": {
+            "type": "string"
+          },
+          "reset": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rounding": {
+            "type": "string"
+          },
+          "seed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          },
+          "warmup": {
+            "description": "Number of earlier observed bars required before the current bar can yield a value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "parameters",
+          "inputs",
+          "outputs",
+          "unit",
+          "warmup",
+          "missing_bar",
+          "price_basis",
+          "rounding",
+          "decimal_places"
+        ],
+        "type": "object"
+      },
+      "IndicatorParameter": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/ParameterRule"
+          }
+        },
+        "required": [
+          "name",
+          "rule"
+        ],
+        "type": "object"
+      },
+      "IndicatorRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "params": {
+            "type": "object"
+          },
+          "use": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "use",
+          "params"
         ],
         "type": "object"
       },
@@ -1806,6 +2217,42 @@
             "properties": {
               "kind": {
                 "enum": [
+                  "funding_rate"
+                ],
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/FundingRate"
+              }
+            },
+            "required": [
+              "payload",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "open_interest"
+                ],
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/OpenInterest"
+              }
+            },
+            "required": [
+              "payload",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
                   "correction"
                 ],
                 "type": "string"
@@ -1933,6 +2380,18 @@
         "minLength": 1,
         "type": "string"
       },
+      "OpenInterest": {
+        "additionalProperties": false,
+        "properties": {
+          "quantity": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "quantity"
+        ],
+        "type": "object"
+      },
       "Page": {
         "properties": {
           "items": {
@@ -2030,6 +2489,54 @@
           }
         ]
       },
+      "ParameterRule": {
+        "oneOf": [
+          {
+            "properties": {
+              "max": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "min": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "enum": [
+                  "period"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "min",
+              "max",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "text_literal"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value",
+              "type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "PerpetualContext": {
         "additionalProperties": false,
         "properties": {
@@ -2083,6 +2590,55 @@
           "record_local",
           "derive_non_display",
           "backup_personal_drive"
+        ],
+        "type": "object"
+      },
+      "ProjectedBar": {
+        "additionalProperties": false,
+        "properties": {
+          "close": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "end_ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "first_available_ts": {
+            "description": "Availability of this bar revision, independent of the derived chart values.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "high": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "low": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "open": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "open_ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "trading_day": {
+            "format": "date",
+            "type": "string"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "open_ts",
+          "end_ts",
+          "first_available_ts",
+          "trading_day",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume"
         ],
         "type": "object"
       },
@@ -2579,6 +3135,53 @@
       },
       "U64Text": {
         "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)(?![\\s\\S])",
+        "type": "string"
+      },
+      "ValueRow": {
+        "properties": {
+          "end_ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "first_available_ts": {
+            "description": "Availability of the bar revision. Derived values use the full latest snapshot.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "indicator_values": {
+            "items": {
+              "$ref": "#/components/schemas/ChartValue"
+            },
+            "type": "array"
+          },
+          "open_ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "provisional": {
+            "type": "boolean"
+          },
+          "trading_day": {
+            "format": "date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "open_ts",
+          "end_ts",
+          "first_available_ts",
+          "trading_day",
+          "provisional",
+          "indicator_values"
+        ],
+        "type": "object"
+      },
+      "ValueStatus": {
+        "enum": [
+          "warmup",
+          "ready",
+          "undefined"
+        ],
         "type": "string"
       },
       "Venue": {
@@ -3332,6 +3935,335 @@
         },
         "tags": [
           "factor_read"
+        ]
+      }
+    },
+    "/api/v1/indicators": {
+      "get": {
+        "operationId": "catalog",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndicatorCatalog"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Discover exact indicator versions, parameter ranges and calculation rules.",
+        "tags": [
+          "bars"
+        ]
+      }
+    },
+    "/api/v1/indicators/values": {
+      "get": {
+        "operationId": "values",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "instrument_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/InstrumentId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Token"
+            }
+          },
+          {
+            "in": "query",
+            "name": "product",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Token"
+            }
+          },
+          {
+            "description": "Existing projected period, e.g. `1m`, `1h`, or `1d`.",
+            "in": "query",
+            "name": "timeframe",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Token"
+            }
+          },
+          {
+            "description": "Exact registered price-basis label used by the publisher.",
+            "in": "query",
+            "name": "adjustment",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Token"
+            }
+          },
+          {
+            "description": "Inclusive lower bound on bar open time, RFC3339.",
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive upper bound on bar open time, RFC3339.",
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_provisional",
+            "required": false,
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Percent-encoded JSON array of at least one use and params object.",
+            "in": "query",
+            "name": "indicators",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartValues"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Read indicator points for a chart series. At least one indicator is required.",
+        "tags": [
+          "bars"
+        ]
+      }
+    },
+    "/api/v1/market/bars": {
+      "get": {
+        "operationId": "chart",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "instrument_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/InstrumentId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Token"
+            }
+          },
+          {
+            "in": "query",
+            "name": "product",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Token"
+            }
+          },
+          {
+            "description": "Existing projected period, e.g. `1m`, `1h`, or `1d`.",
+            "in": "query",
+            "name": "timeframe",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Token"
+            }
+          },
+          {
+            "description": "Exact registered price-basis label used by the publisher.",
+            "in": "query",
+            "name": "adjustment",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Token"
+            }
+          },
+          {
+            "description": "Inclusive lower bound on bar open time, RFC3339.",
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive upper bound on bar open time, RFC3339.",
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_provisional",
+            "required": false,
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Percent-encoded JSON array of use and params objects.",
+            "in": "query",
+            "name": "indicators",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartBars"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Read a page of chart bars and optionally calculate registered indicators.",
+        "tags": [
+          "bars"
         ]
       }
     },

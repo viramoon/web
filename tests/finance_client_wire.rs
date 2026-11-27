@@ -1,5 +1,83 @@
-use finance_client::models::{Accepted, BacktestSummary, Page, Window};
+use finance_client::models::{
+    Accepted, BacktestSummary, ChartBars, Event, MarketStatus, Page, Window,
+};
 use serde_json::{Value, json};
+
+#[test]
+fn finance_read_stream_exports_replay_v1_frames_without_precision_loss() {
+    let samples: Value =
+        serde_json::from_str(include_str!("../openapi/finance.read-stream-examples.json")).unwrap();
+    let ws: Value =
+        serde_json::from_str(include_str!("../openapi/finance.market-ws.schema.json")).unwrap();
+    let sse: Value = serde_json::from_str(include_str!(
+        "../openapi/finance.market-status-sse.schema.json"
+    ))
+    .unwrap();
+    for schema in [&ws, &sse] {
+        assert_eq!(schema["$defs"]["SchemaVersion"]["enum"], json!(["1.0"]));
+    }
+    let mut big_seq_found = false;
+    for wire in samples["market_ws"].as_array().unwrap() {
+        let event: Event = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(wire["schema_version"], "1.0");
+        big_seq_found |= event.seq.parse::<u64>().unwrap() > (1 << 53);
+        assert_eq!(serde_json::to_value(event).unwrap(), *wire);
+    }
+    assert!(big_seq_found);
+
+    let sse_messages = samples["market_status_sse"].as_array().unwrap();
+    assert_eq!(sse_messages.len(), 2);
+    for (wire, id) in sse_messages.iter().zip([u64::MAX - 1, u64::MAX]) {
+        let status: MarketStatus = serde_json::from_value(wire["data"]["status"].clone()).unwrap();
+        assert_eq!(wire["id"], id.to_string());
+        assert_eq!(wire["event"], "market_status");
+        assert_eq!(wire["data"]["schema_version"], "1.0");
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            wire["data"]["status"]
+        );
+    }
+}
+
+#[test]
+fn generated_chart_models_preserve_ohlcv_and_indicator_decimal_text() {
+    // Fixed synthetic close and volume above JavaScript's safe integer range.
+    let price = "9007199254740993.000000000001";
+    let size = "9007199254740993.0000";
+    let opening = "2026-01-01T00:00:00Z";
+    let closing = "2026-01-01T00:01:00Z";
+    let mut wire = json!({
+        "series": {"instrument_id": "SYNTH.XNYS", "source": "synthetic",
+            "product": "bars", "adjustment": "raw", "timeframe": "1m"},
+        "provenance": {"license": "fixture.synthetic", "delay_tier": "replay",
+            "calendar_id": "XNYS", "market_timezone": "America/New_York",
+            "display": "authorized_display"},
+        "as_of": closing,
+        "coverage": {"history_complete": true, "first_closed_open_ts": opening,
+            "last_closed_end_ts": closing, "closed_bars": 1,
+            "returned_closed_bars": 1, "returned_provisional": false},
+        "next_start": null,
+        "indicators": [{"use": "indicator.sma@1.0.0", "params": {"period": 2}}],
+        "rows": [{
+            "bar": {"open_ts": opening, "end_ts": closing, "first_available_ts": closing,
+                "trading_day": "2026-01-01", "open": price, "high": price, "low": price,
+                "close": price, "volume": size},
+            "provisional": false,
+            "indicator_values": [{"status": "warmup", "values": {}}]
+        }]
+    });
+    let chart: ChartBars = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(chart.rows[0].bar.close, price);
+    assert_eq!(chart.rows[0].bar.volume, size);
+    assert_eq!(serde_json::to_value(chart).unwrap(), wire);
+    wire["rows"][0]["indicator_values"] = json!([{"status": "ready", "values": {"sma": price}}]);
+    let chart: ChartBars = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(chart.rows[0].indicator_values[0].values["sma"], price);
+    assert_eq!(serde_json::to_value(chart).unwrap(), wire);
+
+    wire["rows"][0]["indicator_values"][0]["values"]["sma"] = json!(1);
+    assert!(serde_json::from_value::<ChartBars>(wire).is_err());
+}
 
 #[test]
 fn preserves_decimal_text_and_unsigned_counts_across_the_full_finance_range() {

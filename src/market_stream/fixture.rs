@@ -2,9 +2,9 @@
 
 use finance_client::models::{
     AssetKind, BookDelta, BookLevel, BookSide, BookSnapshot, BookUpdate, Event,
-    MarketMessageOneOf2, MarketMessageOneOf3, MarketWalPage, Message, MessageOneOf2, MessageOneOf5,
+    MarketMessageOneOf2, MarketMessageOneOf3, MarketWalPage, Message, MessageOneOf4, MessageOneOf7,
     PerpetualContext, ProductPolicy, Reset, SchemaVersion, WalRecord, market_message_one_of_2,
-    market_message_one_of_3, message_one_of_2, message_one_of_5,
+    market_message_one_of_3, message_one_of_4, message_one_of_7,
 };
 
 pub(super) const SEQ: u64 = 9_007_199_254_740_993;
@@ -53,16 +53,16 @@ pub(super) fn delta(position: u64, epoch: u64, seq: u64) -> WalRecord {
 }
 
 pub(super) fn reset(position: u64, epoch: u64) -> WalRecord {
-    let message = Message::MessageOneOf2(Box::new(MessageOneOf2::new(
-        message_one_of_2::Kind::Reset,
+    let message = Message::MessageOneOf4(Box::new(MessageOneOf4::new(
+        message_one_of_4::Kind::Reset,
         Reset::new("synthetic_reset".into()),
     )));
     record(position, epoch, 0, message)
 }
 
 pub(super) fn perpetual_context(position: u64, epoch: u64, seq: u64) -> WalRecord {
-    let message = Message::MessageOneOf5(Box::new(MessageOneOf5::new(
-        message_one_of_5::Kind::PerpetualContext,
+    let message = Message::MessageOneOf7(Box::new(MessageOneOf7::new(
+        message_one_of_7::Kind::PerpetualContext,
         PerpetualContext::new("-0.00100".into(), PRICE.into(), QUANTITY.into()),
     )));
     let mut record = record(position, epoch, seq, message);

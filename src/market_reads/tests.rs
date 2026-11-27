@@ -49,9 +49,9 @@ fn generated_event_keeps_all_tagged_payloads_and_exact_numeric_text() {
             "gap",
             json!({"from_ts": "1", "to_ts": "2", "reason": "rotation"}),
         ),
-        ("reset", json!({"reason": "disconnected"})),
         ("heartbeat", json!({})),
         ("status", json!({"state": "degraded"})),
+        ("reset", json!({"reason": "disconnected"})),
         (
             "perpetual_context",
             json!({"funding_rate": "-0.000100", "mark_price": PRICE, "open_interest": SIZE}),
@@ -67,6 +67,69 @@ fn generated_event_keeps_all_tagged_payloads_and_exact_numeric_text() {
     let mut invalid = event("trade", trade());
     invalid.as_object_mut().unwrap().remove("exchange_ts");
     assert!(serde_json::from_value::<models::Event>(invalid).is_err());
+}
+
+#[test]
+fn wal_accepts_mixed_versions_with_exact_context_and_v2_control_payloads() {
+    let mut events = vec![event("trade", trade())];
+    for (kind, payload) in [
+        (
+            "funding_rate",
+            json!({"rate": "-0.000100", "next_funding_ts": POSITION}),
+        ),
+        (
+            "funding_rate",
+            json!({"rate": "-0.000100", "next_funding_ts": null}),
+        ),
+        ("open_interest", json!({"quantity": SIZE})),
+        (
+            "gap",
+            json!({"from_ts": "1", "to_ts": "2", "reason": "rotation"}),
+        ),
+        ("reset", json!({"reason": "disconnected"})),
+        ("heartbeat", json!({})),
+        ("status", json!({"state": "degraded"})),
+    ] {
+        let mut wire = event(kind, payload);
+        wire["schema_version"] = json!("2.0");
+        wire["asset_kind"] = json!("perpetual");
+        wire["instrument_id"] = json!("SYNTH.XTEST");
+        wire["venue"] = json!("XTEST");
+        if matches!(kind, "funding_rate" | "open_interest") {
+            wire["exchange_ts"] = json!("9007199254740992");
+        }
+        events.push(wire);
+    }
+    let mut wire = wal_rows(events);
+    let reset = wire["records"].as_array_mut().unwrap().last_mut().unwrap();
+    reset["event"]["epoch"] = json!("8");
+    reset["event"]["seq"] = json!("0");
+    let page: models::MarketWalPage = serde_json::from_value(wire.clone()).unwrap();
+    for record in &page.records {
+        assert!(check_record(&page.access, record).is_ok());
+    }
+    assert_eq!(serde_json::to_value(&page).unwrap(), wire);
+
+    let mut v1_funding_rate = page.records[1].clone();
+    v1_funding_rate.event.schema_version = models::SchemaVersion::Variant10;
+    let mut v2_trade = page.records[0].clone();
+    v2_trade.event.schema_version = models::SchemaVersion::Variant20;
+    v2_trade.event.asset_kind = models::AssetKind::Perpetual;
+    let mut v2_stock = page.records[3].clone();
+    v2_stock.event.asset_kind = models::AssetKind::Stock;
+    let mut v2_revision = page.records[3].clone();
+    v2_revision.event.revision = "1".into();
+    for invalid in [v1_funding_rate, v2_trade, v2_stock, v2_revision] {
+        assert!(matches!(
+            check_record(&page.access, &invalid),
+            Err(MarketReadError::InvalidResponse)
+        ));
+    }
+    for (index, field) in [(1, "rate"), (3, "quantity")] {
+        let mut invalid = wire["records"][index]["event"].clone();
+        invalid["payload"][field] = json!(1);
+        assert!(serde_json::from_value::<models::Event>(invalid).is_err());
+    }
 }
 
 struct Exchange {
@@ -288,6 +351,33 @@ fn public_openapi_preserves_f1_composition_and_declares_restricted_reads() {
             json!([{"adminBearer": []}, {"adminSession": []}])
         );
         assert!(operation["responses"].get("429").is_some());
+    }
+}
+
+#[test]
+fn public_openapi_keeps_new_event_components_and_existing_chart_routes() {
+    let spec = crate::openapi();
+    let finance: Value =
+        serde_json::from_str(include_str!("../../openapi/finance.openapi.json")).unwrap();
+    for name in ["FundingRate", "OpenInterest"] {
+        let expected = &finance["components"]["schemas"][name];
+        assert!(expected.is_object());
+        assert_eq!(&spec["components"]["schemas"][name], expected);
+    }
+    for (path, response_schema) in [
+        ("/api/v1/market/bars", "MarketHistory"),
+        ("/api/v1/indicators", "MarketIndicators"),
+        ("/api/v1/indicators/values", "MarketIndicatorValues"),
+    ] {
+        let response = &spec["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]
+            ["schema"]["$ref"];
+        assert_eq!(response, &format!("#/components/schemas/{response_schema}"));
+        assert_ne!(
+            response,
+            &finance["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            "{path} resolves in its own contract"
+        );
     }
 }
 

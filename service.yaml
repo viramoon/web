@@ -31,6 +31,7 @@ environment:
   WEB_QUALITY_STATUS_FILE: 可选，授权的采集质量快照
 finance_http:
   config_section: finance
+  contract_notes: docs/api.md#finance-契约版本
   cloudbox: {connect_timeout_ms: 3000, request_timeout_ms: 3000, backoff_ms: 150, circuit_failure_threshold: 3, circuit_open_ms: 10000}
   stable: {connect_timeout_ms: 1000, request_timeout_ms: 2000, backoff_ms: 100, circuit_failure_threshold: 5, circuit_open_ms: 5000}
   max_read_retries: 2
@@ -57,6 +58,7 @@ market_gateway:
   market_stream:
     path: /api/v1/stream/market
     protocol: websocket
+    event_schema: openapi/finance.market-ws.schema.json
     source: finance_committed_wal
     max_connections: 16
     max_command_bytes: 4096

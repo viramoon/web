@@ -152,13 +152,26 @@ fn check_record(
 }
 
 pub(crate) fn event_version_matches(event: &models::Event) -> bool {
-    let perpetual_context = matches!(event.message.as_ref(), models::Message::MessageOneOf5(_));
+    use models::Message;
+
+    let message = event.message.as_ref();
+    let perpetual_context = matches!(
+        message,
+        Message::MessageOneOf(_) | Message::MessageOneOf1(_) | Message::MessageOneOf7(_)
+    );
     match event.schema_version {
         models::SchemaVersion::Variant10 => !perpetual_context,
         models::SchemaVersion::Variant20 => {
-            perpetual_context
-                && event.asset_kind == models::AssetKind::Perpetual
+            event.asset_kind == models::AssetKind::Perpetual
                 && event.revision == "0"
+                && (perpetual_context
+                    || matches!(
+                        message,
+                        Message::MessageOneOf3(_)
+                            | Message::MessageOneOf4(_)
+                            | Message::MessageOneOf5(_)
+                            | Message::MessageOneOf6(_)
+                    ))
         }
     }
 }
@@ -396,6 +409,7 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
         "Correction",
         "DecimalText",
         "Event",
+        "FundingRate",
         "Gap",
         "GapCause",
         "Heartbeat",
@@ -407,6 +421,7 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
         "MarketWatermarks",
         "Message",
         "NonEmptyText",
+        "OpenInterest",
         "PerpetualContext",
         "ProductPolicy",
         "ProjectedMarketEvent",

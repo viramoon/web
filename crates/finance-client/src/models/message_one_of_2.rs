@@ -16,11 +16,11 @@ pub struct MessageOneOf2 {
     #[serde(rename = "kind")]
     pub kind: Kind,
     #[serde(rename = "payload")]
-    pub payload: Box<models::Reset>,
+    pub payload: Box<models::Correction>,
 }
 
 impl MessageOneOf2 {
-    pub fn new(kind: Kind, payload: models::Reset) -> MessageOneOf2 {
+    pub fn new(kind: Kind, payload: models::Correction) -> MessageOneOf2 {
         MessageOneOf2 {
             kind,
             payload: Box::new(payload),
@@ -30,12 +30,12 @@ impl MessageOneOf2 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Kind {
-    #[serde(rename = "reset")]
-    Reset,
+    #[serde(rename = "correction")]
+    Correction,
 }
 
 impl Default for Kind {
     fn default() -> Kind {
-        Self::Reset
+        Self::Correction
     }
 }

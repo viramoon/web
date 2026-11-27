@@ -113,6 +113,7 @@ impl From<&str> for ContentType {
     }
 }
 
+pub mod bars_api;
 pub mod bundle_jobs_api;
 pub mod default_api;
 pub mod factor_read_api;

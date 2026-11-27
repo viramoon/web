@@ -18,6 +18,30 @@ CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.opena
 
 本仓 CI 在临时目录校验导出内容，校验结果只显示状态。web 导出使用排序键和单空格缩进，保留 F10a 的 JSON Schema 关键字并为 WG 的文件上限留出余量。OpenAPI 中的 example、examples 和生成客户端的样例须登记合成来源。生成快照与客户端仍使用各自的既有导出和再生成流程。
 
+## finance 契约版本
+
+W6 将 [finance 来源提交](../openapi/finance.commit) 从 `617ed83` 升到 `fc5e153e9727181f5748659c0610b2fbc2b49769`。以下是两版 [finance OpenAPI](../openapi/finance.openapi.json) 的完整路径与 schema 差异。已有 HTTP 路径及操作定义均保留。
+
+| 变化 | 路径或 schema | 含义 |
+| --- | --- | --- |
+| 新增 GET | `/api/v1/market/bars` | F6 主图时钟、来源、覆盖、精确 OHLCV 与逐行指标。 |
+| 新增 GET | `/api/v1/indicators` | F6 版本化指标、参数规则、输出与口径目录。 |
+| 新增 GET | `/api/v1/indicators/values` | F6 保留 bar 时钟、覆盖与预热状态的指标值。 |
+| 新增 schema | `BarProvenance`、`BarSeriesKey`、`CalendarId`、`ChartBar`、`ChartBars`、`ChartContext`、`ChartCoverage`、`ChartValue`、`ChartValues`、`DelayTier`、`DisplayPolicy`、`IndicatorCatalog`、`IndicatorDefinition`、`IndicatorParameter`、`IndicatorRequest`、`ParameterRule`、`ProjectedBar`、`ValueRow`、`ValueStatus` | F6 新路径的响应及关联类型。价格、数量和指标值保留十进制文本。 |
+| 新增 schema | `FundingRate`、`OpenInterest` | F4 将费率、可空的下次资金费率时间及持仓量建模为独立 payload。 |
+| 更新 schema | `Message` | 新增 `funding_rate`、`open_interest` 两个分支。 |
+| 更新 schema | `Event` | 2.0 永续事件的 `revision` 为 `"0"`。允许既有 `perpetual_context`、两个新增分支，以及 `gap`、`reset`、`heartbeat`、`status`。1.0 保留原消息集合。 |
+
+F9c 的场所深度、F9b 的行情线预算、F12 的历史期权与费用估算、F13 的回测 worker 分离在此版本都没有独立的 HTTP 路径或 schema 差异。F4 更新上游 `protocol/v2/event.schema.json` 与 `protocol/v2/capability.schema.json`，分别加入独立上下文与 2.0 控制事件、独立上下文产品能力。F6 更新上游 `strategies/schema/strategy-bundle-v1.schema.json` 与 `strategies/schema/component-registry-v1.json`，增加指标注册和参数规则。这些上游文件由 finance 维护。[锁定版本的行情协议](https://github.com/viramoon/finance/tree/fc5e153e9727181f5748659c0610b2fbc2b49769/protocol)
+
+同一提交的 1.0 读流产物保存在 web，内容与 `617ed83` 的导出一致。[市场 WS schema](../openapi/finance.market-ws.schema.json) · [行情状态 SSE schema](../openapi/finance.market-status-sse.schema.json) · [合成回放样本](../openapi/finance.read-stream-examples.json)
+
+web 原有路径、权限与查询参数保持原状。[web OpenAPI](../openapi/web.openapi.json) 的 `Event`、`Message`、`FundingRate`、`OpenInterest` 对应新版 WAL 与投影响应。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制和大整数文本。web 已有的 bars 和指标端点仍使用 W2a 的 WAL 视图。市场 WebSocket 继续发 1.0 数据帧，遇到 2.0 事件发出 `unsupported_version` 重置。web 运维 SSE 仍按下文的 `/events` 契约运行。
+
+合并后，frontend 按已合并的 web SHA 更新 `openapi/web.commit`、快照及生成客户端。fertile 在对应 frontend 变更合并后更新 gitlinks，并用 finance `fc5e153` 和已合并的 web 提交运行 T3 契约比对和隔离复测。[生成及校验流程](../src/finance_client/README.md)
+
+## 请求与静态资源
+
 路由未命中时，解码后首段为 `api` 或 `healthz` 的路径返回 JSON 404，判断时忽略空段和 `.` 段。错误结构为 `error.code`、`error.message`，日志由 `X-Request-Id` 关联。
 
 静态文件以 `WEB_STATIC_ROOT` 为根提供，许可证和声明的 URL 为 `/third-party/lightweight-charts/LICENSE` 和 `/third-party/lightweight-charts/NOTICE`。解码并忽略空段和 `.` 段后，恰为 `/NOTICE` 的 GET 返回同一声明文件的原始正文，声明文件缺失时返回 404。对静态资源和页面，解码后含 `..` 段的 GET、HEAD 在读取文件前返回 404。缺失的 `/assets`、`/static`、`/third-party` 及其子路径返回 404。解码后末段含 `.` 或恰为 `LICENSE`、`NOTICE` 的缺失路径也返回 404。其他有效路径的页面 GET（如 `/dashboard`）在未命中时回退到 `index.html`。完整判定和缓存行为见 [静态托管](../src/static/README.md)。

@@ -16,11 +16,11 @@ pub struct MessageOneOf1 {
     #[serde(rename = "kind")]
     pub kind: Kind,
     #[serde(rename = "payload")]
-    pub payload: Box<models::Gap>,
+    pub payload: Box<models::OpenInterest>,
 }
 
 impl MessageOneOf1 {
-    pub fn new(kind: Kind, payload: models::Gap) -> MessageOneOf1 {
+    pub fn new(kind: Kind, payload: models::OpenInterest) -> MessageOneOf1 {
         MessageOneOf1 {
             kind,
             payload: Box::new(payload),
@@ -30,12 +30,12 @@ impl MessageOneOf1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Kind {
-    #[serde(rename = "gap")]
-    Gap,
+    #[serde(rename = "open_interest")]
+    OpenInterest,
 }
 
 impl Default for Kind {
     fn default() -> Kind {
-        Self::Gap
+        Self::OpenInterest
     }
 }

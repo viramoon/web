@@ -1,0 +1,595 @@
+{
+  "$defs": {
+    "AssetKind": {
+      "enum": [
+        "stock",
+        "etf",
+        "index",
+        "spot",
+        "perpetual",
+        "option",
+        "future"
+      ],
+      "type": "string"
+    },
+    "BookDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "updates": {
+          "items": {
+            "$ref": "#/$defs/BookUpdate"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "updates"
+      ],
+      "type": "object"
+    },
+    "BookLevel": {
+      "additionalProperties": false,
+      "properties": {
+        "price": {
+          "$ref": "#/$defs/DecimalText"
+        },
+        "quantity": {
+          "$ref": "#/$defs/DecimalText"
+        }
+      },
+      "required": [
+        "price",
+        "quantity"
+      ],
+      "type": "object"
+    },
+    "BookSide": {
+      "enum": [
+        "bid",
+        "ask"
+      ],
+      "type": "string"
+    },
+    "BookSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "asks": {
+          "items": {
+            "$ref": "#/$defs/BookLevel"
+          },
+          "type": "array"
+        },
+        "bids": {
+          "items": {
+            "$ref": "#/$defs/BookLevel"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "bids",
+        "asks"
+      ],
+      "type": "object"
+    },
+    "BookUpdate": {
+      "additionalProperties": false,
+      "properties": {
+        "price": {
+          "$ref": "#/$defs/DecimalText"
+        },
+        "quantity": {
+          "$ref": "#/$defs/DecimalText"
+        },
+        "side": {
+          "$ref": "#/$defs/BookSide"
+        }
+      },
+      "required": [
+        "side",
+        "price",
+        "quantity"
+      ],
+      "type": "object"
+    },
+    "ClosedBar": {
+      "additionalProperties": false,
+      "properties": {
+        "close": {
+          "$ref": "#/$defs/DecimalText"
+        },
+        "high": {
+          "$ref": "#/$defs/DecimalText"
+        },
+        "low": {
+          "$ref": "#/$defs/DecimalText"
+        },
+        "open": {
+          "$ref": "#/$defs/DecimalText"
+        },
+        "open_ts": {
+          "$ref": "#/$defs/U64Text"
+        },
+        "volume": {
+          "$ref": "#/$defs/DecimalText"
+        }
+      },
+      "required": [
+        "open_ts",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume"
+      ],
+      "type": "object"
+    },
+    "ConnectionState": {
+      "enum": [
+        "connected",
+        "degraded",
+        "disconnected"
+      ],
+      "type": "string"
+    },
+    "Correction": {
+      "additionalProperties": false,
+      "properties": {
+        "replacement": {
+          "$ref": "#/$defs/MarketMessage"
+        },
+        "target_epoch": {
+          "$ref": "#/$defs/U64Text"
+        },
+        "target_seq": {
+          "$ref": "#/$defs/U64Text"
+        }
+      },
+      "required": [
+        "target_epoch",
+        "target_seq",
+        "replacement"
+      ],
+      "type": "object"
+    },
+    "DecimalText": {
+      "pattern": "^(?=-?(?:[0-9][.]?){1,28}(?![\\s\\S]))-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?![\\s\\S])",
+      "type": "string"
+    },
+    "Gap": {
+      "additionalProperties": false,
+      "properties": {
+        "from_ts": {
+          "$ref": "#/$defs/U64Text"
+        },
+        "reason": {
+          "$ref": "#/$defs/NonEmptyText"
+        },
+        "to_ts": {
+          "$ref": "#/$defs/U64Text"
+        }
+      },
+      "required": [
+        "from_ts",
+        "to_ts",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "Heartbeat": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "InstrumentId": {
+      "pattern": "^(?=[A-Z0-9_.-]{1,96}\\.[A-Z0-9][A-Z0-9_-]{0,31}(?![\\s\\S]))[A-Z0-9][A-Z0-9_-]*(?:\\.[A-Z0-9][A-Z0-9_-]*)*\\.[A-Z0-9][A-Z0-9_-]{0,31}(?![\\s\\S])",
+      "type": "string"
+    },
+    "MarketMessage": {
+      "description": "The complete replacement value carried by a correction.",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "bar_closed"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/ClosedBar"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "trade"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/Trade"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/BookSnapshot"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "delta"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/BookDelta"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "Message": {
+      "description": "The version 1.0 kind tag and its corresponding payload.",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "bar_closed"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/ClosedBar"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "trade"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/Trade"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/BookSnapshot"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "delta"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/BookDelta"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "correction"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/Correction"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "gap"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/Gap"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "reset"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/Reset"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "heartbeat"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/Heartbeat"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "status"
+              ],
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/$defs/Status"
+            }
+          },
+          "required": [
+            "payload",
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NonEmptyText": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "Reset": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/NonEmptyText"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "SchemaVersion": {
+      "enum": [
+        "1.0"
+      ],
+      "type": "string"
+    },
+    "Status": {
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/ConnectionState"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
+    "Token": {
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}(?![\\s\\S])",
+      "type": "string"
+    },
+    "Trade": {
+      "additionalProperties": false,
+      "properties": {
+        "price": {
+          "$ref": "#/$defs/DecimalText"
+        },
+        "quantity": {
+          "$ref": "#/$defs/DecimalText"
+        },
+        "side": {
+          "$ref": "#/$defs/TradeSide"
+        }
+      },
+      "required": [
+        "price",
+        "quantity",
+        "side"
+      ],
+      "type": "object"
+    },
+    "TradeSide": {
+      "enum": [
+        "buy",
+        "sell",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "U64Text": {
+      "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)(?![\\s\\S])",
+      "type": "string"
+    },
+    "Venue": {
+      "pattern": "^[A-Z0-9][A-Z0-9_-]{0,31}(?![\\s\\S])",
+      "type": "string"
+    }
+  },
+  "$id": "urn:viramoon:finance:read-stream:1.0:market-ws",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [
+    {
+      "$ref": "#/$defs/Message"
+    },
+    {
+      "properties": {
+        "asset_kind": {
+          "$ref": "#/$defs/AssetKind"
+        },
+        "channel": {
+          "$ref": "#/$defs/Token"
+        },
+        "cursor": {
+          "$ref": "#/$defs/NonEmptyText"
+        },
+        "epoch": {
+          "$ref": "#/$defs/U64Text"
+        },
+        "exchange_ts": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)(?![\\s\\S])",
+              "type": "string"
+            }
+          ]
+        },
+        "first_available_ts": {
+          "$ref": "#/$defs/U64Text"
+        },
+        "instrument_id": {
+          "$ref": "#/$defs/InstrumentId"
+        },
+        "license": {
+          "$ref": "#/$defs/Token"
+        },
+        "native_id": {
+          "$ref": "#/$defs/NonEmptyText"
+        },
+        "product": {
+          "$ref": "#/$defs/Token"
+        },
+        "receive_ts": {
+          "$ref": "#/$defs/U64Text"
+        },
+        "revision": {
+          "$ref": "#/$defs/U64Text"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/SchemaVersion"
+        },
+        "seq": {
+          "$ref": "#/$defs/U64Text"
+        },
+        "source": {
+          "$ref": "#/$defs/Token"
+        },
+        "venue": {
+          "$ref": "#/$defs/Venue"
+        }
+      },
+      "required": [
+        "schema_version",
+        "channel",
+        "source",
+        "product",
+        "instrument_id",
+        "asset_kind",
+        "venue",
+        "exchange_ts",
+        "receive_ts",
+        "first_available_ts",
+        "epoch",
+        "seq",
+        "cursor",
+        "revision",
+        "license"
+      ],
+      "type": "object"
+    }
+  ],
+  "description": "One event and its position in an instrument stream.",
+  "unevaluatedProperties": false
+}
