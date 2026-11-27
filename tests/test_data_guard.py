@@ -26,13 +26,15 @@ class DataGuardTests(unittest.TestCase):
                         GIT_AUTHOR_EMAIL="wg@example.test", GIT_COMMITTER_EMAIL="wg@example.test")
         self.git("init", "-q", "-b", "main", "--object-format=sha1")
         for relative in (
-            ".data-guard/rules.json", ".data-guard/sources.json",
+            ".data-guard/rules.json",
             ".githooks/pre-commit", ".githooks/pre-push", "scripts/data_guard.py",
             "scripts/install-data-guard-hooks.sh", "scripts/ci-check.sh",
         ):
             target = self.repo / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / relative, target)
+        # These repositories register their own fixtures as each test creates them.
+        self.write(".data-guard/sources.json", json.dumps({"version": 1, "fixtures": {}}))
         self.git("add", ".")
         self.git("commit", "-qm", "Install rules")
         self.base = self.git("rev-parse", "HEAD").stdout.decode().strip()
