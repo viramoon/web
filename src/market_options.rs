@@ -1,4 +1,4 @@
-//! Private F10c reads and the F10d flow boundary.
+//! Administrator-only finance option and market-owner reads.
 
 use axum::{
     Json, Router,
@@ -18,19 +18,20 @@ use finance_client::{
 use serde::Deserialize;
 use serde::de::value::{Error as ValueError, StrDeserializer};
 use serde_json::{Value, json, value::RawValue};
-use utoipa::{IntoParams, OpenApi, ToSchema};
+use utoipa::OpenApi;
 
 use crate::{
-    AppState, ErrorBody, api_error,
+    AppState, api_error,
     finance::Fault,
     market_reads::MarketReadError,
     market_types::{InstrumentId, ProductToken, parse_u64, valid_token},
 };
 
+mod flow;
+
 const CHAIN: &str = "/api/v1/options/chain";
 const DEPTH: &str = "/api/v1/market/depth";
 const EXPOSURE: &str = "/api/v1/options/exposure";
-const FLOW: &str = "/api/v1/options/flow";
 const HISTORY: &str = "/api/v1/options/history";
 const BUDGET: &str = "/api/v1/market/subscriptions/budget";
 const COVERAGE: &str = "/api/v1/market/subscriptions/coverage";
@@ -71,28 +72,6 @@ struct CoverageQuery {
     end: DateTime<Utc>,
 }
 
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-enum FlowMode {
-    Observed,
-    Verified,
-}
-
-#[derive(Deserialize, IntoParams)]
-#[serde(deny_unknown_fields)]
-#[into_params(parameter_in = Query)]
-struct FlowQuery {
-    #[allow(dead_code)]
-    instrument_id: InstrumentId,
-    #[allow(dead_code)]
-    mode: Option<FlowMode>,
-    from: Option<DateTime<FixedOffset>>,
-    until: Option<DateTime<FixedOffset>>,
-    #[allow(dead_code)]
-    offset: Option<u32>,
-    limit: Option<u16>,
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExposureQuery {
@@ -116,6 +95,7 @@ impl ExposureQuery {
 enum OptionReadError {
     InvalidQuery,
     ContractPending,
+    FlowQueryUpgradeRequired,
     Market(MarketReadError),
     Upstream(Fault),
 }
@@ -132,6 +112,11 @@ impl IntoResponse for OptionReadError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "finance_contract_pending",
                 "The finance contract for this capability is pending",
+            ),
+            Self::FlowQueryUpgradeRequired => api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "finance_flow_query_upgrade_required",
+                "Use a confirmed con_id and the from and until boundaries",
             ),
             Self::Market(error) => error.into_response(),
             Self::Upstream(fault) => fault.into_response(),
@@ -177,13 +162,18 @@ struct DisplayAccess {
 fn display(raw: Box<RawValue>, product: &str) -> Result<Json<Box<RawValue>>, OptionReadError> {
     let DisplayAccess { access } = serde_json::from_str(raw.get())
         .map_err(|_| OptionReadError::Market(MarketReadError::InvalidResponse))?;
+    require_display(&access, product)?;
+    Ok(Json(raw))
+}
+
+fn require_display(access: &ProductPolicy, product: &str) -> Result<(), OptionReadError> {
     if access.source != "ibkr" || access.product != product || !valid_token(&access.license) {
         return Err(OptionReadError::Market(MarketReadError::InvalidResponse));
     }
     if !access.display_live {
         return Err(OptionReadError::Market(MarketReadError::DisplayDenied));
     }
-    Ok(Json(raw))
+    Ok(())
 }
 
 async fn chain(
@@ -308,33 +298,14 @@ async fn coverage(
     display(raw, "opra")
 }
 
-/// Keep unavailable flow evidence distinct from a successful empty page.
-#[utoipa::path(get, path = "/api/v1/options/flow", operation_id = "optionsFlow", params(FlowQuery),
-    security(("adminSession" = []), ("adminBearer" = [])),
-    responses((status = 400, body = ErrorBody), (status = 401, body = ErrorBody),
-        (status = 403, body = ErrorBody), (status = 429, body = ErrorBody),
-        (status = 503, body = ErrorBody, description = "Finance contract pending")))]
-async fn flow(query: Result<Query<FlowQuery>, QueryRejection>) -> Response {
-    let Ok(Query(query)) = query else {
-        return OptionReadError::InvalidQuery.into_response();
-    };
-    if query
-        .from
-        .zip(query.until)
-        .is_some_and(|(from, until)| from >= until)
-        || query.limit == Some(0)
-    {
-        return OptionReadError::InvalidQuery.into_response();
-    }
-    OptionReadError::ContractPending.into_response()
-}
-
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route(CHAIN, get(chain))
         .route(DEPTH, get(depth))
         .route(EXPOSURE, get(exposure))
-        .route(FLOW, get(flow))
+        .route(flow::FLOW, get(flow::legacy))
+        .route(flow::OBSERVATIONS, get(flow::observations))
+        .route(flow::VERIFICATION, get(flow::verification))
         .route(HISTORY, get(history))
         .route(BUDGET, get(budget))
         .route(COVERAGE, get(coverage))
@@ -343,12 +314,23 @@ pub(crate) fn routes() -> Router<AppState> {
 pub(crate) fn is_private(path: &str) -> bool {
     matches!(
         path,
-        CHAIN | DEPTH | EXPOSURE | FLOW | HISTORY | BUDGET | COVERAGE
+        CHAIN
+            | DEPTH
+            | EXPOSURE
+            | HISTORY
+            | BUDGET
+            | COVERAGE
+            | flow::FLOW
+            | flow::OBSERVATIONS
+            | flow::VERIFICATION
     )
 }
 
 #[derive(OpenApi)]
-#[openapi(paths(flow), components(schemas(InstrumentId, ProductToken, FlowMode)))]
+#[openapi(
+    paths(flow::legacy),
+    components(schemas(InstrumentId, ProductToken, flow::FlowMode))
+)]
 pub(crate) struct MarketOptionsApi;
 
 pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
@@ -363,6 +345,16 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
             "marketSubscriptionBudget",
         ),
         (COVERAGE, COVERAGE, "marketSubscriptionCoverage"),
+        (
+            flow::OBSERVATIONS,
+            flow::OBSERVATIONS,
+            "optionsFlowObservations",
+        ),
+        (
+            flow::VERIFICATION,
+            flow::VERIFICATION,
+            "optionsFlowVerification",
+        ),
     ] {
         crate::market_reads::register_read_operation(spec, upstream, path, source, operation_id);
         let operation = &mut spec["paths"][path]["get"];
@@ -439,6 +431,7 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
             &upstream["components"]["schemas"],
         );
     }
+    flow::register_legacy_openapi(spec);
 }
 
 fn register_referenced_schemas(value: &Value, schemas: &mut Value, upstream: &Value) {

@@ -21,7 +21,7 @@ const READS: [(&str, &str); 6] = [
     (COVERAGE, COVERAGE),
 ];
 
-fn display_access(product: &str) -> Value {
+pub(super) fn display_access(product: &str) -> Value {
     json!({
         "source": "ibkr", "product": product, "license": LICENSE,
         "display_live": true, "record_local": false,
@@ -326,7 +326,6 @@ async fn f10c_validates_query_bounds_and_preserves_legacy_pending() {
         );
     }
     for path in [
-        FLOW,
         "/api/v1/options/chain?instrument_id=SYNTH.XNYS&offset=1",
         "/api/v1/options/chain?instrument_id=SYNTH.XNYS&limit=65535",
     ] {

@@ -58,8 +58,11 @@ market_gateway:
     option_history: /api/v1/options/history
     source: authorized_ibkr_paper_read_only_market_owner
   legacy_option_chain_query: {path: /api/v1/options/chain, status: 503, code: finance_contract_pending}
-  pending_reads:
-    /api/v1/options/flow: F10d
+  f10d_display_reads:
+    legacy_option_flow: /api/v1/options/flow
+    observations: {path: /api/v1/options/flow/observations, product: opra}
+    verification: {path: /api/v1/options/flow/verification, product: opra-history}
+    source: authorized_ibkr_paper_read_only_market_owner
   events:
     path: /api/v1/events
     protocol: sse

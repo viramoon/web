@@ -11,7 +11,8 @@ public final class FinanceNumbers extends OpenAPINormalizer {
         super(api, rules);
         flattenMarketEvent(api);
         for (String path : Set.of("/api/v1/options/chain", "/api/v1/options/exposure",
-                "/api/v1/options/history", "/api/v1/market/book",
+                "/api/v1/options/history", "/api/v1/options/flow/observations",
+                "/api/v1/options/flow/verification", "/api/v1/market/book",
                 "/api/v1/market/subscriptions", "/api/v1/market/subscriptions/coverage")) {
             // Keep the declared schema and let the gateway preserve the original JSON
             // for display reads, including future enum values and added fields.

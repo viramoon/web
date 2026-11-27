@@ -20,7 +20,7 @@ CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.opena
 
 ## finance 契约版本
 
-[finance 来源提交](../openapi/finance.commit) 锁定为 finance main 的 `40bd0ef4d8c9ef8c7ffac57f7562c8ddd74d6553`，包含 F10b 和 F10c。W8 公开六项 F10c 期权和行情所有者读取，见[读取参数与响应](#w8-期权场所深度与券商线路)。该 [finance OpenAPI](../openapi/finance.openapi.json) 也包含策略、作业、研究、决策和 Binance 状态端点。浏览器的 bars 和指标仍使用 W2a 的 WAL 视图。
+[finance 来源提交](../openapi/finance.commit) 锁定为 finance main 的 `19eb173751487befc504c78f60bfbb6be68f97e6`，包含 F10d 期权流读契约。[finance OpenAPI](../openapi/finance.openapi.json) 还包含策略、作业、研究、决策和 Binance 状态端点。W8 公开 F10c 的[期权和行情所有者读取](#w8-期权场所深度与券商线路)，W9 公开 F10d 的[观察和核验读取](#w9-期权流观察与历史核验)。浏览器的 bars 和指标仍使用 W2a 的 WAL 视图。
 
 WAL 与投影 REST 保留 W6 的 1.0 与 2.0 `Event`、`Message` 和 `SchemaVersion`。上游返回 3.0 的 `option_history_trade` 或 `option_history_quote` 时，整条请求返回 `502 finance_invalid_response`，以保留原分页和旧客户端解码行为。原始记录仍须通过本机记录与显示许可检查。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制与大整数文本。市场 WebSocket 只发 1.0 数据帧。web 运维 SSE 使用下文的 `/events` 契约。
 
@@ -122,7 +122,21 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 
 参数校验失败返回 400。展示未获准返回 `403 market_display_denied`，上游查无快照或窗口的 404 保留，错误响应仍使用 `error.code` 与 `error.message`。上游异常归为 502，来源未接线、连接失败或熔断为 `503 finance_unavailable`，超时为 `504 finance_timeout`。接口使用 finance 已取得的数据，历史读取不触发下载。
 
-专用 `/options/flow`（实时观察、历史逐笔核验与证据详情）仍返回 `503 finance_contract_pending`，等待 F10d。自选与 focus 仍使用 W2a 的边界；向行情所有者提交订阅或深度焦点，以及实时显示流接入，属于后续集成。部署前置条件见[运行手册](../RUNBOOK.md#w8-期权和场所深度)。
+部署前置条件见[运行手册](../RUNBOOK.md#w8-期权和场所深度)。
+
+## W9 期权流观察与历史核验
+
+以下 GET 使用 `/api/v1` 前缀，沿用管理员身份、同源校验、每分钟 120 次共享 REST 限额和 `Cache-Control: no-store`。两条专用路径均需已确认的期权合约正整数 `con_id` 与 RFC 3339 半开窗口 `[start, end)`。`offset` 从 0 开始，`limit` 默认 20，范围 1～100，`next_offset: null` 表示到达末页。续页保留查询条件，`as_of` 或 `verified_at` 变化时从首页重新读取。
+
+| 路径 | finance 响应语义 |
+| --- | --- |
+| `/options/flow/observations` | `OptionFlowObservationPage`，按接收时间读 OPRA L1 观察线索。`items` 保留待核验状态、线索证据、当时的券商线路预算和可空的局部覆盖。放量估值针对采样区间。 |
+| `/options/flow/verification` | `OptionFlowVerificationPage`，按单一美东交易日期内的整秒成交窗口读已取得的 OPRA 历史核验。`trades` 分页。`counts` 与 `issues` 覆盖整份报告，区分未知、待核验和无法回补。保留来源页、原始条件及映射、方向推断、成交状态与权利金。`durable_through` 是可空的 F3 证据水位，`observation_coverage` 是可空的 OPRA 覆盖。 |
+| `/options/flow` | 兼容操作 `optionsFlow`。传 `con_id`、`from`、`until`。`mode=observed`（默认）转发观察，`mode=verified` 转发核验，响应与专用路径相同。旧 `instrument_id` 参数仍可接收。只有券商 `con_id` 用于查找合约。合法旧请求缺少 `con_id` 时以原有错误结构返回 `503 finance_flow_query_upgrade_required`。 |
+
+web 校验对应的 `ibkr/opra` 或 `ibkr/opra-history` 展示许可。嵌套观察覆盖需要 OPRA 展示许可，历史证据水位需要 OPRA 历史本机记录许可。成功响应保留 finance 原始 JSON，包含许可标签、明确的 `null`、未知值、十进制价量、金额和大整数字符串。缺少快照或核验窗口时保留上游 404。已取得的空页与带无法回补原因的报告都可返回 200。上游来源未接入时返回 `503 finance_unavailable`，其它错误沿用 W8 的映射。请求读取已取得的结果，历史核验由行情所有者管理。[部署与排查](../RUNBOOK.md#w9-期权流)
+
+**仍待后续接入。** `/market/subscriptions` 的 `finance_lines` 保留 `finance_contract_pending` 兼容字段，需查券商预算时使用 `/market/subscriptions/budget`。仅带旧参数的期权链和未支持的敞口情景仍按 W8 返回 `finance_contract_pending`。向行情所有者提交订阅或深度 focus、期权流主动推送与续传、浏览器实时显示流和部署侧数据源接线仍待后续交付。web 的 WAL 与投影 REST 和 WS/SSE 继续使用现有版本，F10d 的逐笔核验与水位通过上述 REST 查询。
 
 ## 集成配置
 

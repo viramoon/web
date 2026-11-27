@@ -22,7 +22,7 @@ frontend 不独立运行，由配置指定的静态目录提供资源，按 fert
 
 ## W2 契约来源
 
-W2a 使用从 [finance 来源提交](../openapi/finance.commit) 生成的客户端，浏览器可访问管理员专用的 WAL、投影、产品和质量读取。现有系统与行情状态保持原权限，F10a 生成物中的因子研究查询由 W2b 集成。W8 将生成客户端前移到 F10c，使用独立路径接入场所深度和券商预算。[契约差异](api.md#finance-契约版本)
+W2a 使用从 [finance 来源提交](../openapi/finance.commit) 生成的客户端，浏览器可访问管理员专用的 WAL、投影、产品和质量读取。现有系统与行情状态保持原权限，F10a 生成物中的因子研究查询由 W2b 集成。W8 使用独立路径接入 F10c 场所深度和券商预算。W9 按 F10d 分别查询期权流观察和已有历史核验，并校验两类产品及覆盖的展示许可。[契约版本](api.md#finance-契约版本)
 
 - F1 行情协议 `1.0`。标的、事件与能力的 JSON Schema 及样本 `examples.json` 来自 [`protocol/v1/`](https://github.com/viramoon/finance/tree/b21f24150dae968a147b57eefbe4ffde0f3b4809/protocol/v1)。
 - F10a 的市场 WS 数据帧使用 finance 导出的 [1.0 schema](../openapi/finance.market-ws.schema.json)。浏览器订阅命令和 web 控制帧由网关契约定义。

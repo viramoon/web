@@ -6,7 +6,7 @@ fertile 的后端网关与 submodule。使用 axum 提供浏览器 API、通过 
 
 W2a 提供管理员专用的 F10a 行情读取与 WAL 视图、PostgreSQL 自选、盘口 focus 和运维 SSE。市场 WebSocket 在同一服务端口提供授权的有界 WAL 回放、共享订阅额度和重置帧。见 [行情、自选与推送](docs/api.md#行情自选与推送)。
 
-W8 将内部 finance 契约锁定到含 F10c 的 `40bd0ef4`。管理员可通过 web 读取期权链、场所深度、GEX/wall/0DTE、历史期权链、券商预算及覆盖；`/options/flow` 等待 F10d。WAL 与投影 REST 沿用 1.0 和 2.0 契约，市场 WebSocket 使用 1.0 数据帧。[契约差异](docs/api.md#finance-契约版本)
+管理员可通过 web 读取期权链、场所深度、GEX/wall/0DTE、历史期权链、券商预算及覆盖。W9 接通 F10d，按已确认的券商合约和时间窗查询实时观察线索和已有历史逐笔核验，保留产品许可、覆盖与证据水位。WAL 与投影 REST 沿用 1.0 和 2.0 契约，市场 WebSocket 使用 1.0 数据帧。[契约版本](docs/api.md#finance-契约版本) · [期权流读取](docs/api.md#w9-期权流观察与历史核验)
 
 未设置 `WEB_PUBLIC_ORIGIN` 时，浏览器可通过带端口的 `http://127.0.0.1` 或 `http://localhost` 同源登录并访问 REST、SSE 和市场 WebSocket。远程 HTTPS 入口继续使用显式配置的 Origin。[会话配置](RUNBOOK.md#启用浏览器管理会话)
 
