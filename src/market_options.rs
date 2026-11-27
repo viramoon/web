@@ -13,7 +13,7 @@ use finance_client::{
         market_options_analytics_api as analytics, market_options_depth_api as depth,
         market_options_lines_api as lines,
     },
-    models::ProductPolicy,
+    models::{DealerScenario, ProductPolicy},
 };
 use serde::Deserialize;
 use serde_json::{Value, json, value::RawValue};
@@ -97,7 +97,7 @@ struct FlowQuery {
 struct ExposureQuery {
     instrument_id: Option<InstrumentId>,
     underlying_id: Option<InstrumentId>,
-    scenario: Option<ProductToken>,
+    scenario: Option<DealerScenario>,
     as_of: Option<DateTime<Utc>>,
 }
 
@@ -224,7 +224,8 @@ async fn exposure(
         (Some(id), _) | (_, Some(id)) => id.as_str(),
         _ => return Err(OptionReadError::InvalidQuery),
     };
-    let scenario = query.scenario.as_ref().map(ProductToken::as_str);
+    let scenario = query.scenario.map(|scenario| scenario.to_string());
+    let scenario = scenario.as_deref();
     let raw = state
         .finance
         .read(|cfg| async move {
@@ -399,7 +400,18 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
             let parameters = operation["parameters"]
                 .as_array_mut()
                 .expect("exposure parameters");
-            parameters[0]["required"] = json!(false);
+            for parameter in parameters.iter_mut() {
+                match parameter["name"].as_str() {
+                    Some("underlying_id") => parameter["required"] = json!(false),
+                    Some("scenario") => {
+                        parameter["schema"] = json!({"$ref": "#/components/schemas/ProductToken"});
+                        parameter["description"] = json!(
+                            "Use absolute (default), dealer_short, dealer_long, or call_long_put_short. Other values return 400 invalid_market_request."
+                        );
+                    }
+                    _ => {}
+                }
+            }
             parameters.push(json!({
                 "name": "instrument_id", "in": "query", "required": false,
                 "description": "Alias for underlying_id. Supply at least one.",
@@ -444,6 +456,27 @@ fn register_referenced_schemas(value: &Value, schemas: &mut Value, upstream: &Va
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f10c_exposure_query_accepts_finance_scenarios_and_omission() {
+        for scenario in [
+            DealerScenario::Absolute,
+            DealerScenario::DealerShort,
+            DealerScenario::DealerLong,
+            DealerScenario::CallLongPutShort,
+        ] {
+            let uri = format!("{EXPOSURE}?underlying_id=SYNTH.XNYS&scenario={scenario}")
+                .parse()
+                .unwrap();
+            let Query(query) = Query::<ExposureQuery>::try_from_uri(&uri).unwrap();
+            assert_eq!(query.scenario, Some(scenario));
+        }
+        let uri = format!("{EXPOSURE}?instrument_id=SYNTH.XNYS")
+            .parse()
+            .unwrap();
+        let Query(query) = Query::<ExposureQuery>::try_from_uri(&uri).unwrap();
+        assert!(query.scenario.is_none());
+    }
 
     #[test]
     fn f10c_display_validation_preserves_raw_json_and_denies_bad_access() {

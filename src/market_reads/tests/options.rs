@@ -113,6 +113,8 @@ fn coverage_report() -> Value {
 
 #[tokio::test]
 async fn f10c_reads_forward_queries_and_preserve_display_evidence() {
+    let mut default_exposure = exposure_report();
+    default_exposure["report"]["scenario"] = json!("absolute");
     let payloads = [
         chain_page(),
         exposure_report(),
@@ -125,7 +127,13 @@ async fn f10c_reads_forward_queries_and_preserve_display_evidence() {
         .iter()
         .zip(&payloads)
         .map(|((_, upstream), payload)| Exchange::ok((*upstream).to_owned(), payload.clone()))
-        .chain([Exchange::ok(EXPOSURE.into(), exposure_report())])
+        .chain([
+            Exchange::ok(EXPOSURE.into(), exposure_report()),
+            Exchange::ok(
+                format!("/api/v1/options/exposure?underlying_id={INSTRUMENT}"),
+                default_exposure.clone(),
+            ),
+        ])
         .collect();
     let fixture = Fixture::start(script).await;
     for ((path, _), expected) in READS.iter().zip(payloads) {
@@ -138,6 +146,15 @@ async fn f10c_reads_forward_queries_and_preserve_display_evidence() {
     assert_eq!(
         fixture.get_json(LEGACY_EXPOSURE, StatusCode::OK).await,
         exposure_report()
+    );
+    assert_eq!(
+        fixture
+            .get_json(
+                &format!("/api/v1/options/exposure?instrument_id={INSTRUMENT}"),
+                StatusCode::OK,
+            )
+            .await,
+        default_exposure
     );
     fixture.upstream_expectations_met();
 }
@@ -326,6 +343,18 @@ async fn f10c_validates_query_bounds_and_preserves_legacy_pending() {
     }
 }
 
+#[tokio::test]
+async fn f10c_rejects_unsupported_exposure_scenario_before_finance() {
+    let gateway = Gateway::new("http://127.0.0.1:1".into());
+    for parameter in ["instrument_id", "underlying_id"] {
+        let path = format!("/api/v1/options/exposure?{parameter}={INSTRUMENT}&scenario=fixture");
+        assert_eq!(
+            gateway.get_json(&path, StatusCode::BAD_REQUEST).await,
+            json!({"error": {"code": "invalid_market_request", "message": "Invalid market request"}})
+        );
+    }
+}
+
 #[test]
 fn f10c_openapi_keeps_legacy_views_and_exports_read_schemas() {
     let spec = crate::openapi();
@@ -355,6 +384,23 @@ fn f10c_openapi_keeps_legacy_views_and_exports_read_schemas() {
             .unwrap()
             .iter()
             .any(|parameter| parameter["name"] == "instrument_id")
+    );
+    let scenario = exposure["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|parameter| parameter["name"] == "scenario")
+        .unwrap();
+    // The query parameter and its component in 70119a2:openapi/web.openapi.json.
+    assert_eq!(scenario["in"], "query");
+    assert_eq!(scenario["required"], false);
+    assert_eq!(
+        scenario["schema"],
+        json!({"$ref": "#/components/schemas/ProductToken"})
+    );
+    assert_eq!(
+        schemas["ProductToken"],
+        json!({"type": "string", "pattern": r"^[a-z0-9][a-z0-9_.-]{0,63}(?![\s\S])"})
     );
 
     for ((path, _), expected) in READS.into_iter().zip([

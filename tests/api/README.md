@@ -16,7 +16,9 @@ W4 的 SMTP 集成测试使用进程内主、备槽位和临时 PostgreSQL 验�
 
 W2a 的路由测试使用合成标的、临时管理员凭据和内存路由，检查匿名拒绝、禁止缓存、跨源、focus 设置与清除、共享订阅额度和超大正文。自选测试用临时 PostgreSQL 检查并发 revision、排序和持久性。WAL 测试用固定十进制、时钟与序号验证展示许可、盘口连续性、精度、接续和慢端重置。SSE 测试用内存事件与临时会话验证重连、授权丢失、游标和空窗口告警突发。
 
-`cargo test --locked --offline --lib f10c_` 用固定时钟、虚构标的和合成十进制数构造期权、深度、敞口、历史、预算及覆盖响应。回环 finance 替身核对查询转发、禁止转发身份头、显示许可和上游错误。进程内用例覆盖匿名、共享节流、边界参数、旧链和 flow 的 pending、基线 OpenAPI 以及 3.0 事件的时间戳校验。回环用例覆盖混合版本 WAL 和投影的 502 拒绝，以及 5xx 响应的完整错误结构。完整替身测试使用随机本地端口。
+`cargo test --locked --offline --lib f10c_` 用固定时钟、虚构标的和合成十进制数构造期权、深度、敞口、历史、预算及覆盖响应。回环 finance 替身核对查询转发、禁止转发身份头、显示许可和上游错误。进程内用例覆盖匿名、共享节流、边界参数、旧链和 flow 的 pending、敞口情景的本地校验和请求 schema，以及 3.0 事件的时间戳校验。回环用例覆盖混合版本 WAL 和投影的 502 拒绝，以及 5xx 响应的完整错误结构。完整替身测试使用随机本地端口。
+
+另执行 `cargo test --locked --offline --lib public_openapi_preserves_f1_composition_and_declares_restricted_reads`，核对旧 WAL 和投影的响应引用，以及 `Event`、`Message`、`SchemaVersion` 与基线 OpenAPI 的哈希。
 
 `cargo test --lib --locked websocket_` 的端到端用例使用两个随机回环端口运行 WebSocket 客户端、web 路由和合成 finance 替身，验证 101 升级、许可拒绝、注销后重连、额度占满、释放和慢端重置。fixture 用固定 F1 记录和临时管理员会话，finance 替身检查浏览器认证头和 Cookie 留在 web。`websocket_wire_handshake_rejects_unauthenticated_and_cross_origin_clients` 还通过进程内双向流发送真实握手请求，验证匿名和跨源请求在升级前分别收到 401 和 403，无需监听 socket。
 

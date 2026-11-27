@@ -38,7 +38,7 @@
       "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE fc5e153e9727181f5748659c0610b2fbc2b49769。finance-api export-read-stream 从已提交的合成 F1 种子构造 WS 回放，并用固定时钟、虚构标的和大整数文本生成 SSE 样本。"
     },
     "src/market_reads/tests/options.rs": {
-      "sha256": "1995c45c5ec1963284662fd111c836dbfc5b9334eb9fa2d43069f11762aa5a06",
+      "sha256": "a59f09419e39f3a181e71f94768ae1c1e5b57e1caaf678230c9a7d28b63f5381",
       "generator": "src/market_reads/tests/synthetic.rs",
       "seed": "固定虚构标的、十进制文本、UTC 时钟和券商标识",
       "source": "运行 cargo test --locked --offline --lib f10c_。期权、深度、敞口、历史、预算、覆盖和版本 3.0 的证据都在测试运行时构造。"
