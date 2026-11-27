@@ -84,7 +84,7 @@ processes:
     startup:
       supervisor_enable_env: FERTILE_ENABLE_WEB_NOTIFIER
       supervisor_default_enabled: false
-      idle_when: 直接启动时显式关闭、无可用 SMTP 主槽且无可用备选槽与快照存储，或所配置的快照存储无效
+      idle_when: 直接启动时显式关闭、SMTP 主槽不可用，或所配置的快照存储无效
       idle_behavior: 单次固定空转诊断，无 PostgreSQL 连接、outbox 变更或 SMTP I/O，收到 SIGTERM 或 SIGINT 时以状态码 0 退出
       documentation: RUNBOOK.md#告警与邮件进程
     delivery_policy:

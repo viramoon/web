@@ -59,7 +59,7 @@ async fn run() -> Result<(), Failure> {
     let channel = if get("FERTILE_ENABLE_WEB_NOTIFIER").as_deref() == Some("0") {
         Err("notification delivery is disabled")
     } else {
-        EmailChannels::from_environment(get).map_err(|error| error.reason())
+        EmailChannels::for_notifier(get).map_err(|error| error.reason())
     };
     let channel = match channel {
         Ok(channel) => channel,

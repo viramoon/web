@@ -8,7 +8,7 @@ use std::{
     io::ErrorKind,
     net::TcpListener,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
 };
@@ -16,8 +16,7 @@ use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 use web::database::Database;
 
-const SMTP_REQUIRED: &str =
-    "a usable SMTP primary profile or a secondary profile with snapshot storage is required";
+const SMTP_REQUIRED: &str = "a usable SMTP primary profile is required";
 const DISABLED: &str = "notification delivery is disabled";
 
 fn notifier() -> Command {
@@ -164,6 +163,29 @@ fn smtp_fixture(command: &mut Command, listener: &TcpListener, dir: &Path) -> St
     marker
 }
 
+fn snapshot_fixture(command: &mut Command, dir: &Path) -> PathBuf {
+    let snapshots = dir.join("snapshots");
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&snapshots)
+        .unwrap();
+    let public = dir.join("static");
+    fs::create_dir(&public).unwrap();
+    command
+        .env("WEB_STATIC_ROOT", public)
+        .env("WEB_SMTP_SNAPSHOT_DIR", &snapshots);
+    snapshots
+}
+
+fn configure_secondary_smtp(command: &mut Command, port: u16) {
+    command
+        .env("WEB_SMTP_SECONDARY_HOST", "127.0.0.1")
+        .env("WEB_SMTP_SECONDARY_PORT", port.to_string())
+        .env("WEB_SMTP_SECONDARY_FROM", "sender@example.invalid")
+        .env("WEB_SMTP_SECONDARY_TO", "receiver@example.invalid")
+        .env("WEB_SMTP_SECONDARY_TIMEOUT_SECONDS", "1");
+}
+
 #[tokio::test]
 async fn notifier_without_smtp_keeps_the_outbox_intact() {
     let pg = Cluster::create();
@@ -181,25 +203,51 @@ async fn notifier_with_incomplete_smtp_and_snapshot_storage_keeps_the_outbox_int
     let pool = outbox_fixture(&pg).await;
     let before = delivery_state(&pool).await;
     let dir = tempfile::tempdir_in("/tmp").unwrap();
-    let snapshots = dir.path().join("snapshots");
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&snapshots)
-        .unwrap();
-    let public = dir.path().join("static");
-    fs::create_dir(&public).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut command = notifier();
     let marker = smtp_fixture(&mut command, &listener, dir.path());
-    command
-        .env("DATABASE_URL", pg.url())
-        .env("WEB_STATIC_ROOT", &public)
-        .env("WEB_SMTP_SNAPSHOT_DIR", &snapshots);
+    let snapshots = snapshot_fixture(&mut command, dir.path());
+    command.env("DATABASE_URL", pg.url());
     assert_idle(&mut command, SMTP_REQUIRED, Some(Signal::TERM), &[&marker]).await;
     assert_eq!(fs::read_dir(&snapshots).unwrap().count(), 0);
     assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
     assert_eq!(delivery_state(&pool).await, before);
+}
+
+#[tokio::test]
+async fn notifier_with_only_secondary_smtp_keeps_unbound_outbox_intact() {
+    let pg = Cluster::create();
+    // No active W4 version: the due standalone test would use the incomplete primary slot.
+    let pool = outbox_fixture(&pg).await;
+    let before = delivery_state(&pool).await;
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = notifier();
+    let marker = smtp_fixture(&mut command, &listener, dir.path());
+    configure_secondary_smtp(&mut command, listener.local_addr().unwrap().port());
+    let snapshots = snapshot_fixture(&mut command, dir.path());
+    command.env("DATABASE_URL", pg.url());
+    assert_idle(&mut command, SMTP_REQUIRED, Some(Signal::TERM), &[&marker]).await;
+    assert_eq!(fs::read_dir(&snapshots).unwrap().count(), 0);
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+    assert_eq!(delivery_state(&pool).await, before);
+}
+
+#[tokio::test]
+async fn notifier_with_only_secondary_smtp_idles_before_opening_snapshot_storage() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let marker = Uuid::new_v4().to_string();
+    let mut command = notifier();
+    command
+        .env("WEB_SMTP_HOST", "127.0.0.1")
+        .env("WEB_SMTP_FROM", format!("{marker}@example.invalid"))
+        .env("DATABASE_URL", &marker);
+    configure_secondary_smtp(&mut command, 1);
+    let snapshots = snapshot_fixture(&mut command, dir.path());
+    assert_idle(&mut command, SMTP_REQUIRED, None, &[&marker]).await;
+    assert_eq!(fs::read_dir(snapshots).unwrap().count(), 0);
 }
 
 #[tokio::test]

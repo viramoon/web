@@ -439,8 +439,20 @@ pub struct EmailChannels {
 }
 
 impl EmailChannels {
+    /// The worker needs the primary channel for jobs without a bound W4 snapshot.
+    pub fn for_notifier(get: impl Fn(&str) -> Option<String>) -> Result<Self, ChannelConfigError> {
+        Self::load_environment(get, true)
+    }
+
     pub fn from_environment(
         get: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, ChannelConfigError> {
+        Self::load_environment(get, false)
+    }
+
+    fn load_environment(
+        get: impl Fn(&str) -> Option<String>,
+        require_primary: bool,
     ) -> Result<Self, ChannelConfigError> {
         let slot = |result: Result<Option<EmailChannel>, ChannelConfigError>, profile| match result
         {
@@ -451,6 +463,11 @@ impl EmailChannels {
             }
         };
         let primary = slot(EmailChannel::from_environment(&get), "primary");
+        if require_primary && primary.is_none() {
+            return Err(ChannelConfigError(
+                "a usable SMTP primary profile is required",
+            ));
+        }
         let secondary = slot(
             EmailChannel::from_environment(|name| match name.strip_prefix("WEB_SMTP_") {
                 Some(suffix) => get(&format!("WEB_SMTP_SECONDARY_{suffix}")),
