@@ -4,11 +4,9 @@ use crate::notifications::{
     store::enqueue_test,
     worker::{NotificationPolicy, dispatch_one},
 };
+use crate::test_postgres as postgres;
 use serde_json::json;
 use std::{sync::Mutex, time::Duration};
-
-#[path = "../../../tests/api/postgres.rs"]
-mod postgres;
 
 fn new_reference() -> CredentialRef {
     CredentialRef {

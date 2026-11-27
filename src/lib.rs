@@ -20,6 +20,9 @@ mod ops;
 mod spa;
 pub mod telemetry;
 #[cfg(test)]
+#[path = "../tests/api/postgres.rs"]
+mod test_postgres;
+#[cfg(test)]
 mod w1_http_tests;
 mod watchlists;
 
