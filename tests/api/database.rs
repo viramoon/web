@@ -205,6 +205,7 @@ async fn postgres_integration_migration_upgrades_existing_schema() {
             20261127020000,
             20261127030000,
             20261127040000,
+            20261127074531,
         ]
     );
     let components: Vec<(String, i32)> =
@@ -248,6 +249,7 @@ async fn postgres_integration_migration_upgrades_existing_schema() {
             "notification_incidents",
             "notification_outbox",
             "notification_rules",
+            "notification_silences",
         ]
     );
     let replaces_id_type: String = sqlx::query_scalar(

@@ -33,8 +33,7 @@ class DataGuardTests(unittest.TestCase):
             target = self.repo / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / relative, target)
-        # The temporary repository starts before any fixture is registered.
-        # Each test that adds a fixture also adds its own source entry.
+        # These repositories register their own fixtures as each test creates them.
         self.write(".data-guard/sources.json", json.dumps({"version": 1, "fixtures": {}}))
         self.git("add", ".")
         self.git("commit", "-qm", "Install rules")

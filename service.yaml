@@ -79,6 +79,9 @@ processes:
   - name: web-notifier
     command: web-notifier
     requires: [PostgreSQL, "/usr/bin/curl (SMTP/SMTPS)", system_ca, linux_proc]
+    delivery_policy:
+      manual_silence: 规则或单条告警匹配时暂停领取，到期或解除后按原策略处理
+      documentation: docs/api.md#主动静默
     environment:
       DATABASE_URL: 与 web 共用，由部署从受控配置注入
       WEB_STATIC_ROOT: 启用 SMTP 快照时必填，与 web 使用同一静态根绝对路径
@@ -121,6 +124,7 @@ database:
   schemas: [app, blog]
   migration_command: web migrate
   auto_migrate_default: true
+  notification_silences: 20261127074531_notification_silences.sql
   backup_and_rollback: 见 fertile 的部署和备份恢复手册
 ingress:
   public_origin: https://fertile.viramoon.com

@@ -4,7 +4,7 @@ web 拥有 `app`（业务）和 `blog`（博客）两个 PostgreSQL schema。初
 
 从仓库根运行 `web migrate`，以 `DATABASE_URL` 指定目标库。部署时由运行环境注入连接串并限制配置文件权限。运行角色需读取 `app.schema_info`，并具有集成、通知及自选表所需的 SELECT、INSERT、UPDATE 权限及审计序列的使用权限。迁移角色另需建 schema、表、索引及约束的权限。使用独立迁移角色时先 `web migrate`，再设置 `WEB_AUTO_MIGRATE=false`。自动迁移默认启用。
 
-服务启动时先监听 HTTP。后台从连接池获取连接，检查 `app.schema_info` 的 web 版本、`blog` schema、`app.integration_configs`、`app.notification_health`、`app.market_watchlists`，以及 `app.notification_outbox` 的 `replaces_id`、`integration_test_id` 和 `smtp_snapshot_id` 列。缺少迁移、标记不匹配或连接中断时 live 仍为 200，ready 为 503。探测失败从 250ms 退避至最多 4s，恢复后每秒检查一次。`acquire_timeout_ms` 限制池内等待时间，`connect_timeout_ms` 限制获取可用连接（包括新建和重连）与执行探测语句各自的时间。`/api/v1/system/status` 的 `database.ok` 和 `latency_ms` 为最近一次探测结果，失败时延迟为空。数据库连接串不写入 HTTP 响应。
+服务启动时先监听 HTTP。后台从连接池获取连接，检查 `app.schema_info` 的 web 版本、`blog` schema、`app.integration_configs`、`app.notification_health`、`app.market_watchlists`、`app.notification_silences`，以及 `app.notification_outbox` 的 `replaces_id`、`integration_test_id` 和 `smtp_snapshot_id` 列。缺少迁移、标记不匹配或连接中断时 live 仍为 200，ready 为 503。探测失败从 250ms 退避至最多 4s，恢复后每秒检查一次。`acquire_timeout_ms` 限制池内等待时间，`connect_timeout_ms` 限制获取可用连接（包括新建和重连）与执行探测语句各自的时间。`/api/v1/system/status` 的 `database.ok` 和 `latency_ms` 为最近一次探测结果，失败时延迟为空。数据库连接串不写入 HTTP 响应。
 
 数据库就绪后，后台轮询同时刷新通知健康快照。读取失败时，快照中的通知状态为 `unavailable`，数据库就绪继续按连接和迁移探测判定。`/api/v1/system/status` 直接读取后台发布的快照，避免请求等待数据库连接或查询。
 
@@ -47,6 +47,10 @@ W3 迁移 `20261127000000` 在 `app` 下追加以下表。后续迁移 `20261127
 等待重试的汇总若有主任务或成员被抑制，notifier 会为仍符合规则的告警分别创建替代投递，包括规则仍有效的主任务。原汇总记为 `suppressed`，保留投递 UUID、成员关系和尝试记录。抑制原因记录在受规则变更影响的投递上。替代投递使用新的 UUID 和 `Message-ID`，继承汇总的重试等待，并继续接受静默、冷却和额度检查。成员停用后再启用，其原有投递的抑制记录继续生效。已领取的尝试按实际 SMTP 结果结算，返回 `accepted` 的原汇总视为已完成投递。
 
 成员行的 `summary_id` 指向汇总 outbox 行。读取投递审计时，API 从汇总行的 `event_id` 取得 `summary_alert_id`，并按汇总投递 UUID 读取 `summary_attempts` 和 `summary_deferrals`。替代投递沿用原告警的 `event_id`，并以 `replaces_id` 引用原投递，所以同一告警可以追踪原汇总和替代链。 [接口文档](api.md#告警规则与邮件通知)
+
+W5 迁移 `20261127074531` 追加 `app.notification_silences` 及静默区间查询函数。每行只关联规则或告警 UUID 之一，保存创建操作者、原因、开始时间及截止时间。显式解除或替换会增加结束操作者、时间和动作。自然到期由截止时间表示，历史随表备份。规则变更、静默变更与投递领取共用事务级锁，已领取的 SMTP 尝试独立结算。
+
+notifier 在领取和组建新汇总时检查规则与实例静默。等待重试的汇总到期可尝试时，如果原成员中存在有效的主动静默，领取事务保留原汇总和尝试记录，并为符合规则的告警排入替代投递。静默成员的替代行在静默结束后恢复资格。静默资格独立于 outbox 原有的 `available_at` 和延迟原因字段。[主动静默接口](api.md#主动静默)
 
 ## 自选
 

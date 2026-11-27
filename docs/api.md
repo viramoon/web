@@ -160,3 +160,22 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 等待重试的汇总若有主任务或成员被抑制，notifier 会停止原汇总的后续发送，并为仍符合规则的告警重新排队。可在原成员投递的 `summary_attempts` 中查看汇总的超时或拒绝记录，并在替代投递的 `attempts` 中查看其自身尝试。已领取的尝试按实际 SMTP 结果结算，`accepted` 表示中继已接收。SMTP 配置由部署提供，测试请求无正文或查询参数，测试邮件发往配置中的本人邮箱。
 
 管理写入返回 504 时，按 `id` 读取规则 revision 或告警确认状态，或用原 `Idempotency-Key` 作为 `testId` 查询测试。查明结果后才使用原请求重试。`GET /api/v1/system/status` 的 `notifications` 包含 `state`（`idle`、`healthy`、`degraded`、`unavailable`）、失败起始时间和最近尝试、接受时间及结果。HTTP 请求读取最近一次后台数据库轮询的快照。启动时或后台无法读取投递状态时，`state` 为 `unavailable`。SMTP 投递状态独立于 HTTP 就绪探测。
+
+### 主动静默
+
+以下两个资源都支持 GET、PUT、DELETE。每次请求使用对应规则或告警的非零 UUID。
+
+| 路径 | 作用范围 |
+| --- | --- |
+| `/api/v1/notification-rules/{id}/silence` | 此规则的全部待投递通知，包括现有队列和静默期间新产生的告警、提醒及恢复通知 |
+| `/api/v1/alerts/{id}/silence` | 此告警 UUID 所关联的投递。其他告警 UUID 各自使用其所属规则和实例的静默状态 |
+
+GET 返回 200，含 `active` 和 `silence`。`silence` 为此目标最近的一条记录，覆盖有效、已解除和已到期状态。没有记录时为 `null`。记录含 `reason`、`started_by`、`started_at`、`until`，以及可空的 `ended_by`、`ended_at` 和 `end_action`。手动结束动作为 `released` 或 `replaced`，自然到期以 `until` 判断。浏览器在告警页可用 `rule_id` 单独查询所属规则的静默，规则和实例任一生效即暂停该告警投递。告警列表、详情、规则和确认沿用已有响应结构。
+
+PUT 提交含 `until` 与 `reason` 的 JSON。截止时间使用带时区的 RFC 3339，按 PostgreSQL 微秒精度保存，须晚于数据库当前时间。原因去除首尾空白后须为 1–256 个 Unicode 字符，使用单行简短运维说明。PUT 创建或替换此目标的静默，重复提交相同的有效截止时间和原因沿用原记录。DELETE 请求体为空，仅解除此目标当前有效的静默。再次解除已解除或已到期的资源会返回原记录。PUT 和 DELETE 均返回变更后的 200 状态，并在同一事务保留原原因、截止时间和执行操作的管理员身份 `admin`。静默操作独立于规则配置 revision。
+
+服务端保存去除首尾空白后的原因，OpenAPI 在字段描述中说明计数规则。客户端若预校验长度，应先按相同规则去除首尾空白。例如一个普通空格加 256 个字母可提交，响应中的原因保留这 256 个字母。
+
+全部静默请求使用管理员鉴权并返回 `Cache-Control: no-store`。Cookie 写请求需匹配的 Origin 和 CSRF token。未知目标返回 404，格式错误、非法期限或 PUT/DELETE 带查询参数返回 422，权限失败返回 401 或 403，超额返回 429。写入遇到 504 时先 GET 同一资源并核对截止时间、原因及结束动作，再决定是否重试。
+
+静默期间照常保存信号、去重结果和 outbox，适用的邮件保持待发送。静默在截止瞬间失效，到期由投递资格实时判断。手动静默覆盖紧急业务邮件，`WEB_NOTIFIER_URGENT_BYPASS_QUIET` 只针对定时静默。独立邮件测试和 SMTP 候选测试继续使用其既有策略。已经领取的尝试按实际结果结算，后续重试重新检查静默。静默结束后可将尚未尝试的积压告警汇总，并继续执行正常的投递策略。

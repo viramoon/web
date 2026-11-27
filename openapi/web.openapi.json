@@ -4028,6 +4028,104 @@
     ],
     "type": "string"
    },
+   "Silence": {
+    "properties": {
+     "end_action": {
+      "oneOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/components/schemas/SilenceEndAction"
+       }
+      ]
+     },
+     "ended_at": {
+      "format": "date-time",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "ended_by": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "reason": {
+      "type": "string"
+     },
+     "started_at": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "started_by": {
+      "type": "string"
+     },
+     "until": {
+      "format": "date-time",
+      "type": "string"
+     }
+    },
+    "required": [
+     "reason",
+     "started_by",
+     "started_at",
+     "until"
+    ],
+    "type": "object"
+   },
+   "SilenceEndAction": {
+    "enum": [
+     "released",
+     "replaced"
+    ],
+    "type": "string"
+   },
+   "SilenceRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "reason": {
+      "description": "Single-line operational reason. The server trims surrounding whitespace,\nthen requires 1–256 Unicode characters.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "until": {
+      "description": "Future deadline in RFC 3339 format.",
+      "format": "date-time",
+      "type": "string"
+     }
+    },
+    "required": [
+     "until",
+     "reason"
+    ],
+    "type": "object"
+   },
+   "SilenceStatus": {
+    "properties": {
+     "active": {
+      "description": "Whether the latest silence applies at the time of the response.",
+      "type": "boolean"
+     },
+     "silence": {
+      "oneOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/components/schemas/Silence",
+        "description": "Latest silence for this exact target, including released and expired records."
+       }
+      ]
+     }
+    },
+    "required": [
+     "active"
+    ],
+    "type": "object"
+   },
    "SourceObservation": {
     "properties": {
      "channel": {
@@ -5348,6 +5446,400 @@
     ],
     "tags": [
      "notification_http"
+    ]
+   }
+  },
+  "/api/v1/alerts/{id}/silence": {
+   "delete": {
+    "operationId": "delete_alert_silence",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "in": "header",
+      "name": "Origin",
+      "required": false,
+      "schema": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     {
+      "description": "Required with the session cookie",
+      "in": "header",
+      "name": "X-CSRF-Token",
+      "required": false,
+      "schema": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SilenceStatus"
+        }
+       }
+      },
+      "description": ""
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "413": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     }
+    },
+    "security": [
+     {
+      "adminBearer": []
+     },
+     {
+      "adminSession": []
+     }
+    ],
+    "summary": "Release the alert instance's manual silence.",
+    "tags": [
+     "notifications"
+    ]
+   },
+   "get": {
+    "operationId": "get_alert_silence",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SilenceStatus"
+        }
+       }
+      },
+      "description": ""
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     }
+    },
+    "security": [
+     {
+      "adminBearer": []
+     },
+     {
+      "adminSession": []
+     }
+    ],
+    "summary": "Read the alert instance's latest manual silence.",
+    "tags": [
+     "notifications"
+    ]
+   },
+   "put": {
+    "operationId": "put_alert_silence",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "in": "header",
+      "name": "Origin",
+      "required": false,
+      "schema": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     {
+      "description": "Required with the session cookie",
+      "in": "header",
+      "name": "X-CSRF-Token",
+      "required": false,
+      "schema": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SilenceRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SilenceStatus"
+        }
+       }
+      },
+      "description": ""
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "413": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     }
+    },
+    "security": [
+     {
+      "adminBearer": []
+     },
+     {
+      "adminSession": []
+     }
+    ],
+    "summary": "Create or replace the alert instance's manual silence.",
+    "tags": [
+     "notifications"
     ]
    }
   },
@@ -10622,6 +11114,400 @@
     ],
     "tags": [
      "notification_http"
+    ]
+   }
+  },
+  "/api/v1/notification-rules/{id}/silence": {
+   "delete": {
+    "operationId": "delete_rule_silence",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "in": "header",
+      "name": "Origin",
+      "required": false,
+      "schema": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     {
+      "description": "Required with the session cookie",
+      "in": "header",
+      "name": "X-CSRF-Token",
+      "required": false,
+      "schema": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SilenceStatus"
+        }
+       }
+      },
+      "description": ""
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "413": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     }
+    },
+    "security": [
+     {
+      "adminBearer": []
+     },
+     {
+      "adminSession": []
+     }
+    ],
+    "summary": "Release the rule's manual silence.",
+    "tags": [
+     "notifications"
+    ]
+   },
+   "get": {
+    "operationId": "get_rule_silence",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SilenceStatus"
+        }
+       }
+      },
+      "description": ""
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     }
+    },
+    "security": [
+     {
+      "adminBearer": []
+     },
+     {
+      "adminSession": []
+     }
+    ],
+    "summary": "Read the rule's latest manual silence.",
+    "tags": [
+     "notifications"
+    ]
+   },
+   "put": {
+    "operationId": "put_rule_silence",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "type": "string"
+      }
+     },
+     {
+      "description": "Matches the configured HTTPS origin when sent and is required with the session cookie",
+      "in": "header",
+      "name": "Origin",
+      "required": false,
+      "schema": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     {
+      "description": "Required with the session cookie",
+      "in": "header",
+      "name": "X-CSRF-Token",
+      "required": false,
+      "schema": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SilenceRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SilenceStatus"
+        }
+       }
+      },
+      "description": ""
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "413": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
+     "504": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     }
+    },
+    "security": [
+     {
+      "adminBearer": []
+     },
+     {
+      "adminSession": []
+     }
+    ],
+    "summary": "Create or replace the rule's manual silence.",
+    "tags": [
+     "notifications"
     ]
    }
   },

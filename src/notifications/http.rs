@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+pub(crate) mod silence;
+
 pub(crate) const RULES: &str = "/api/v1/notification-rules";
 pub(crate) const RULE: &str = "/api/v1/notification-rules/{id}";
 pub(crate) const ALERTS: &str = "/api/v1/alerts";
@@ -29,7 +31,15 @@ pub(crate) const CHANNEL_TEST: &str = "/api/v1/notification-channels/{id}/tests/
 pub(crate) fn is_private(path: &str) -> bool {
     matches!(
         path,
-        RULES | RULE | ALERTS | ALERT | ACK | CHANNEL_TESTS | CHANNEL_TEST
+        RULES
+            | RULE
+            | ALERTS
+            | ALERT
+            | ACK
+            | CHANNEL_TESTS
+            | CHANNEL_TEST
+            | silence::RULE_SILENCE
+            | silence::ALERT_SILENCE
     )
 }
 
@@ -42,6 +52,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(ACK, post(ack_alert))
         .route(CHANNEL_TESTS, post(start_channel_test))
         .route(CHANNEL_TEST, get(get_channel_test))
+        .merge(silence::routes())
 }
 
 pub(crate) enum ApiError {

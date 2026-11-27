@@ -29,7 +29,7 @@ web/
 ├── src/                    web 进程、API 与模块说明
 │   ├── routes/             trading / backtest / dashboard / blog / health
 │   ├── domain/ / blog/ / auth/ / idempotency/
-│   ├── notifications/       告警规则、事件、事务 outbox 和邮件投递
+│   ├── notifications/       告警规则、事件、主动静默、事务 outbox 和邮件投递
 │   ├── integrations/        版本事务与集成测试适配
 │   ├── ops/                 T2b 备份与采集质量只读状态
 │   ├── finance_client/     从 finance 快照生成
@@ -41,6 +41,8 @@ web/
 ```
 
 从仓库根目录执行 cargo run --locked -- migrate 与 cargo run --locked -- serve。默认监听 127.0.0.1:8090，数据库和静态产物的前置准备见 RUNBOOK.md。cargo run --locked -- export-openapi 将契约写入标准输出。
+
+管理员可以按规则或单条告警设置带截止时间和原因的主动静默，也可提前解除。告警事件照常记录，受影响的邮件继续排队，到期或解除后恢复投递资格。[告警接口](docs/api.md#主动静默)
 
 ## 文档索引
 
