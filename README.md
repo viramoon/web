@@ -20,6 +20,9 @@ W6 将内部 finance 契约锁定到 `fc5e153`。WAL 与投影 REST 读取兼容
 
 
 系统关系、版本、契约、配置、健康和环境规则见 [docs/README.md](docs/README.md)。服务部署唯一来源是 fertile deploy/，agent 只分发知识；只有 fertile 对外发版，Maas · Ruler 只按 fertile tag 部署 / 回滚。
+
+含新增迁移的发布回退时，先将迁移前备份恢复到 `web_rollback_<sha>` 和 `data-paper-rollback-<sha>`，再在这套独立目标上启动旧发布。[回退流程](RUNBOOK.md#含新增迁移的发布回退)
+
 ## 目录说明
 
 ```text

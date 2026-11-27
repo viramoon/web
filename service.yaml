@@ -127,7 +127,8 @@ database:
   migration_command: web migrate
   auto_migrate_default: true
   notification_silences: 20261127074531_notification_silences.sql
-  backup_and_rollback: 见 fertile 的部署和备份恢复手册
+  backup_and_rollback: 含新增迁移的发布回退时，先将迁移前备份恢复到 web_rollback_<sha> 和 data-paper-rollback-<sha>，再启动旧发布
+  rollback_instructions: RUNBOOK.md#含新增迁移的发布回退
 ingress:
   public_origin: https://fertile.viramoon.com
   owner: Maas · Ruler
