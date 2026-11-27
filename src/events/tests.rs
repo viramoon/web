@@ -503,3 +503,100 @@ async fn production_poller_projects_job_transitions_and_backup_without_upstream_
     upstream_stop.send_replace(true);
     server.await.unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn pending_alert_query_does_not_delay_available_sse_observations() {
+    let (mut state, admin, _temporary) = fixture("http://127.0.0.1:1");
+    state.db = state.db.with_stalled_connections();
+    // An unavailable finance contributes no job frames. Open its circuit in
+    // memory so this test never needs a network connection.
+    for _ in 0..state.config.finance.circuit_failure_threshold {
+        let _ = state
+            .finance
+            .read(|_| async {
+                Err::<(), _>(finance_client::apis::Error::<()>::Io(
+                    std::io::Error::other("synthetic upstream failure"),
+                ))
+            })
+            .await;
+    }
+    assert_eq!(state.finance.circuit_state(), "open");
+
+    let (stop, shutdown) = watch::channel(false);
+    let app = crate::router_with_shutdown(state, shutdown);
+    let mut body = app
+        .oneshot(event_request(&admin, None))
+        .await
+        .unwrap()
+        .into_body()
+        .into_data_stream();
+    assert!(message(&mut body).await.contains("event: permissions"));
+    assert!(message(&mut body).await.contains("snapshot_required"));
+    let started = Instant::now();
+    let backup = message(&mut body).await;
+    assert!(backup.contains("event: backup"));
+    assert!(backup.contains("\"state\":\"disabled\""));
+    assert!(started.elapsed() <= POLL_INTERVAL + Duration::from_millis(1));
+    stop.send_replace(true);
+    assert!(body.next().await.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn poller_delivers_queued_backup_and_running_while_a_slow_read_continues() {
+    let (state, admin, _temporary) = fixture("http://127.0.0.1:1");
+    let backup = crate::ops::backup_status(State(state.clone()))
+        .await
+        .0
+        .into();
+    let hub = Arc::new(Hub::new());
+    let (stop, shutdown) = watch::channel(false);
+    let response = with_replay(state, &hub)
+        .layer(Extension(StreamShutdown(shutdown.clone())))
+        .oneshot(event_request(&admin, None))
+        .await
+        .unwrap();
+    let mut body = response.into_body().into_data_stream();
+    assert!(message(&mut body).await.contains("event: permissions"));
+    assert!(message(&mut body).await.contains("snapshot_required"));
+
+    let started = Instant::now();
+    let poller = tokio::spawn(async move {
+        let jobs = stream::iter([JobStatus::Queued, JobStatus::Running]).map(|status| {
+            let job = Job {
+                id: 92,
+                status,
+                error: Some(Some("synthetic internal detail".into())),
+                ..Job::default()
+            };
+            vec![EventPayload::Job { job: job.into() }]
+        });
+        // This one read spans two poll intervals and still has a result to deliver.
+        let alerts = stream::once(async {
+            tokio::time::sleep(Duration::from_secs(7)).await;
+            vec![EventPayload::Reset {
+                reason: EventResetReason::AlertWindowOverrun,
+            }]
+        });
+        let backups = stream::iter([vec![EventPayload::Backup { backup }]]);
+        hub.poll_readers(
+            &mut [jobs.boxed(), alerts.boxed(), backups.boxed()],
+            Some(StreamShutdown(shutdown)),
+        )
+        .await;
+    });
+    let queued = message(&mut body).await;
+    assert!(queued.contains("\"id\":\"92\"") && queued.contains("\"status\":\"queued\""));
+    assert!(!queued.contains("synthetic internal detail"));
+    let backup = message(&mut body).await;
+    assert!(backup.contains("event: backup") && backup.contains("\"state\":\"disabled\""));
+    let running = message(&mut body).await;
+    assert!(running.contains("\"id\":\"92\"") && running.contains("\"status\":\"running\""));
+    assert!(!running.contains("synthetic internal detail"));
+    assert!(started.elapsed() < Duration::from_secs(7));
+    let alert = message(&mut body).await;
+    assert!(alert.contains("alert_window_overrun"));
+    assert!(started.elapsed() < POLL_INTERVAL * 3);
+    stop.send_replace(true);
+    assert!(body.next().await.is_none());
+    poller.await.unwrap();
+}

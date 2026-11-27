@@ -133,6 +133,8 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 
 `GET /events` 返回 `text/event-stream`。事件数据为含 `schema_version: "1.0"` 和 `kind` 的 JSON，事件名称为 `job`、`alert`、`backup`、`permissions`、`reset`。作业、告警和备份来自现有只读来源，流只给最小状态字段。首次订阅收到权限状态与 `snapshot_required`；客户端通过 REST 取得初始快照。使用 `Last-Event-ID` 接续最近 128 个保留事件，ID 格式为 `<UUID>:<十进制序号>`。游标超出保留窗、进程代际变化、慢端掉队时返回 `cursor_unavailable`，告警窗口溢出返回 `alert_window_overrun`。收到重置后重取快照。流每秒检查空闲会话且在发送数据前重新鉴权，最多同时 16 条连接。
 
+有订阅者时，Web 按三秒周期并发观察作业、告警和备份。已完成的来源在本轮结束时发布，尚在读取的来源跨周期继续，并保留自己的超时。同一轮的事件依次为作业、告警和备份。
+
 `GET /stream/market` 对有效的 WebSocket 升级返回 101。无效升级返回 400，身份或 Origin 校验失败返回 401 或 403，16 条连接已满时返回 429，finance 不可达时返回 503 `finance_unavailable`。finance 的就绪端点实际返回 HTTP 503 且正文符合健康检查契约时，web 将其视为可达但未就绪，仍允许客户端尝试订阅。升级完成后用文本帧发送 `subscribe`，选择源、产品、频道和标的，或显式设置 `use_depth_focus`。每条连接可持有一个订阅。八个共享槽位占满时，后续订阅收到 `subscription_quota_exceeded`。退订、断开、重置或授权失效均释放槽位。
 
 数据帧沿用 F10a 的 F1 v1.0 事件格式。web 控制帧使用 `type` 区分 `checkpoint`、`reset`、`error` 和 `unsubscribed`。仅对通过当前展示许可的 WAL 发送数据。重连重新鉴权，提交最后确认的同分区 WAL `after` 游标。缺少可验证的盘口基线时收到 `snapshot_required`，消费者掉队时收到 `consumer_lagged`。重置后清空旧盘口，再建立订阅。连接内的上游、订阅及许可错误通过控制帧报告。
