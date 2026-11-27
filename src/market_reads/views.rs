@@ -5,7 +5,7 @@ mod book;
 use super::{MarketReadError, check_display, parsed, product_watermarks, wal_page};
 use crate::{
     AppState, ErrorBody, market,
-    market_types::{InstrumentId, ProductToken},
+    market_types::{InstrumentId, ProductToken, parse_u64},
 };
 use axum::{
     Json, Router,
@@ -180,11 +180,6 @@ impl WindowQuery {
                         && self.until.is_none_or(|until| time < until)
                 }))
     }
-}
-
-fn parse_u64(value: &str) -> Option<u64> {
-    let number: u64 = value.parse().ok()?;
-    (number.to_string() == value).then_some(number)
 }
 
 fn timestamp_at(value: &str) -> Option<DateTime<chrono::Utc>> {

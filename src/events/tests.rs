@@ -16,6 +16,13 @@ const ORIGIN: &str = "https://events.example.test";
 const SESSION: &str = "/api/v1/admin/session";
 
 fn fixture(finance_address: &str) -> (AppState, HeaderValue, TempDir) {
+    fixture_with_origin(finance_address, Some(ORIGIN))
+}
+
+fn fixture_with_origin(
+    finance_address: &str,
+    public_origin: Option<&str>,
+) -> (AppState, HeaderValue, TempDir) {
     let temporary = tempfile::tempdir_in("/tmp").unwrap();
     let mut token_file = NamedTempFile::new_in(&temporary).unwrap();
     fs::set_permissions(token_file.path(), fs::Permissions::from_mode(0o600)).unwrap();
@@ -28,7 +35,7 @@ fn fixture(finance_address: &str) -> (AppState, HeaderValue, TempDir) {
     );
     let mut settings = Settings::load(Path::new("config"), |name| match name {
         "WEB_ADMIN_TOKEN_FILE" => Some(token_file.path().display().to_string()),
-        "WEB_PUBLIC_ORIGIN" => Some(ORIGIN.to_string()),
+        "WEB_PUBLIC_ORIGIN" => public_origin.map(str::to_owned),
         "WEB_STATIC_ROOT" => Some(static_root.display().to_string()),
         "DATABASE_URL" => Some(database_url.clone()),
         "FINANCE_BASE_URL" => Some(finance_address.to_string()),
@@ -44,7 +51,7 @@ fn fixture(finance_address: &str) -> (AppState, HeaderValue, TempDir) {
     .unwrap();
     let access = WriteAccess::load(token_file.path(), 10, Duration::from_secs(60))
         .unwrap()
-        .with_sessions(Some(ORIGIN), Duration::from_secs(120))
+        .with_sessions(public_origin, Duration::from_secs(120))
         .unwrap();
     let state = AppState {
         db,
@@ -317,6 +324,99 @@ async fn private_session_origin_and_revocation_are_rechecked_on_existing_and_new
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn loopback_cookie_sse_streams_only_for_same_origin_requests() {
+    let (state, admin, _temporary) = fixture_with_origin("http://127.0.0.1:1", None);
+    let app = with_replay(state, &Arc::new(Hub::new()));
+    for host in ["127.0.0.1:8090", "localhost:8090"] {
+        let origin = format!("http://{host}");
+        let session = app
+            .clone()
+            .oneshot(
+                Request::post(SESSION)
+                    .header(header::AUTHORIZATION, &admin)
+                    .header(header::HOST, host)
+                    .header(header::ORIGIN, &origin)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.status(), StatusCode::CREATED);
+        let cookie = session.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+
+        for (request_origin, fetch_site) in
+            [(Some(origin.as_str()), None), (None, Some("same-origin"))]
+        {
+            let mut request = Request::get(EVENTS)
+                .header(header::HOST, host)
+                .header(header::COOKIE, cookie);
+            if let Some(origin) = request_origin {
+                request = request.header(header::ORIGIN, origin);
+            }
+            if let Some(site) = fetch_site {
+                request = request.header("sec-fetch-site", site);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers()[header::CONTENT_TYPE],
+                "text/event-stream"
+            );
+            let mut body = response.into_body().into_data_stream();
+            assert!(
+                message(&mut body)
+                    .await
+                    .contains("\"state\":\"authorized\"")
+            );
+            assert!(message(&mut body).await.contains("snapshot_required"));
+        }
+        for (request_host, request_origin, fetch_site) in [
+            (host, None, None),
+            (host, None, Some("same-site")),
+            (
+                host,
+                Some("http://example.invalid:8090"),
+                Some("same-origin"),
+            ),
+            (host, Some("http://localhost:8091"), None),
+            (
+                "127.0.0.1.evil:8090",
+                Some("http://127.0.0.1.evil:8090"),
+                None,
+            ),
+        ] {
+            let mut request = Request::get(EVENTS)
+                .header(header::HOST, request_host)
+                .header(header::COOKIE, cookie);
+            if let Some(origin) = request_origin {
+                request = request.header(header::ORIGIN, origin);
+            }
+            if let Some(site) = fetch_site {
+                request = request.header("sec-fetch-site", site);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let body = to_bytes(response.into_body(), 4096).await.unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["error"]["code"], "origin_rejected");
+        }
+    }
 }
 
 #[tokio::test]

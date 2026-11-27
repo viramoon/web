@@ -46,6 +46,18 @@
 +{{#description}}/// {{{description}}}{{/description}}
 --- a/reqwest/api.mustache
 +++ b/reqwest/api.mustache
+@@ -106 +106 @@
+-pub {{#supportAsync}}async {{/supportAsync}}fn {{{operationId}}}(configuration: &configuration::Configuration{{#allParams}}{{#-first}}, {{!
++pub {{#supportAsync}}async {{/supportAsync}}fn {{{operationId}}}{{#vendorExtensions.x-finance-display-read}}<T: serde::de::DeserializeOwned>{{/vendorExtensions.x-finance-display-read}}(configuration: &configuration::Configuration{{#allParams}}{{#-first}}, {{!
+@@ -118 +118 @@
+-}}{{^supportMultipleResponses}}{{^returnType}}(){{/returnType}}{{{returnType}}}{{/supportMultipleResponses}}{{/isResponseFile}}{{!
++}}{{^supportMultipleResponses}}{{#vendorExtensions.x-finance-display-read}}T{{/vendorExtensions.x-finance-display-read}}{{^vendorExtensions.x-finance-display-read}}{{^returnType}}(){{/returnType}}{{{returnType}}}{{/vendorExtensions.x-finance-display-read}}{{/supportMultipleResponses}}{{/isResponseFile}}{{!
+@@ -123 +123 @@
+-pub {{#supportAsync}}async {{/supportAsync}}fn {{{operationId}}}(configuration: &configuration::Configuration, {{#allParams}}{{{paramName}}}: {{!
++pub {{#supportAsync}}async {{/supportAsync}}fn {{{operationId}}}{{#vendorExtensions.x-finance-display-read}}<T: serde::de::DeserializeOwned>{{/vendorExtensions.x-finance-display-read}}(configuration: &configuration::Configuration, {{#allParams}}{{{paramName}}}: {{!
+@@ -145 +145 @@
+-}}{{^supportMultipleResponses}}{{^returnType}}(){{/returnType}}{{{returnType}}}{{/supportMultipleResponses}}{{/isResponseFile}}{{!
++}}{{^supportMultipleResponses}}{{#vendorExtensions.x-finance-display-read}}T{{/vendorExtensions.x-finance-display-read}}{{^vendorExtensions.x-finance-display-read}}{{^returnType}}(){{/returnType}}{{{returnType}}}{{/vendorExtensions.x-finance-display-read}}{{/supportMultipleResponses}}{{/isResponseFile}}{{!
 @@ -622 +622 @@
 -            ContentType::Text => return Ok(content),
 +            ContentType::Text => Ok(content),

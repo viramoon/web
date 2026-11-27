@@ -68,7 +68,7 @@ fn lookup_key(headers: &HeaderMap) -> Option<&str> {
 
 #[utoipa::path(post, path = "/api/v1/backtests", security(("adminBearer" = []), ("adminSession" = [])),
     params(("Idempotency-Key" = String, Header, description="Stable key, 1..128 visible ASCII characters"),
-        ("Origin" = Option<String>, Header, description="Configured HTTPS origin with the session cookie"),
+        ("Origin" = Option<String>, Header, description="Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin"),
         ("X-CSRF-Token" = Option<String>, Header, description="Required with the session cookie")),
     request_body = ref("#/components/schemas/JobRequest"),
     responses((status=202,body=ref("#/components/schemas/Accepted")), (status=401,body=ErrorBody),

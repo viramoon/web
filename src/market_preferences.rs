@@ -97,7 +97,7 @@ enum FinanceLineState {
 struct Subscriptions {
     /// Allocated market subscriptions in this web process.
     web: SubscriptionQuota,
-    /// Readiness of the broker line contract. Web slots do not consume broker lines.
+    /// Legacy W2a marker. Read the broker budget at /api/v1/market/subscriptions/budget.
     finance_lines: FinanceLineState,
 }
 

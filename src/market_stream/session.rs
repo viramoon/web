@@ -1,8 +1,12 @@
 //! Browser market stream commands and delivery over an authorized F10a WAL.
 
 use super::{MarketPartition, MarketReplay, ReplayError, ResetReason, replay::cursor};
-use crate::{auth::WriteAccess, finance::Finance, market_preferences::MarketPreferences};
-use axum::http::{HeaderMap, HeaderName, header};
+use crate::{
+    auth::{WriteAccess, stream_auth_headers},
+    finance::Finance,
+    market_preferences::MarketPreferences,
+};
+use axum::http::HeaderMap;
 use finance_client::models::{Event, SchemaVersion};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -87,22 +91,9 @@ impl MarketStreamSession {
         access
             .authorize_stream(headers, true)
             .map_err(|_| MarketStreamError::AuthorizationRevoked)?;
-        let mut retained = HeaderMap::new();
-        for name in [
-            header::AUTHORIZATION,
-            header::COOKIE,
-            header::ORIGIN,
-            HeaderName::from_static("sec-fetch-site"),
-        ] {
-            for value in headers.get_all(&name) {
-                let mut value = value.clone();
-                value.set_sensitive(true);
-                retained.append(name.clone(), value);
-            }
-        }
         Ok(Self {
             access,
-            headers: retained,
+            headers: stream_auth_headers(headers),
             preferences,
             subscription: None,
         })

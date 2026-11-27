@@ -18,29 +18,17 @@ OpenAPI 由 handler 注解和输出类型生成。执行下列命令可在不启
 
 CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.openapi.json)逐字节比对。正式集成时将本提交的生成物交给 fertile/contracts/web.openapi.json，再由 frontend 使用 Hey API 生成客户端。生成物只能经导出流程更新。
 
-本仓 CI 在临时目录校验导出内容，校验结果只显示状态。web 导出使用排序键和单空格缩进，保留 F10a 的 JSON Schema 关键字并为 WG 的文件上限留出余量。OpenAPI 中的 example、examples 和生成客户端的样例须登记合成来源。生成快照与客户端仍使用各自的既有导出和再生成流程。
+本仓 CI 在临时目录校验导出内容，校验结果只显示状态。web 导出使用排序键和紧凑 JSON，保留上游 JSON Schema 关键字并符合 WG 的 256 KiB 文件上限。OpenAPI 中的 example、examples 和生成客户端的样例须登记合成来源。生成快照与客户端仍使用各自的既有导出和再生成流程。
 
 ## finance 契约版本
 
-W6 将 [finance 来源提交](../openapi/finance.commit) 从 `617ed83` 升到 `fc5e153e9727181f5748659c0610b2fbc2b49769`。以下是两版 [finance OpenAPI](../openapi/finance.openapi.json) 的完整路径与 schema 差异。已有 HTTP 路径及操作定义均保留。
+[finance 来源提交](../openapi/finance.commit) 锁定为 finance main 的 `40bd0ef4d8c9ef8c7ffac57f7562c8ddd74d6553`，包含 F10b 和 F10c。W8 公开六项 F10c 期权和行情所有者读取，见[读取参数与响应](#w8-期权场所深度与券商线路)。该 [finance OpenAPI](../openapi/finance.openapi.json) 也包含策略、作业、研究、决策和 Binance 状态端点。浏览器的 bars 和指标仍使用 W2a 的 WAL 视图。
 
-| 变化 | 路径或 schema | 含义 |
-| --- | --- | --- |
-| 新增 GET | `/api/v1/market/bars` | F6 主图时钟、来源、覆盖、精确 OHLCV 与逐行指标。 |
-| 新增 GET | `/api/v1/indicators` | F6 版本化指标、参数规则、输出与口径目录。 |
-| 新增 GET | `/api/v1/indicators/values` | F6 保留 bar 时钟、覆盖与预热状态的指标值。 |
-| 新增 schema | `BarProvenance`、`BarSeriesKey`、`CalendarId`、`ChartBar`、`ChartBars`、`ChartContext`、`ChartCoverage`、`ChartValue`、`ChartValues`、`DelayTier`、`DisplayPolicy`、`IndicatorCatalog`、`IndicatorDefinition`、`IndicatorParameter`、`IndicatorRequest`、`ParameterRule`、`ProjectedBar`、`ValueRow`、`ValueStatus` | F6 新路径的响应及关联类型。价格、数量和指标值保留十进制文本。 |
-| 新增 schema | `FundingRate`、`OpenInterest` | F4 将费率、可空的下次资金费率时间及持仓量建模为独立 payload。 |
-| 更新 schema | `Message` | 新增 `funding_rate`、`open_interest` 两个分支。 |
-| 更新 schema | `Event` | 2.0 永续事件的 `revision` 为 `"0"`。允许既有 `perpetual_context`、两个新增分支，以及 `gap`、`reset`、`heartbeat`、`status`。1.0 保留原消息集合。 |
+WAL 与投影 REST 保留 W6 的 1.0 与 2.0 `Event`、`Message` 和 `SchemaVersion`。上游返回 3.0 的 `option_history_trade` 或 `option_history_quote` 时，整条请求返回 `502 finance_invalid_response`，以保留原分页和旧客户端解码行为。原始记录仍须通过本机记录与显示许可检查。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制与大整数文本。市场 WebSocket 只发 1.0 数据帧。web 运维 SSE 使用下文的 `/events` 契约。
 
-F9c 的场所深度、F9b 的行情线预算、F12 的历史期权与费用估算、F13 的回测 worker 分离在此版本都没有独立的 HTTP 路径或 schema 差异。F4 更新上游 `protocol/v2/event.schema.json` 与 `protocol/v2/capability.schema.json`，分别加入独立上下文与 2.0 控制事件、独立上下文产品能力。F6 更新上游 `strategies/schema/strategy-bundle-v1.schema.json` 与 `strategies/schema/component-registry-v1.json`，增加指标注册和参数规则。这些上游文件由 finance 维护。[锁定版本的行情协议](https://github.com/viramoon/finance/tree/fc5e153e9727181f5748659c0610b2fbc2b49769/protocol)
+同一 finance 提交导出的三个 1.0 读流产物与 W6 逐字节一致。[市场 WS schema](../openapi/finance.market-ws.schema.json) · [行情状态 SSE schema](../openapi/finance.market-status-sse.schema.json) · [合成回放样本](../openapi/finance.read-stream-examples.json)
 
-同一提交的 1.0 读流产物保存在 web，内容与 `617ed83` 的导出一致。[市场 WS schema](../openapi/finance.market-ws.schema.json) · [行情状态 SSE schema](../openapi/finance.market-status-sse.schema.json) · [合成回放样本](../openapi/finance.read-stream-examples.json)
-
-web 原有路径、权限与查询参数保持原状。[web OpenAPI](../openapi/web.openapi.json) 的 `Event`、`Message`、`FundingRate`、`OpenInterest` 对应新版 WAL 与投影响应。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制和大整数文本。web 已有的 bars 和指标端点仍使用 W2a 的 WAL 视图。市场 WebSocket 继续发 1.0 数据帧，遇到 2.0 事件发出 `unsupported_version` 重置。web 运维 SSE 仍按下文的 `/events` 契约运行。运维缺口响应的水位组件见[备份与采集质量](#备份与采集质量)。
-
-合并后，frontend 按已合并的 web SHA 更新 `openapi/web.commit`、快照及生成客户端。fertile 在对应 frontend 变更合并后更新 gitlinks，并用 finance `fc5e153` 和已合并的 web 提交运行 T3 契约比对和隔离复测。[生成及校验流程](../src/finance_client/README.md)
+web 合并后，frontend 用已合并的 web SHA 更新 `openapi/web.commit`、快照及生成客户端。frontend 合并后，fertile 更新相应 gitlinks 和契约快照，用配套的 finance、web 和 frontend 提交运行 T3 契约比对与隔离复测。[生成及校验流程](../src/finance_client/README.md)
 
 ## 请求与静态资源
 
@@ -77,11 +65,13 @@ GET /api/v1/backtests/datasets 返回标的日历、来源和首尾日期。SmaC
 
 | 方法与路径 | 请求及响应 |
 | --- | --- |
-| POST /api/v1/admin/session | 发送现有管理 Bearer 和部署配置的 HTTPS Origin。201 返回 `csrf_token`、`expires_in`（秒），并设置 `__Host-web_admin_session` Cookie |
+| POST /api/v1/admin/session | 发送现有管理 Bearer 与允许的 Origin。201 返回 `csrf_token`、`expires_in`（秒），并设置 `__Host-web_admin_session` Cookie |
 | DELETE /api/v1/admin/session | 发送会话 Cookie、Origin 与 `X-CSRF-Token`。204 撤销服务端会话并清除 Cookie |
 | GET /api/v1/me/capabilities | 200 返回 `subject`（`anonymous` 或 `admin`）及可见的 `products`。有效会话额外返回 `csrf_token`，便于页面重载恢复 |
 
 Cookie 使用 `HttpOnly; Secure; SameSite=Strict; Path=/`，作用域为当前主机。所有 Cookie 管理写入都需 Origin 精确匹配，并发送会话的 CSRF token；新集成写接口收到显式 Bearer 和 Origin 时也校验 Origin。脚本可仅发送 Bearer。权限失败为 401 或 403，管理员登录及写入共享限流。会话、能力及集成接口返回 `Cache-Control: no-store`。
+
+若设置了 `WEB_PUBLIC_ORIGIN`，会话登录和需要 Origin 的请求按该 HTTPS 值精确匹配。省略配置时，用于登录和 Cookie 会话的 Origin 仅允许 `http://127.0.0.1:<port>` 或 `http://localhost:<port>`，主机与显式端口须和唯一的 `Host` 头完全一致。代理转发头不参与判定。受保护的 REST 与 SSE 读取若省略 Origin，须有合法的回环 Host 和唯一的 `Sec-Fetch-Site: same-origin`。若请求携带 `Sec-Fetch-Site`，其值也须是 `same-origin`。WebSocket 握手、登录与写入均要求明确的 Origin。Origin 校验失败返回 403 `origin_rejected`，能力查询按匿名处理。
 
 匿名可见 `system`、`backtests`、`market_status`。管理员额外可见 `backtest_submission`、`integrations`、`restricted_market_data` 和 `notifications`。回测按原键查询、集成读取、通知读取和 W2a 行情网关使用 W1 管理员身份。
 
@@ -109,13 +99,32 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 
 `GET /market/depth-focus` 读取当前标的。`PUT /market/depth-focus` 接受 `action: set` 加 F1 标的 ID，或 `action: clear`，返回保存后的 `instrument_id`。盘口请求省略标的时使用该选择，清除后同一请求返回 `depth_focus_required`。自选和 focus 的 PUT 超过正文上限时返回 413 `body_too_large`。
 
-`GET /market/subscriptions` 返回进程内单管理员额度 `web.limit`、`web.active` 与 `web.available`。浏览器会话与 bearer 共用 8 个 web 订阅槽。`finance_lines` 为 `finance_contract_pending`，当前券商线路使用量待 finance 提供。期权链、flow 和 exposure 的三个查询返回 503 `finance_contract_pending`。
+`GET /market/subscriptions` 返回进程内单管理员额度 `web.limit`、`web.active` 与 `web.available`。浏览器会话与 bearer 共用 8 个 web 订阅槽。旧客户端可继续按原 schema 读取 `finance_lines: "finance_contract_pending"` 兼容字段。实际券商预算由 W8 的独立接口返回。
 
 `GET /events` 返回 `text/event-stream`。事件数据为含 `schema_version: "1.0"` 和 `kind` 的 JSON，事件名称为 `job`、`alert`、`backup`、`permissions`、`reset`。作业、告警和备份来自现有只读来源，流只给最小状态字段。首次订阅收到权限状态与 `snapshot_required`；客户端通过 REST 取得初始快照。使用 `Last-Event-ID` 接续最近 128 个保留事件，ID 格式为 `<UUID>:<十进制序号>`。游标超出保留窗、进程代际变化、慢端掉队时返回 `cursor_unavailable`，告警窗口溢出返回 `alert_window_overrun`。收到重置后重取快照。流每秒检查空闲会话且在发送数据前重新鉴权，最多同时 16 条连接。
 
 `GET /stream/market` 对有效的 WebSocket 升级返回 101。无效升级返回 400，身份或 Origin 校验失败返回 401 或 403，16 条连接已满时返回 429，finance 不可达时返回 503 `finance_unavailable`。finance 的就绪端点实际返回 HTTP 503 且正文符合健康检查契约时，web 将其视为可达但未就绪，仍允许客户端尝试订阅。升级完成后用文本帧发送 `subscribe`，选择源、产品、频道和标的，或显式设置 `use_depth_focus`。每条连接可持有一个订阅。八个共享槽位占满时，后续订阅收到 `subscription_quota_exceeded`。退订、断开、重置或授权失效均释放槽位。
 
 数据帧沿用 F10a 的 F1 v1.0 事件格式。web 控制帧使用 `type` 区分 `checkpoint`、`reset`、`error` 和 `unsubscribed`。仅对通过当前展示许可的 WAL 发送数据。重连重新鉴权，提交最后确认的同分区 WAL `after` 游标。缺少可验证的盘口基线时收到 `snapshot_required`，消费者掉队时收到 `consumer_lagged`。重置后清空旧盘口，再建立订阅。连接内的上游、订阅及许可错误通过控制帧报告。
+
+## W8 期权、场所深度与券商线路
+
+全部使用 `GET /api/v1`，沿用上文的管理员身份、Origin 校验、共享 REST 节流和 `Cache-Control: no-store`。finance 的 `access` 须匹配 `ibkr` 和对应产品（`opra` 或 `nasdaq-totalview`），带有效许可标签及 `display_live: true`。成功响应保留 finance 的 JSON，包括明确的 `null`、省略的字段、未知状态、精确价量与覆盖。web 槽位与券商实际占用独立计数。
+
+| 路径 | 查询与输出 |
+| --- | --- |
+| `/options/chain` | 传已确认的正整数 `underlying_con_id`。可选 `expiry`（YYYY-MM-DD）、排他的 `after_con_id`、`limit`（默认 100，最大 500）。返回当前候选集的未到期期权、`as_of`、`discovery_complete` 和 `next_after_con_id`。续页沿用筛选条件，游标为 `null` 时结束。 |
+| `/options/exposure` | 传 F1 `underlying_id`，旧参数 `instrument_id` 仍可使用；两个参数同时出现时须相等。可选 `as_of` 查询精确估值时点，缺省取最新。OpenAPI 的 `scenario` 参数沿用 `ProductToken`。当前支持 `absolute`（默认）、`dealer_short`、`dealer_long`、`call_long_put_short`。web 在调用 finance 前校验情景。符合 `ProductToken` 但尚不支持的值（如 `fixture`）直接返回基线的 `503 finance_contract_pending`。语法无效的值返回 `400 invalid_market_request`。返回 `report` 的全链、0DTE 和其他到期桶，含 GEX、wall、flip 状态、OI 日期和局部覆盖。 |
+| `/options/history` | 传正整数 `underlying_con_id`、纳秒十进制字符串 `start` 和 `end` 查询已取得的半开窗口 `[start, end)`。支持 `offset`、`limit`（默认 20，最大 50）。响应保留 `available`、`no_bars`、`expired`、`request_failed`、`as_of` 和 `next_offset`。批次变化后从头分页。 |
+| `/market/depth` | `symbol` 为 QQQ、AAPL、MSFT、NVDA、AMZN、GOOGL、META 或 TSLA。读取 Nasdaq TotalView 场所深度，含权限确认、同步状态、档数、`received_at` 及可空的 `market_data_type`。W2a 的 `/market/book` 继续提供含 focus 的 WAL 盘口。 |
+| `/market/subscriptions/budget` | 返回账户线路上限、预留、常驻股票、热点期权、轮换占用、调度阶段、发现及观察计数。 |
+| `/market/subscriptions/coverage` | 传正整数 `con_id` 和 RFC 3339 的 `start`、`end`。返回观察区间 `covered`、`uncovered`、`unknown` 及可空的 `last_observed_at`。 |
+
+旧期权链占位参数 `instrument_id`、`as_of`、`offset` 已弃用。仅提交有效的旧请求形式时仍返回 `503 finance_contract_pending`。成功读取需从行情所有者取得已确认的 `underlying_con_id`，并使用游标分页。两种查询形式的专用参数须分别使用。
+
+参数校验失败返回 400。展示未获准返回 `403 market_display_denied`，上游查无快照或窗口的 404 保留，错误响应仍使用 `error.code` 与 `error.message`。上游异常归为 502，来源未接线、连接失败或熔断为 `503 finance_unavailable`，超时为 `504 finance_timeout`。接口使用 finance 已取得的数据，历史读取不触发下载。
+
+专用 `/options/flow`（实时观察、历史逐笔核验与证据详情）仍返回 `503 finance_contract_pending`，等待 F10d。自选与 focus 仍使用 W2a 的边界；向行情所有者提交订阅或深度焦点，以及实时显示流接入，属于后续集成。部署前置条件见[运行手册](../RUNBOOK.md#w8-期权和场所深度)。
 
 ## 集成配置
 

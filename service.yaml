@@ -12,7 +12,7 @@ environment:
   FINANCE_BASE_URL: http://127.0.0.1:8081
   WEB_REQUIRE_FINANCE: false
   DATABASE_URL: 由部署环境传入，仅引用受控配置
-  WEB_PUBLIC_ORIGIN: 可选，浏览器管理会话使用的规范 HTTPS origin
+  WEB_PUBLIC_ORIGIN: 可选，浏览器管理会话使用的规范 HTTPS origin。省略时仅允许与请求 Host（含端口）匹配的 HTTP 回环同源会话
   WEB_ADMIN_SESSION_TTL_SECONDS: 900
   WEB_CREDENTIAL_DIR: 可选，web 所有且权限为 0700 的持久化绝对目录
   WEB_CREDENTIAL_RECIPIENT_PUBLIC_KEY_FILE: 可选，与 WEB_CREDENTIAL_DIR 成对设置的 RSA 公钥 PEM 绝对路径
@@ -40,6 +40,7 @@ market_gateway:
   finance_contract: openapi/finance.commit
   access: administrator
   cache_control: no-store
+  legacy_wal_event_versions: ["1.0", "2.0"]
   rest_reads: {max_requests: 120, window_seconds: 60, identity: single_admin}
   watchlists: {table: app.market_watchlists, migration: "20261127040000", max_instruments: 64}
   depth_focus: {path: /api/v1/market/depth-focus, state: process_local}
@@ -47,7 +48,18 @@ market_gateway:
     path: /api/v1/market/subscriptions
     web_limit: 8
     identity: single_admin
-    finance_lines: finance_contract_pending
+    finance_lines_legacy_field: finance_contract_pending
+    finance_budget: /api/v1/market/subscriptions/budget
+    finance_coverage: /api/v1/market/subscriptions/coverage
+  f10c_display_reads:
+    venue_depth: /api/v1/market/depth
+    option_chain: /api/v1/options/chain
+    option_exposure: /api/v1/options/exposure
+    option_history: /api/v1/options/history
+    source: authorized_ibkr_paper_read_only_market_owner
+  legacy_option_chain_query: {path: /api/v1/options/chain, status: 503, code: finance_contract_pending}
+  pending_reads:
+    /api/v1/options/flow: F10d
   events:
     path: /api/v1/events
     protocol: sse

@@ -29,6 +29,10 @@ struct Fixture {
 
 impl Fixture {
     async fn start(allow_second_snapshot: bool) -> Self {
+        Self::start_with_origin(allow_second_snapshot, Some(ORIGIN)).await
+    }
+
+    async fn start_with_origin(allow_second_snapshot: bool, public_origin: Option<&str>) -> Self {
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let gateway_url = format!("http://{}", gateway.local_addr().unwrap());
@@ -92,7 +96,7 @@ impl Fixture {
                     }
                 }),
             );
-        let mut fixture = StreamTestApp::new();
+        let mut fixture = StreamTestApp::with_origin(public_origin);
         let mut config = fixture.state.config.finance.clone();
         config.base_url = format!("http://{}", upstream.local_addr().unwrap());
         config.max_retries = 0;
@@ -118,11 +122,17 @@ impl Fixture {
     }
 
     async fn login(&self) -> Browser {
+        self.login_with_authority(self.gateway.strip_prefix("http://").unwrap(), ORIGIN)
+            .await
+    }
+
+    async fn login_with_authority(&self, host: &str, origin: &str) -> Browser {
         let response = self
             .client
             .post(format!("{}{SESSION_PATH}", self.gateway))
             .header(header::AUTHORIZATION, self.bearer.clone())
-            .header(header::ORIGIN, ORIGIN)
+            .header(header::HOST, host)
+            .header(header::ORIGIN, origin)
             .send()
             .await
             .unwrap();
@@ -304,6 +314,35 @@ async fn websocket_upgrades_reauthenticates_reconnect_and_releases_on_lag_reset(
         StatusCode::UNAUTHORIZED,
     )
     .await;
+}
+
+#[tokio::test]
+async fn loopback_cookie_websocket_upgrades_and_replays_for_both_authorities() {
+    let fixture = Fixture::start_with_origin(false, None).await;
+    let address = fixture.gateway.strip_prefix("http://").unwrap();
+    let (_, port) = address.split_once(':').unwrap();
+    for host in [address.to_owned(), format!("localhost:{port}")] {
+        let origin = format!("http://{host}");
+        let browser = fixture.login_with_authority(&host, &origin).await;
+        let mut request = fixture.upgrade_request(Some(&browser));
+        request
+            .headers_mut()
+            .insert(header::HOST, HeaderValue::from_str(&host).unwrap());
+        request
+            .headers_mut()
+            .insert(header::ORIGIN, HeaderValue::from_str(&origin).unwrap());
+        request
+            .headers_mut()
+            .insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+        let (mut client, response) = timeout(IO_TIMEOUT, connect_async(request))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        command(&mut client, SUBSCRIBE).await;
+        expect_snapshot_and_checkpoint(&mut client, SEQ, "1").await;
+    }
 }
 
 #[tokio::test]
