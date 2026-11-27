@@ -114,11 +114,16 @@ impl From<&str> for ContentType {
 }
 
 pub mod bars_api;
+pub mod binance_read_api;
 pub mod bundle_jobs_api;
+pub mod decision_read_api;
 pub mod default_api;
 pub mod factor_read_api;
 pub mod jobs_api;
 pub mod market_api;
+pub mod market_options_analytics_api;
+pub mod market_options_depth_api;
+pub mod market_options_lines_api;
 pub mod market_read_api;
 pub mod research_api;
 

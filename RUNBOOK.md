@@ -71,7 +71,7 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 网页出现 502、503、504 时，先查 /api/v1/system/status 中的 finance.ok、latency_ms、circuit，再查 finance 的监听和 ready。熔断打开后等待对应 profile 的 circuit_open_ms，下一次访问会试探，成功后自动恢复。若请求为写操作，超时后先查作业状态，重交时沿用同一幂等键。
 
-finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W6 使用 `fc5e153`，web 升级无额外迁移、环境变量、端口、进程或数据目录要求。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约差异](docs/api.md#finance-契约版本)
+finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W8 使用 F10c 的 `40bd0ef4`，web 升级沿用现有配置、进程与数据路径。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约差异](docs/api.md#finance-契约版本)
 
 ## 管理员写权限
 
@@ -120,9 +120,15 @@ curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 
 `/api/v1/events` 使用现有 web 端口。入口代理应关闭 SSE 响应缓冲并允许 15 秒心跳，转发 `Last-Event-ID`。收到 `reset` 时从受保护的 REST 路径重取快照，断线后 EventSource 会携带最近游标重连。进程重启清空 SSE 回放，进程退出时主动关闭流。无效或过期的会话需重新登录。避免采集流正文、查询参数、身份头和付费数据。
 
-`GET /api/v1/market/subscriptions` 返回单管理员共享的 web 订阅额度和券商线路契约状态。focus 是进程内的盘口选择，重启后重新设置。读取盘口时显式标的优先于 focus。更新自选前读取当前 revision，写超时后先查自选或 focus 再重试。如果盘口响应为 `snapshot_required`，客户端应清空旧盘口。
+`GET /api/v1/market/subscriptions` 返回单管理员共享的 web 订阅额度；券商实际预算和观察覆盖分别读取 `/api/v1/market/subscriptions/budget` 与 `/api/v1/market/subscriptions/coverage`。focus 是进程内的盘口选择，重启后重新设置。读取盘口时显式标的优先于 focus。更新自选前读取当前 revision，写超时后先查自选或 focus 再重试。如果盘口响应为 `snapshot_required`，客户端应清空旧盘口。
 
-`/api/v1/stream/market` 在既有 web 端口升级。入口代理应保留 WebSocket 升级头与浏览器 Origin。握手返回 `503 finance_unavailable` 时先恢复受控的 finance API，再重连。收到重置时清空旧盘口，再以有效快照或游标建立新的订阅。期权查询返回 `finance_contract_pending`。各路径、节流和接续语义见 [W2a 接口](docs/api.md#行情自选与推送)。
+`/api/v1/stream/market` 在既有 web 端口升级。入口代理应保留 WebSocket 升级头与浏览器 Origin。握手返回 `503 finance_unavailable` 时先恢复受控的 finance API，再重连。收到重置时清空旧盘口，再以有效快照或游标建立新的订阅。各路径、节流和接续语义见[行情网关接口](docs/api.md#行情自选与推送)。
+
+## W8 期权和场所深度
+
+先部署含 F10c 的 finance，再切换 web。使用现有 `FINANCE_BASE_URL`，由 finance 的已授权 IBKR paper 只读行情所有者接入链和调度器、Nasdaq 深度回调、敞口输入快照及已取得的历史链批次。单独启动 finance API 时，这些来源可能未装配。若新读路径返回 `503 finance_unavailable`，除连通性和熔断外，还应检查该来源是否已接入且具有展示许可。上游已接入但不存在相应快照或历史窗口时，保留 404。
+
+期权链使用已确认的券商 `underlying_con_id`，仅带旧参数的合法请求仍返回 `503 finance_contract_pending`。敞口使用 F1 `underlying_id`。场所深度请读 `/api/v1/market/depth?symbol=…`，仅当状态为 `receiving` 时展示盘口。历史链查询使用已取得的精确窗口。上述 GET 仅查已接入的数据与状态，供应商会话及采集任务由行情所有者管理。`/api/v1/options/flow` 仍返回 `503 finance_contract_pending`，等待 F10d。[路径和参数](docs/api.md#w8-期权场所深度与券商线路)
 
 ## 集成配置及凭据
 

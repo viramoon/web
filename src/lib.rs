@@ -10,7 +10,7 @@ mod integrations;
 mod market;
 #[cfg(test)]
 mod market_gateway_tests;
-mod market_pending;
+mod market_options;
 pub mod market_preferences;
 mod market_reads;
 pub mod market_stream;
@@ -260,7 +260,7 @@ fn read_product(path: &str) -> Option<auth::Product> {
 }
 
 fn is_market_rest(path: &str) -> bool {
-    market_pending::is_private(path)
+    market_options::is_private(path)
         || market_reads::is_private(path)
         || matches!(
             path,
@@ -462,7 +462,7 @@ fn router_with_market_preferences(
         .merge(notification_http::routes())
         .merge(ops::routes())
         .merge(watchlists::routes())
-        .merge(market_pending::routes())
+        .merge(market_options::routes())
         .merge(market_preferences::routes())
         .merge(market_reads::routes())
         .merge(market_stream::routes())
@@ -555,7 +555,7 @@ pub struct WebApi;
 pub fn openapi() -> serde_json::Value {
     let mut spec = WebApi::openapi();
     spec.merge(watchlists::WatchlistApi::openapi());
-    spec.merge(market_pending::MarketPendingApi::openapi());
+    spec.merge(market_options::MarketOptionsApi::openapi());
     spec.merge(market_preferences::MarketPreferencesApi::openapi());
     spec.merge(market_stream::MarketStreamApi::openapi());
     spec.merge(events::EventsApi::openapi());
@@ -585,6 +585,7 @@ pub fn openapi() -> serde_json::Value {
         serde_json::from_str(include_str!("../openapi/finance.openapi.json"))
             .expect("checked-in finance OpenAPI is valid");
     market_reads::register_openapi(&mut spec, &upstream);
+    market_options::register_openapi(&mut spec, &upstream);
     let schemas = upstream["components"]["schemas"]
         .as_object()
         .expect("finance schemas");
