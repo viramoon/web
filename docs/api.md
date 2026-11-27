@@ -110,7 +110,7 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 | 路径 | 查询与输出 |
 | --- | --- |
 | `/options/chain` | 传已确认的正整数 `underlying_con_id`。可选 `expiry`（YYYY-MM-DD）、排他的 `after_con_id`、`limit`（默认 100，最大 500）。返回当前候选集的未到期期权、`as_of`、`discovery_complete` 和 `next_after_con_id`。续页沿用筛选条件，游标为 `null` 时结束。 |
-| `/options/exposure` | 传 F1 `underlying_id`，旧参数 `instrument_id` 仍可使用；两个参数同时出现时须相等。可选 `as_of` 查询精确估值时点，缺省取最新。OpenAPI 的 `scenario` 参数沿用 `ProductToken`。当前支持 `absolute`（默认）、`dealer_short`、`dealer_long`、`call_long_put_short`。web 在调用 finance 前校验情景，未知值（如 `fixture`）返回 `400 invalid_market_request`。返回 `report` 的全链、0DTE 和其他到期桶，含 GEX、wall、flip 状态、OI 日期和局部覆盖。 |
+| `/options/exposure` | 传 F1 `underlying_id`，旧参数 `instrument_id` 仍可使用；两个参数同时出现时须相等。可选 `as_of` 查询精确估值时点，缺省取最新。OpenAPI 的 `scenario` 参数沿用 `ProductToken`。当前支持 `absolute`（默认）、`dealer_short`、`dealer_long`、`call_long_put_short`。web 在调用 finance 前校验情景。符合 `ProductToken` 但尚不支持的值（如 `fixture`）直接返回基线的 `503 finance_contract_pending`。语法无效的值返回 `400 invalid_market_request`。返回 `report` 的全链、0DTE 和其他到期桶，含 GEX、wall、flip 状态、OI 日期和局部覆盖。 |
 | `/options/history` | 传正整数 `underlying_con_id`、纳秒十进制字符串 `start` 和 `end` 查询已取得的半开窗口 `[start, end)`。支持 `offset`、`limit`（默认 20，最大 50）。响应保留 `available`、`no_bars`、`expired`、`request_failed`、`as_of` 和 `next_offset`。批次变化后从头分页。 |
 | `/market/depth` | `symbol` 为 QQQ、AAPL、MSFT、NVDA、AMZN、GOOGL、META 或 TSLA。读取 Nasdaq TotalView 场所深度，含权限确认、同步状态、档数、`received_at` 及可空的 `market_data_type`。W2a 的 `/market/book` 继续提供含 focus 的 WAL 盘口。 |
 | `/market/subscriptions/budget` | 返回账户线路上限、预留、常驻股票、热点期权、轮换占用、调度阶段、发现及观察计数。 |

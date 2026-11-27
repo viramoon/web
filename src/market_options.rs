@@ -16,6 +16,7 @@ use finance_client::{
     models::{DealerScenario, ProductPolicy},
 };
 use serde::Deserialize;
+use serde::de::value::{Error as ValueError, StrDeserializer};
 use serde_json::{Value, json, value::RawValue};
 use utoipa::{IntoParams, OpenApi, ToSchema};
 
@@ -97,8 +98,19 @@ struct FlowQuery {
 struct ExposureQuery {
     instrument_id: Option<InstrumentId>,
     underlying_id: Option<InstrumentId>,
-    scenario: Option<DealerScenario>,
+    scenario: Option<ProductToken>,
     as_of: Option<DateTime<Utc>>,
+}
+
+impl ExposureQuery {
+    fn finance_scenario(&self) -> Result<Option<&str>, OptionReadError> {
+        let Some(scenario) = self.scenario.as_ref().map(ProductToken::as_str) else {
+            return Ok(None);
+        };
+        DealerScenario::deserialize(StrDeserializer::<ValueError>::new(scenario))
+            .map_err(|_| OptionReadError::ContractPending)?;
+        Ok(Some(scenario))
+    }
 }
 
 enum OptionReadError {
@@ -224,8 +236,7 @@ async fn exposure(
         (Some(id), _) | (_, Some(id)) => id.as_str(),
         _ => return Err(OptionReadError::InvalidQuery),
     };
-    let scenario = query.scenario.map(|scenario| scenario.to_string());
-    let scenario = scenario.as_deref();
+    let scenario = query.finance_scenario()?;
     let raw = state
         .finance
         .read(|cfg| async move {
@@ -406,7 +417,7 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
                     Some("scenario") => {
                         parameter["schema"] = json!({"$ref": "#/components/schemas/ProductToken"});
                         parameter["description"] = json!(
-                            "Use absolute (default), dealer_short, dealer_long, or call_long_put_short. Other values return 400 invalid_market_request."
+                            "Use absolute (default), dealer_short, dealer_long, or call_long_put_short. Unsupported ProductToken values return 503 finance_contract_pending."
                         );
                     }
                     _ => {}
@@ -417,6 +428,9 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
                 "description": "Alias for underlying_id. Supply at least one.",
                 "schema": {"$ref": "#/components/schemas/InstrumentId"}
             }));
+            operation["responses"]["503"]["description"] = json!(
+                "Finance unavailable, or finance contract pending for an unsupported scenario"
+            );
         }
         let success = operation["responses"]["200"].clone();
         register_referenced_schemas(
@@ -465,17 +479,18 @@ mod tests {
             DealerScenario::DealerLong,
             DealerScenario::CallLongPutShort,
         ] {
+            let scenario = scenario.to_string();
             let uri = format!("{EXPOSURE}?underlying_id=SYNTH.XNYS&scenario={scenario}")
                 .parse()
                 .unwrap();
             let Query(query) = Query::<ExposureQuery>::try_from_uri(&uri).unwrap();
-            assert_eq!(query.scenario, Some(scenario));
+            assert_eq!(query.finance_scenario().ok(), Some(Some(scenario.as_str())));
         }
         let uri = format!("{EXPOSURE}?instrument_id=SYNTH.XNYS")
             .parse()
             .unwrap();
         let Query(query) = Query::<ExposureQuery>::try_from_uri(&uri).unwrap();
-        assert!(query.scenario.is_none());
+        assert_eq!(query.finance_scenario().ok(), Some(None));
     }
 
     #[test]

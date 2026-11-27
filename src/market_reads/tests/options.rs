@@ -344,13 +344,26 @@ async fn f10c_validates_query_bounds_and_preserves_legacy_pending() {
 }
 
 #[tokio::test]
-async fn f10c_rejects_unsupported_exposure_scenario_before_finance() {
+async fn f10c_unsupported_exposure_scenario_preserves_pending_before_finance() {
     let gateway = Gateway::new("http://127.0.0.1:1".into());
     for parameter in ["instrument_id", "underlying_id"] {
         let path = format!("/api/v1/options/exposure?{parameter}={INSTRUMENT}&scenario=fixture");
         assert_eq!(
-            gateway.get_json(&path, StatusCode::BAD_REQUEST).await,
-            json!({"error": {"code": "invalid_market_request", "message": "Invalid market request"}})
+            gateway
+                .get_json(&path, StatusCode::SERVICE_UNAVAILABLE)
+                .await,
+            json!({"error": {
+                "code": "finance_contract_pending",
+                "message": "The finance contract for this capability is pending"
+            }}),
+            "{path}"
+        );
+        let malformed =
+            format!("/api/v1/options/exposure?{parameter}={INSTRUMENT}&scenario=Fixture");
+        assert_eq!(
+            gateway.get_json(&malformed, StatusCode::BAD_REQUEST).await,
+            json!({"error": {"code": "invalid_market_request", "message": "Invalid market request"}}),
+            "{malformed}"
         );
     }
 }
