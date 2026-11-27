@@ -4,9 +4,9 @@ fertile 的后端网关与 submodule。使用 axum 提供浏览器 API、通过 
 
 本仓库按 issue #1 方案 v2 初始化。axum 服务提供健康检查、带行情新鲜度的系统状态、静态托管与 PostgreSQL 迁移，并经 finance 客户端提供只读查询和管理员回测作业提交。管理接口支持短期同源会话、产品权限查询、加密凭据录入和集成候选测试、启用与回滚。运维页面可读取备份恢复点和授权的采集缺口。`web publish-quality` 将本机 F3 观测发布为缺口快照。`web-notifier` 消费 PostgreSQL outbox，并按活动 SMTP 版本绑定的加密配置投递邮件。见 [issue #1 方案 v2](https://github.com/viramoon/web/issues/1#issuecomment-6834604360)、[运行手册](RUNBOOK.md) 和 [AGENTS.md](AGENTS.md)。
 
-W2a 提供管理员专用的 F10a 行情读取与 WAL 视图、PostgreSQL 自选、盘口 focus 和运维 SSE。市场 WebSocket 在同一服务端口提供授权的有界 WAL 回放、共享订阅额度和重置帧。期权查询和券商线路额度等待 finance 后续契约。见 [行情、自选与推送](docs/api.md#行情自选与推送)。
+W2a 提供管理员专用的 F10a 行情读取与 WAL 视图、PostgreSQL 自选、盘口 focus 和运维 SSE。市场 WebSocket 在同一服务端口提供授权的有界 WAL 回放、共享订阅额度和重置帧。见 [行情、自选与推送](docs/api.md#行情自选与推送)。
 
-W6 将内部 finance 契约锁定到 `fc5e153`。WAL 与投影 REST 读取兼容新增的 2.0 永续事件。浏览器行情和指标查询继续使用 W2a 的 WAL 视图，市场 WebSocket 仍使用 1.0 数据帧。[契约差异](docs/api.md#finance-契约版本)
+W8 将内部 finance 契约锁定到含 F10c 的 `40bd0ef4`。管理员可通过 web 读取期权链、场所深度、GEX/wall/0DTE、历史期权链、券商预算及覆盖；`/options/flow` 等待 F10d。WAL 与投影 REST 也识别 3.0 原始期权证据，市场 WebSocket 使用 1.0 数据帧。[契约差异](docs/api.md#finance-契约版本)
 
 ## 系统中的位置
 

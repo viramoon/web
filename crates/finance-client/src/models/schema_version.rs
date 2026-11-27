@@ -21,6 +21,9 @@ pub enum SchemaVersion {
 
     #[serde(rename = "2.0")]
     Variant20,
+
+    #[serde(rename = "3.0")]
+    Variant30,
 }
 
 impl std::fmt::Display for SchemaVersion {
@@ -28,6 +31,7 @@ impl std::fmt::Display for SchemaVersion {
         match self {
             Self::Variant10 => write!(f, "1.0"),
             Self::Variant20 => write!(f, "2.0"),
+            Self::Variant30 => write!(f, "3.0"),
         }
     }
 }

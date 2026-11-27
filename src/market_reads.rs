@@ -159,8 +159,12 @@ pub(crate) fn event_version_matches(event: &models::Event) -> bool {
         message,
         Message::MessageOneOf(_) | Message::MessageOneOf1(_) | Message::MessageOneOf7(_)
     );
+    let option_history = matches!(
+        message,
+        Message::MessageOneOf8(_) | Message::MessageOneOf9(_)
+    );
     match event.schema_version {
-        models::SchemaVersion::Variant10 => !perpetual_context,
+        models::SchemaVersion::Variant10 => !perpetual_context && !option_history,
         models::SchemaVersion::Variant20 => {
             event.asset_kind == models::AssetKind::Perpetual
                 && event.revision == "0"
@@ -172,6 +176,9 @@ pub(crate) fn event_version_matches(event: &models::Event) -> bool {
                             | Message::MessageOneOf5(_)
                             | Message::MessageOneOf6(_)
                     ))
+        }
+        models::SchemaVersion::Variant30 => {
+            option_history && event.asset_kind == models::AssetKind::Option && event.revision == "0"
         }
     }
 }
@@ -362,35 +369,7 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
         (WATERMARKS, WATERMARKS, "marketWatermarks"),
         (FINANCE_GAPS, UPSTREAM_GAPS, "marketFinanceGaps"),
     ] {
-        let mut item = upstream["paths"][source].clone();
-        let operation = &mut item["get"];
-        operation["operationId"] = json!(operation_id);
-        operation["security"] = json!([{"adminBearer": []}, {"adminSession": []}]);
-        let responses = operation["responses"]
-            .as_object_mut()
-            .expect("finance read is a GET operation with responses");
-        responses.remove("500");
-        for (status, description) in [
-            ("401", "Authentication required"),
-            ("403", "Product access denied"),
-            ("429", "Read rate limit exceeded"),
-            ("502", "Finance response error"),
-            ("503", "Finance unavailable"),
-            ("504", "Finance read timed out"),
-        ] {
-            responses.insert(
-                status.into(),
-                json!({
-                    "description": description,
-                    "content": {
-                        "application/json": {
-                            "schema": {"$ref": "#/components/schemas/ErrorBody"}
-                        }
-                    }
-                }),
-            );
-        }
-        spec["paths"][path] = item;
+        register_read_operation(spec, upstream, path, source, operation_id);
     }
 
     let upstream_schemas = upstream["components"]["schemas"]
@@ -422,6 +401,9 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
         "Message",
         "NonEmptyText",
         "OpenInterest",
+        "OptionHistoryBatch",
+        "OptionHistoryQuote",
+        "OptionHistoryTrade",
         "PerpetualContext",
         "ProductPolicy",
         "ProjectedMarketEvent",
@@ -441,6 +423,44 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
     ] {
         schemas[name] = upstream_schemas[name].clone();
     }
+}
+
+pub(crate) fn register_read_operation(
+    spec: &mut Value,
+    upstream: &Value,
+    path: &str,
+    source: &str,
+    operation_id: &str,
+) {
+    let mut item = upstream["paths"][source].clone();
+    let operation = &mut item["get"];
+    operation["operationId"] = json!(operation_id);
+    operation["security"] = json!([{"adminBearer": []}, {"adminSession": []}]);
+    let responses = operation["responses"]
+        .as_object_mut()
+        .expect("finance read is a GET operation with responses");
+    responses.remove("500");
+    for (status, description) in [
+        ("401", "Authentication required"),
+        ("403", "Product access denied"),
+        ("429", "Read rate limit exceeded"),
+        ("502", "Finance response error"),
+        ("503", "Finance unavailable"),
+        ("504", "Finance read timed out"),
+    ] {
+        responses.insert(
+            status.into(),
+            json!({
+                "description": description,
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ErrorBody"}
+                    }
+                }
+            }),
+        );
+    }
+    spec["paths"][path] = item;
 }
 
 #[cfg(test)]

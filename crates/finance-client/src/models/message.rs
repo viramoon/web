@@ -28,6 +28,8 @@ pub enum Message {
     MessageOneOf5(Box<models::MessageOneOf5>),
     MessageOneOf6(Box<models::MessageOneOf6>),
     MessageOneOf7(Box<models::MessageOneOf7>),
+    MessageOneOf8(Box<models::MessageOneOf8>),
+    MessageOneOf9(Box<models::MessageOneOf9>),
 }
 
 impl Default for Message {
@@ -38,12 +40,12 @@ impl Default for Message {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Kind {
-    #[serde(rename = "perpetual_context")]
-    PerpetualContext,
+    #[serde(rename = "option_history_quote")]
+    OptionHistoryQuote,
 }
 
 impl Default for Kind {
     fn default() -> Kind {
-        Self::PerpetualContext
+        Self::OptionHistoryQuote
     }
 }

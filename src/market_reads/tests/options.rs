@@ -1,0 +1,395 @@
+use super::*;
+
+const CHAIN: &str =
+    "/api/v1/options/chain?underlying_con_id=101&expiry=2026-01-02&after_con_id=200&limit=2";
+const EXPOSURE: &str = "/api/v1/options/exposure?underlying_id=SYNTH.XNYS&as_of=2026-01-01T00%3A00%3A00Z&scenario=dealer_short";
+const LEGACY_EXPOSURE: &str = "/api/v1/options/exposure?instrument_id=SYNTH.XNYS&as_of=2026-01-01T01%3A00%3A00%2B01%3A00&scenario=dealer_short";
+const HISTORY: &str = "/api/v1/options/history?underlying_con_id=101&start=9007199254740993&end=9007199254740994&offset=1&limit=2";
+const DEPTH: &str = "/api/v1/market/depth?symbol=QQQ";
+const UPSTREAM_DEPTH: &str = "/api/v1/market/book?symbol=QQQ";
+const BUDGET: &str = "/api/v1/market/subscriptions/budget";
+const UPSTREAM_BUDGET: &str = "/api/v1/market/subscriptions";
+const COVERAGE: &str = "/api/v1/market/subscriptions/coverage?con_id=201&start=2026-01-01T00%3A00%3A00Z&end=2026-01-01T01%3A00%3A00Z";
+const FLOW: &str = "/api/v1/options/flow?instrument_id=SYNTH.XNYS&mode=verified";
+
+const READS: [(&str, &str); 6] = [
+    (CHAIN, CHAIN),
+    (EXPOSURE, EXPOSURE),
+    (HISTORY, HISTORY),
+    (DEPTH, UPSTREAM_DEPTH),
+    (BUDGET, UPSTREAM_BUDGET),
+    (COVERAGE, COVERAGE),
+];
+
+fn display_access(product: &str) -> Value {
+    json!({
+        "source": "ibkr", "product": product, "license": LICENSE,
+        "display_live": true, "record_local": false,
+        "derive_non_display": false, "backup_personal_drive": false
+    })
+}
+
+fn chain_page() -> Value {
+    json!({
+        "access": display_access("opra"), "as_of": AS_OF,
+        "underlying_con_id": 101, "discovery_complete": false,
+        "items": [{
+            "con_id": 201, "symbol": "SYNTH", "primary_exchange": null,
+            "expiry": "2026-01-02", "strike": PRICE, "multiplier": "100.00", "right": "call"
+        }],
+        "next_after_con_id": 201
+    })
+}
+
+fn exposure_report() -> Value {
+    let range = json!({"earliest": AS_OF, "latest": AS_OF});
+    let coverage = json!({
+        "universe_complete": false, "candidate_contracts": 8, "valid_contracts": 1,
+        "partial": true, "eligible_open_interest": "0.000", "total_open_interest": null,
+        "open_interest_dates": [], "unconfirmed_open_interest_dates": 1,
+        "observed": range, "open_interest_observed": null, "gamma_observed": null,
+        "max_oi_gamma_skew": null,
+        "exclusions": {"missing_open_interest": 4, "missing_gamma": 3,
+            "stale_spot": 0, "stale_gamma": 0, "spot_gamma_skew": 0}
+    });
+    let view = json!({
+        "totals": {"gex": "-100.000", "absolute": "100.000"},
+        "by_strike": [], "by_expiry": [],
+        "walls": {"largest_absolute": null, "largest_positive": null, "most_negative": null},
+        "coverage": coverage, "flip": {"status": "unavailable", "reason": "no_gamma_grid"}
+    });
+    json!({
+        "access": display_access("opra"), "report": {
+            "scenario": "dealer_short", "model_version": "synthetic", "underlying_id": INSTRUMENT,
+            "as_of": AS_OF, "session_date": "2026-01-01", "gamma_grid": null,
+            "spot": {"observed_at": AS_OF, "value": PRICE},
+            "timing": {"max_spot_age_seconds": 30, "max_gamma_age_seconds": 30,
+                "max_spot_gamma_skew_seconds": 5},
+            "all": view, "zero_dte": view, "later": view
+        }
+    })
+}
+
+fn history_page() -> Value {
+    json!({
+        "access": display_access("opra"), "as_of": AS_OF, "underlying_con_id": 101,
+        "start": POSITION, "end": "9007199254740994", "next_offset": null,
+        "items": [
+            {"instrument_id": "SYNTH-1.XTEST", "result": {"status": "available", "bars": [{
+                "close_ts": "9007199254740994", "data": {"open_ts": POSITION,
+                "open": PRICE, "high": PRICE, "low": PRICE, "close": PRICE, "volume": SIZE}
+            }]}},
+            {"instrument_id": "SYNTH-2.XTEST", "result": {"status": "expired"}}
+        ]
+    })
+}
+
+fn venue_book() -> Value {
+    json!({
+        "access": display_access("nasdaq-totalview"), "symbol": "QQQ", "venue": "XNAS",
+        "permissions": {"equity_l1_confirmed": true, "totalview_confirmed": true, "eds_confirmed": true},
+        "state": "receiving", "failure": null, "requested_rows": 5, "returned_rows": 1,
+        "received_at": AS_OF, "market_data_type": null,
+        "bids": [{"price": PRICE, "size": SIZE}], "asks": []
+    })
+}
+
+fn line_budget() -> Value {
+    json!({
+        "access": display_access("opra"), "as_of": AS_OF, "phase": "online",
+        "account_lines": 100, "reserve_lines": 30, "stock_lines": 9,
+        "hot_lines": 16, "rotation_lines": 45, "confirmed_options": 200,
+        "observed_options": 60, "discovery_complete": false
+    })
+}
+
+fn coverage_report() -> Value {
+    json!({
+        "access": display_access("opra"), "con_id": 201, "last_observed_at": null,
+        "covered": [], "uncovered": [],
+        "unknown": [{"start": AS_OF, "end": "2026-01-01T01:00:00Z"}]
+    })
+}
+
+#[tokio::test]
+async fn f10c_reads_forward_queries_and_preserve_display_evidence() {
+    let payloads = [
+        chain_page(),
+        exposure_report(),
+        history_page(),
+        venue_book(),
+        line_budget(),
+        coverage_report(),
+    ];
+    let script = READS
+        .iter()
+        .zip(&payloads)
+        .map(|((_, upstream), payload)| Exchange::ok((*upstream).to_owned(), payload.clone()))
+        .chain([Exchange::ok(EXPOSURE.into(), exposure_report())])
+        .collect();
+    let fixture = Fixture::start(script).await;
+    for ((path, _), expected) in READS.iter().zip(payloads) {
+        assert_eq!(
+            fixture.get_json(path, StatusCode::OK).await,
+            expected,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        fixture.get_json(LEGACY_EXPOSURE, StatusCode::OK).await,
+        exposure_report()
+    );
+    fixture.upstream_expectations_met();
+}
+
+#[tokio::test]
+async fn f10c_preserves_future_values_nulls_missing_fields_and_numeric_text() {
+    let mut unseen = line_budget();
+    unseen["phase"] = json!("future_scheduler_phase");
+    unseen["new_decimal"] = json!(PRICE);
+    unseen["explicit_unknown"] = Value::Null;
+    let mut partial = exposure_report();
+    partial["report"]["all"]["flip"]["reason"] = json!("future_reason");
+    partial["report"]["all"]["coverage"]
+        .as_object_mut()
+        .unwrap()
+        .remove("total_open_interest");
+    let fixture = Fixture::start(vec![
+        Exchange::ok(UPSTREAM_BUDGET.into(), unseen.clone()),
+        Exchange::ok(EXPOSURE.into(), partial.clone()),
+    ])
+    .await;
+    assert_eq!(fixture.get_json(BUDGET, StatusCode::OK).await, unseen);
+    assert_eq!(fixture.get_json(EXPOSURE, StatusCode::OK).await, partial);
+    fixture.upstream_expectations_met();
+}
+
+#[tokio::test]
+async fn f10c_maps_upstream_errors_on_every_read() {
+    for (upstream_status, web_status, code) in [
+        (
+            StatusCode::BAD_REQUEST,
+            StatusCode::BAD_REQUEST,
+            "market_read_query_invalid",
+        ),
+        (
+            StatusCode::NOT_FOUND,
+            StatusCode::NOT_FOUND,
+            "market_read_not_found",
+        ),
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+            "finance_upstream_error",
+        ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "finance_unavailable",
+        ),
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            StatusCode::GATEWAY_TIMEOUT,
+            "finance_timeout",
+        ),
+    ] {
+        for (path, upstream) in READS {
+            let fixture = Fixture::start(vec![Exchange {
+                request: upstream.into(),
+                status: upstream_status,
+                value: json!({"error": {"code": code, "message": "Synthetic error"}}),
+            }])
+            .await;
+            let body = fixture.get_json(path, web_status).await;
+            assert_eq!(body["error"]["code"], code, "{path}");
+            if upstream_status.is_server_error() {
+                assert_ne!(body["error"]["message"], "Synthetic error", "{path}");
+            }
+            fixture.upstream_expectations_met();
+        }
+    }
+}
+
+#[tokio::test]
+async fn f10c_display_gate_checks_product_and_license_without_requiring_recording() {
+    let mut denied = chain_page();
+    denied["access"]["display_live"] = json!(false);
+    let mut wrong_product = venue_book();
+    wrong_product["access"]["product"] = json!("opra");
+    let mut wrong_source = line_budget();
+    wrong_source["access"]["source"] = json!("synthetic");
+    let mut invalid_license = history_page();
+    invalid_license["access"]["license"] = json!("");
+    let fixture = Fixture::start(vec![
+        Exchange::ok(CHAIN.into(), denied),
+        Exchange::ok(UPSTREAM_DEPTH.into(), wrong_product),
+        Exchange::ok(UPSTREAM_BUDGET.into(), wrong_source),
+        Exchange::ok(HISTORY.into(), invalid_license),
+        Exchange::ok(COVERAGE.into(), json!({"unknown": []})),
+    ])
+    .await;
+    assert_eq!(
+        fixture.get_json(CHAIN, StatusCode::FORBIDDEN).await["error"]["code"],
+        "market_display_denied"
+    );
+    for path in [DEPTH, BUDGET, HISTORY, COVERAGE] {
+        assert_eq!(
+            fixture.get_json(path, StatusCode::BAD_GATEWAY).await["error"]["code"],
+            "finance_invalid_response"
+        );
+    }
+    fixture.upstream_expectations_met();
+}
+
+#[tokio::test]
+async fn f10c_routes_share_anonymous_denial_and_throttle_before_finance() {
+    let gateway = Gateway::new("http://127.0.0.1:1".into());
+    for path in READS.map(|(path, _)| path).into_iter().chain([FLOW]) {
+        for method in [Method::GET, Method::HEAD] {
+            assert_eq!(
+                gateway.request(method, path, false).await.status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+    }
+    for _ in 0..120 {
+        assert_eq!(
+            gateway
+                .request(Method::GET, UPSTREAM_BUDGET, true)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+    }
+    for path in READS.map(|(path, _)| path).into_iter().chain([FLOW]) {
+        let response = gateway.request(Method::GET, path, true).await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key(header::RETRY_AFTER));
+    }
+}
+
+#[tokio::test]
+async fn f10c_validates_query_bounds_and_only_flow_is_pending() {
+    let gateway = Gateway::new("http://127.0.0.1:1".into());
+    for path in [
+        "/api/v1/options/chain?underlying_con_id=2147483648",
+        "/api/v1/options/chain?underlying_con_id=101&limit=501",
+        "/api/v1/options/chain?underlying_con_id=101&after_con_id=0",
+        "/api/v1/options/chain?underlying_con_id=101&expiry=2100-02-29",
+        "/api/v1/options/exposure?underlying_id=SYNTH.XNYS&instrument_id=SYNTH.XTEST",
+        "/api/v1/options/history?underlying_con_id=101&start=1&end=1",
+        "/api/v1/options/history?underlying_con_id=101&start=01&end=10",
+        "/api/v1/options/history?underlying_con_id=101&start=0&end=18446744073709551616",
+        "/api/v1/options/history?underlying_con_id=101&start=0&end=1&limit=51",
+        "/api/v1/market/subscriptions/coverage?con_id=201&start=2026-01-02T00:00:00Z&end=2026-01-01T00:00:00Z",
+        "/api/v1/options/flow?instrument_id=SYNTH.XNYS&limit=0",
+    ] {
+        assert_eq!(
+            gateway.get_json(path, StatusCode::BAD_REQUEST).await["error"]["code"],
+            "invalid_market_request"
+        );
+    }
+    assert_eq!(
+        gateway
+            .get_json(FLOW, StatusCode::SERVICE_UNAVAILABLE)
+            .await["error"]["code"],
+        "finance_contract_pending"
+    );
+    let legacy = "/api/v1/options/chain?instrument_id=SYNTH.XNYS&offset=1";
+    assert_eq!(
+        gateway.get_json(legacy, StatusCode::BAD_REQUEST).await["error"]["code"],
+        "option_chain_con_id_required"
+    );
+}
+
+#[test]
+fn f10c_openapi_keeps_legacy_views_and_exports_read_schemas() {
+    let spec = crate::openapi();
+    let paths = &spec["paths"];
+    let schemas = &spec["components"]["schemas"];
+    assert_eq!(
+        paths["/api/v1/market/book"]["get"]["operationId"],
+        "marketBook"
+    );
+    assert_eq!(
+        paths["/api/v1/market/subscriptions"]["get"]["operationId"],
+        "marketSubscriptions"
+    );
+    assert_eq!(
+        schemas["FinanceLineState"]["enum"],
+        json!(["finance_contract_pending"])
+    );
+    assert_eq!(
+        paths["/api/v1/options/flow"]["get"]["operationId"],
+        "optionsFlow"
+    );
+    let exposure = &paths["/api/v1/options/exposure"]["get"];
+    assert_eq!(exposure["operationId"], "optionsExposure");
+    assert!(
+        exposure["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|parameter| parameter["name"] == "instrument_id")
+    );
+
+    for ((path, _), expected) in READS.into_iter().zip([
+        "OptionChainPage",
+        "OptionExposureResponse",
+        "OptionHistoryPage",
+        "DepthBook",
+        "SubscriptionBudget",
+        "SubscriptionCoverage",
+    ]) {
+        let operation = &paths[path.split('?').next().unwrap()]["get"];
+        assert_eq!(
+            operation["security"],
+            json!([{"adminBearer": []}, {"adminSession": []}])
+        );
+        assert_eq!(
+            operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            format!("#/components/schemas/{expected}")
+        );
+        assert!(
+            schemas[expected]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("access"))
+        );
+        for status in ["401", "403", "429", "502", "503", "504"] {
+            assert!(
+                operation["responses"][status].is_object(),
+                "{path} {status}"
+            );
+        }
+    }
+}
+
+#[test]
+fn f10c_generated_wal_decodes_v3_evidence_without_changing_v1() {
+    let batch =
+        json!({"request_id": null, "page": "1", "occurrence": "1", "requested_start_ts": "1"});
+    for (kind, payload) in [
+        (
+            "option_history_trade",
+            json!({"batch": batch, "condition_mapping_version": "fixture-v1",
+            "contract_multiplier": "100.00", "exchange": "XTEST", "past_limit": false,
+            "price": PRICE, "quantity": SIZE, "special_conditions": "", "unreported": true}),
+        ),
+        (
+            "option_history_quote",
+            json!({"batch": batch, "bid": null, "ask": PRICE,
+            "bid_quantity": null, "ask_quantity": SIZE, "bid_past_low": false, "ask_past_high": false}),
+        ),
+    ] {
+        let mut wire = event(kind, payload);
+        wire["schema_version"] = json!("3.0");
+        wire["asset_kind"] = json!("option");
+        wire["exchange_ts"] = json!("1000000000");
+        let mut decoded: models::Event = serde_json::from_value(wire.clone()).unwrap();
+        assert!(event_version_matches(&decoded));
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), wire);
+        decoded.schema_version = models::SchemaVersion::Variant10;
+        assert!(!event_version_matches(&decoded));
+    }
+}

@@ -47,7 +47,17 @@ market_gateway:
     path: /api/v1/market/subscriptions
     web_limit: 8
     identity: single_admin
-    finance_lines: finance_contract_pending
+    finance_lines_legacy_field: finance_contract_pending
+    finance_budget: /api/v1/market/subscriptions/budget
+    finance_coverage: /api/v1/market/subscriptions/coverage
+  f10c_display_reads:
+    venue_depth: /api/v1/market/depth
+    option_chain: /api/v1/options/chain
+    option_exposure: /api/v1/options/exposure
+    option_history: /api/v1/options/history
+    source: authorized_ibkr_paper_read_only_market_owner
+  pending_reads:
+    /api/v1/options/flow: F10d
   events:
     path: /api/v1/events
     protocol: sse

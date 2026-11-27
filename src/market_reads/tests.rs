@@ -18,6 +18,7 @@ use std::{
 };
 use tower::ServiceExt;
 
+mod options;
 mod synthetic;
 use synthetic::*;
 
