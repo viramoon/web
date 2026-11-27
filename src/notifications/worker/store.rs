@@ -1,9 +1,11 @@
-use super::{ABANDONED_AFTER, NotificationHealth, NotificationPolicy};
+use super::{ABANDONED_AFTER, NotificationHealth, NotificationPolicy, delivery_settlement};
 use crate::{
     database::Database,
     integrations::store::finish_smtp_test,
     notifications::{
-        channel::{NotificationChannel, PRIMARY_REQUIRED, PreparedSnapshot, SmtpProfile},
+        channel::{
+            DeliveryOutcome, NotificationChannel, PRIMARY_REQUIRED, PreparedSnapshot, SmtpProfile,
+        },
         model::{AttemptOutcome, Condition, DeliveryKind},
         store::lock_rule_updates,
     },
@@ -235,7 +237,9 @@ pub(super) async fn claim(
             snapshot: None,
             integration_test_id: active.integration_test_id,
         };
-        settle(&mut tx, &job, AttemptOutcome::Interrupted, now).await?;
+        let outcome = AttemptOutcome::Interrupted;
+        let retry_at = outcome.next_attempt(job.attempt).map(|delay| now + delay);
+        settle(&mut tx, &job, outcome, now, retry_at).await?;
     }
     if snapshot_storage_available {
         sqlx::query(
@@ -587,11 +591,20 @@ pub(super) async fn pin_snapshot(
 pub(super) async fn finish(
     db: &mut PgConnection,
     job: &Job,
-    outcome: AttemptOutcome,
+    delivery: DeliveryOutcome,
     now: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
+    let (outcome, retry_after) =
+        delivery_settlement(delivery, job.attempt, job.integration_test_id.is_some());
     let mut tx = db.begin().await?;
-    settle(&mut tx, job, outcome, now).await?;
+    settle(
+        &mut tx,
+        job,
+        outcome,
+        now,
+        retry_after.map(|delay| now + delay),
+    )
+    .await?;
     tx.commit().await?;
     unlock_sender(db).await
 }
@@ -609,11 +622,11 @@ async fn settle(
     job: &Job,
     outcome: AttemptOutcome,
     now: DateTime<Utc>,
+    retry_at: Option<DateTime<Utc>>,
 ) -> Result<(), sqlx::Error> {
-    let next_attempt = outcome.next_attempt(job.attempt).map(|delay| now + delay);
     let status = match outcome {
         AttemptOutcome::Accepted => "accepted",
-        _ if next_attempt.is_some() => "pending",
+        _ if retry_at.is_some() => "pending",
         _ => "failed",
     };
     sqlx::query(
@@ -637,11 +650,11 @@ async fn settle(
     .bind(status)
     .bind(outcome)
     .bind(now)
-    .bind(next_attempt)
+    .bind(retry_at)
     .execute(&mut *db)
     .await?;
     if let Some(test_id) = job.integration_test_id {
-        if next_attempt.is_none() {
+        if retry_at.is_none() {
             let id = sqlx::query_scalar(
                 "SELECT integration_id FROM app.integration_tests WHERE id = $1",
             )

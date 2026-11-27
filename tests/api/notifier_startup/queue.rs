@@ -2,10 +2,12 @@ use super::*;
 use chrono::{DateTime, TimeDelta, Utc};
 use std::io::Read;
 
+mod runtime;
+
 // outbox_fixture creates independent test jobs 1 (due) and 2 (sending).
 const CANDIDATE: Uuid = Uuid::from_u128(2);
 
-async fn bind_candidate(pool: &PgPool, snapshot: Uuid) {
+async fn bind_candidate(pool: &PgPool, snapshot: impl Into<Option<Uuid>>) {
     let integration = Uuid::new_v4();
     let test = Uuid::new_v4();
     let mut tx = pool.begin().await.unwrap();
@@ -39,7 +41,7 @@ async fn bind_candidate(pool: &PgPool, snapshot: Uuid) {
     )
     .bind(CANDIDATE)
     .bind(test)
-    .bind(snapshot)
+    .bind(snapshot.into())
     .execute(&mut *tx)
     .await
     .unwrap();

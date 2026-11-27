@@ -2,6 +2,9 @@
 
 mod store;
 
+#[cfg(test)]
+mod snapshot_recovery_tests;
+
 use crate::{config::ConfigError, database::Database};
 use chrono::{DateTime, NaiveTime, TimeDelta, Utc};
 use serde::Serialize;
@@ -20,6 +23,7 @@ const DB_DEADLINE: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_ATTEMPTS: i32 = 5;
 const MAX_HOURLY_LIMIT: i64 = 1_000;
+const CANDIDATE_SNAPSHOT_UNAVAILABLE: &str = "bound candidate SMTP snapshot is unavailable";
 // A replacement worker must allow any SMTP subprocess from a lost database
 // session to reach its transport deadline before treating the attempt as unknown.
 const ABANDONED_AFTER: TimeDelta = TimeDelta::seconds(65);
@@ -129,10 +133,15 @@ impl AttemptOutcome {
         if (1..MAX_ATTEMPTS).contains(&attempt)
             && matches!(self, Self::Timeout | Self::Transient | Self::Interrupted)
         {
-            return Some(TimeDelta::seconds(30 * 2_i64.pow((attempt - 1) as u32)));
+            return Some(retry_backoff(attempt));
         }
         None
     }
+}
+
+fn retry_backoff(attempt: i32) -> TimeDelta {
+    let exponent = (attempt.clamp(1, MAX_ATTEMPTS - 1) - 1) as u32;
+    TimeDelta::seconds(30 * 2_i64.pow(exponent))
 }
 
 impl From<DeliveryOutcome> for AttemptOutcome {
@@ -142,9 +151,26 @@ impl From<DeliveryOutcome> for AttemptOutcome {
             DeliveryOutcome::Timeout => Self::Timeout,
             DeliveryOutcome::Transient => Self::Transient,
             DeliveryOutcome::Rejected => Self::Rejected,
-            DeliveryOutcome::ConfigurationError => Self::ConfigurationError,
+            DeliveryOutcome::ConfigurationError | DeliveryOutcome::SnapshotUnavailable => {
+                Self::ConfigurationError
+            }
         }
     }
+}
+
+fn delivery_settlement(
+    delivery: DeliveryOutcome,
+    attempt: i32,
+    is_candidate: bool,
+) -> (AttemptOutcome, Option<TimeDelta>) {
+    let outcome = AttemptOutcome::from(delivery);
+    let retry_after = if delivery == DeliveryOutcome::SnapshotUnavailable && is_candidate {
+        // A bound file can be restored even after the usual attempt limit.
+        Some(retry_backoff(attempt))
+    } else {
+        outcome.next_attempt(attempt)
+    };
+    (outcome, retry_after)
 }
 
 #[derive(Clone, Debug, Default, Serialize, ToSchema, sqlx::FromRow)]
@@ -185,7 +211,17 @@ pub async fn run(
     db: &Database,
     policy: &NotificationPolicy,
     channel: &impl NotificationChannel,
+    shutdown: watch::Receiver<bool>,
+) -> Result<(), ConfigError> {
+    run_with_clock(db, policy, channel, shutdown, Utc::now).await
+}
+
+async fn run_with_clock(
+    db: &Database,
+    policy: &NotificationPolicy,
+    channel: &impl NotificationChannel,
     mut shutdown: watch::Receiver<bool>,
+    clock: impl Fn() -> DateTime<Utc>,
 ) -> Result<(), ConfigError> {
     channel.validate()?;
     let valid_zone = time::timeout(DB_DEADLINE, store::valid_time_zone(db, &policy.time_zone))
@@ -202,13 +238,13 @@ pub async fn run(
     if paused_candidate.is_some() {
         tracing::warn!(
             stage = "smtp_configuration",
-            reason = "bound candidate SMTP snapshot is unavailable",
+            reason = CANDIDATE_SNAPSHOT_UNAVAILABLE,
             "SMTP candidate test paused"
         );
     }
     let mut database_failed = false;
     while !*shutdown.borrow() {
-        let result = dispatch(db, policy, channel, paused_candidate, Utc::now).await;
+        let result = dispatch(db, policy, channel, paused_candidate, &clock).await;
         if result.is_err() != database_failed {
             database_failed = result.is_err();
             if database_failed {
@@ -297,16 +333,23 @@ async fn dispatch(
     )
     .await
     .map_err(|_| sqlx::Error::PoolTimedOut)??;
+    if outcome == DeliveryOutcome::SnapshotUnavailable && job.integration_test_id.is_some() {
+        tracing::warn!(
+            stage = "smtp_configuration",
+            reason = CANDIDATE_SNAPSHOT_UNAVAILABLE,
+            "SMTP candidate test deferred"
+        );
+    }
     Ok(true)
 }
 
-async fn send(channel: &impl NotificationChannel, job: &Job) -> AttemptOutcome {
+async fn send(channel: &impl NotificationChannel, job: &Job) -> DeliveryOutcome {
     let kind = match (job.kind, job.condition) {
         (DeliveryKind::Test, _) => {
             return match (&job.snapshot, job.integration_test_id) {
-                (Some(snapshot), _) => snapshot.test(channel, job.id).await.into(),
-                (None, None) => channel.test(job.id).await.into(),
-                (None, Some(_)) => AttemptOutcome::ConfigurationError,
+                (Some(snapshot), _) => snapshot.test(channel, job.id).await,
+                (None, None) => channel.test(job.id).await,
+                (None, Some(_)) => DeliveryOutcome::ConfigurationError,
             };
         }
         (DeliveryKind::OutageDigest, _) => MailKind::TransportRecovered { count: job.count },
@@ -314,11 +357,11 @@ async fn send(channel: &impl NotificationChannel, job: &Job) -> AttemptOutcome {
         (DeliveryKind::Alert, Some(condition)) => MailKind::Alert { condition },
         (DeliveryKind::Reminder, Some(condition)) => MailKind::Reminder { condition },
         (DeliveryKind::Recovery, Some(condition)) => MailKind::Recovery { condition },
-        _ => return AttemptOutcome::ConfigurationError,
+        _ => return DeliveryOutcome::ConfigurationError,
     };
     match &job.snapshot {
-        Some(snapshot) => snapshot.send(channel, job.id, kind).await.into(),
-        None => channel.send(job.id, kind).await.into(),
+        Some(snapshot) => snapshot.send(channel, job.id, kind).await,
+        None => channel.send(job.id, kind).await,
     }
 }
 
@@ -389,5 +432,33 @@ mod tests {
         for terminal in [Accepted, Rejected, ConfigurationError] {
             assert_eq!(terminal.next_attempt(1), None);
         }
+    }
+
+    #[test]
+    fn candidate_snapshot_backoff_stays_at_the_last_retry_delay() {
+        for (attempt, seconds) in [
+            (1, 30),
+            (2, 60),
+            (3, 120),
+            (4, 240),
+            (5, 240),
+            (i32::MAX, 240),
+        ] {
+            assert_eq!(
+                delivery_settlement(DeliveryOutcome::SnapshotUnavailable, attempt, true),
+                (
+                    AttemptOutcome::ConfigurationError,
+                    Some(TimeDelta::seconds(seconds))
+                )
+            );
+        }
+        assert_eq!(
+            delivery_settlement(DeliveryOutcome::SnapshotUnavailable, 1, false),
+            (AttemptOutcome::ConfigurationError, None)
+        );
+        assert_eq!(
+            delivery_settlement(DeliveryOutcome::ConfigurationError, 1, true),
+            (AttemptOutcome::ConfigurationError, None)
+        );
     }
 }

@@ -214,6 +214,8 @@ web 校验对应的 `ibkr/opra` 或 `ibkr/opra-history` 展示许可。嵌套观
 
 普通投递可用且启动时仅有待重试候选的绑定文件不可读时，该集成测试维持 `pending`，其他邮件照常领取。恢复原快照并重启后，该测试沿用原绑定。未设置快照目录时，已超时的候选发送按既有规则记录 `interrupted`，随后可领取 W3 任务。普通任务的领取和 SMTP 启用状态在同一条数据库查询中判定，管理接口的停用事务先提交时，普通任务继续排队。
 
+运行中领取后无法读取 W4 候选绑定的快照时，集成测试查询继续返回 `pending`，结算证据在测试终结时写入。outbox 尝试审计记录 `configuration_error`，notifier 日志提供固定的快照不可用原因。恢复原文件后，进程按退避和额度自动重试同一绑定。候选重试独立于普通投递健康状态。[快照恢复流程](../RUNBOOK.md#告警与邮件进程)
+
 管理写入返回 504 时，按 `id` 读取规则 revision 或告警确认状态，或用原 `Idempotency-Key` 作为 `testId` 查询测试。查明结果后才使用原请求重试。`GET /api/v1/system/status` 的 `notifications` 包含 `state`（`idle`、`healthy`、`degraded`、`unavailable`）、失败起始时间和最近尝试、接受时间及结果。HTTP 请求读取最近一次后台数据库轮询的快照。启动时或后台无法读取投递状态时，`state` 为 `unavailable`。SMTP 投递状态独立于 HTTP 就绪探测。
 
 ### 主动静默

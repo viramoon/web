@@ -230,6 +230,8 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 
 普通投递可用时，启动检查也会读取待重试 W4 候选测试已绑定的快照。若已配置存储但该文件缺失或无法解密，进程记录一次 `SMTP candidate test paused`，保留该候选的尝试、下次投递时间和测试证据，继续处理其他可投递邮件。恢复原文件和密钥后重启，候选按原 UUID 重试。未设置快照目录时，W3 主槽仍可投递，W4 候选继续排队。如果前一进程已领取候选，接手者等满 70 秒后将该次尝试结算为 `interrupted`，按原重试上限处理，释放发送名额给 W3。
 
+进程运行中，若领取后读取候选的绑定文件失败，outbox 和集成测试保持 `pending`，outbox 保留绑定 UUID，尝试表记录 `configuration_error`，日志记录 `SMTP candidate test deferred` 与固定原因 `bound candidate SMTP snapshot is unavailable`。日志省略路径、快照 UUID 和 SMTP 凭据。退避从 30 秒起逐次翻倍，到 240 秒封顶，文件持续不可读时超过常规尝试上限也继续等待。队列仍遵循小时额度。将原文件以 0600 权限恢复到运行进程打开的快照目录后，候选到期自动重试。若进程曾在文件缺失期间重新启动，按上一段的启动暂停流程恢复。
+
 通过管理接口停用 SMTP 时，以数据库领取任务的时刻为界。停用事务先提交，普通任务继续排队。已领取的尝试按实际结果结算。切换活动版本时，下一次领取重新核对当前绑定。
 
 SIGINT 或 SIGTERM 让空转进程以状态码 0 退出。正常投递的进程收到同样信号后停止领取新任务，并结算已领取的任务。配置快照目录时，最长发送与结算宽限为 78 秒，随后留两秒关闭连接池。部署管理器设置 85 秒停止宽限。有效 SMTP 已配置时，其他启动失败仍以状态码 1 退出。notifier 与 web 共用日志过滤器，标准错误的 JSON 事件使用固定 `stage` 和 `reason`。提高 `RUST_LOG` 级别仍会过滤第三方追踪。
@@ -259,6 +261,7 @@ notifier 在打开或创建快照密钥前核对快照目录与部署给 Web 的
 | 现象 | 诊断与恢复 |
 | --- | --- |
 | 测试一直 `pending` | 确认 fertile 已启用 notifier，查看是否有 `notifier idle` 启动日志。投递进程运行时，在测试记录中核对 `available_at` 和 `deferrals`，确认可读取已迁移的目标库 |
+| W4 候选日志出现 `SMTP candidate test deferred` | 按 outbox 的绑定 UUID 恢复对应的原快照文件，核对尝试表中的 `configuration_error` 和 outbox 的 `available_at` |
 | 投递 `pending` 且最近结果为 `timeout`、`transient` 或 `interrupted` | 查看尝试表、静默和额度，进程按 30 秒起的指数退避自动重试，最多 5 次尝试 |
 | 投递 `failed` | 核对有限错误分类、TLS 证书、部署地址和本机凭据文件权限，修复后使用新 UUID 发测试邮件 |
 | system/status 的 `notifications.state` 为 `degraded` | 管理员可在 `/alerts` 查看一次 SMTP 失效事件与后续恢复。每轮故障后的首次 SMTP 接受都会记录恢复并排入该轮失败尝试汇总，包括上一轮汇总重试成功的情况 |
