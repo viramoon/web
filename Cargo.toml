@@ -8,11 +8,11 @@ default-run = "web"
 [dependencies]
 finance-client = { path = "crates/finance-client", default-features = false }
 fastrand = "2"
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 sha2 = "0.10"
 subtle = "2"
 libc = "0.2"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 openssl = "0.10"
@@ -34,3 +34,6 @@ utoipa = { version = "5", features = ["chrono"] }
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1"
 tempfile = "3"
+
+[dev-dependencies]
+tokio-tungstenite = "=0.29.0"

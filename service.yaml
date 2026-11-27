@@ -54,7 +54,12 @@ market_gateway:
     retained_events: 128
     max_connections: 16
     alert_window: 32
-  market_stream: {path: /api/v1/stream/market, protocol: websocket, state: transport_unavailable}
+  market_stream:
+    path: /api/v1/stream/market
+    protocol: websocket
+    source: finance_committed_wal
+    max_connections: 16
+    max_command_bytes: 4096
   interface: docs/api.md
 maintenance:
   publish_quality:

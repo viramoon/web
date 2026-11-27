@@ -11259,9 +11259,22 @@
   },
   "/api/v1/stream/market": {
    "get": {
-    "description": "Reserved WebSocket endpoint. The transport is currently unavailable.",
+    "description": "RFC 6455 upgrade for authorized F10a WAL replay. See MarketStreamCommand and MarketStreamControl.",
     "operationId": "marketStream",
     "responses": {
+     "101": {
+      "description": "Market WebSocket opened"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": ""
+     },
      "401": {
       "content": {
        "application/json": {
@@ -11282,7 +11295,7 @@
       },
       "description": ""
      },
-     "503": {
+     "429": {
       "content": {
        "application/json": {
         "schema": {
@@ -11291,6 +11304,16 @@
        }
       },
       "description": ""
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ErrorBody"
+        }
+       }
+      },
+      "description": "Finance is unreachable"
      }
     },
     "security": [
@@ -11301,7 +11324,9 @@
       "adminBearer": []
      }
     ],
-    "tags": []
+    "tags": [
+     "transport"
+    ]
    }
   },
   "/api/v1/system/status": {

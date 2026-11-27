@@ -120,7 +120,7 @@ curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 
 `GET /api/v1/market/subscriptions` 返回单管理员共享的 web 订阅额度和券商线路契约状态。focus 是进程内的盘口选择，重启后重新设置。读取盘口时显式标的优先于 focus。更新自选前读取当前 revision，写超时后先查自选或 focus 再重试。如果盘口响应为 `snapshot_required`，客户端应清空旧盘口。
 
-`/api/v1/stream/market` 当前返回 `market_stream_unavailable`。Axum WebSocket 传输依赖补齐后才能在同一服务端口升级。期权查询返回 `finance_contract_pending`。各路径、节流和接续语义见 [W2a 接口](docs/api.md#行情自选与推送)。
+`/api/v1/stream/market` 在既有 web 端口升级。入口代理应保留 WebSocket 升级头与浏览器 Origin。握手返回 `503 finance_unavailable` 时先恢复受控的 finance API，再重连。收到重置时清空旧盘口，再以有效快照或游标建立新的订阅。期权查询返回 `finance_contract_pending`。各路径、节流和接续语义见 [W2a 接口](docs/api.md#行情自选与推送)。
 
 ## 集成配置及凭据
 

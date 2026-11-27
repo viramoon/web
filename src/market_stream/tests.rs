@@ -8,7 +8,7 @@ use axum::{
     Extension, Json,
     body::{Body, to_bytes},
     extract::Query,
-    http::{HeaderValue, Request, header, request::Builder},
+    http::{HeaderMap, HeaderValue, Request, StatusCode, header, request::Builder},
     routing::get,
 };
 use chrono::Utc;
@@ -47,7 +47,7 @@ impl StreamTestApp {
         let config = Settings::load(Path::new("config"), |_| None).unwrap();
         let access = WriteAccess::load(&token_path, 10, Duration::from_secs(1))
             .unwrap()
-            .with_sessions(Some(ORIGIN), Duration::from_secs(10))
+            .with_sessions(Some(ORIGIN), Duration::from_secs(300))
             .unwrap();
         let state = AppState {
             finance: Finance::new(&config.finance).unwrap(),
@@ -132,8 +132,11 @@ async fn market_stream_handshake_reauthenticates_after_logout_and_checks_origin(
             .header(header::ORIGIN, ORIGIN),
     )
     .await;
-    assert_eq!(allowed.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(allowed.status(), StatusCode::BAD_REQUEST);
     assert_eq!(allowed.headers()[header::CACHE_CONTROL], "no-store");
+    let body = to_bytes(allowed.into_body(), 4096).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["error"]["code"], "invalid_market_websocket_upgrade");
 
     let deleted = send(
         &app,
@@ -470,3 +473,6 @@ async fn market_stream_application_connects_to_synthetic_finance_and_filters_dis
     assert!(!session.is_subscribed());
     server.abort();
 }
+
+#[path = "transport_tests.rs"]
+mod transport_tests;
