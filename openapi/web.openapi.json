@@ -4241,10 +4241,20 @@
 "type": "array"
 },
 "next_cursor": {
+"description": "Opaque for anonymous pages, numeric for administrator pages. Null means the underlying scan has ended.",
+"oneOf": [
+{
 "format": "int64",
-"type": [
-"integer",
-"null"
+"minimum": 0,
+"type": "integer"
+},
+{
+"pattern": "^v1\\.[A-Za-z0-9_-]{48}$",
+"type": "string"
+},
+{
+"type": "null"
+}
 ]
 }
 },
@@ -7243,7 +7253,7 @@
 },
 "/api/v1/backtests": {
 "get": {
-"description": "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pagination reads at most four finance pages. Additional reads stop halfway to the request deadline, measured from the initial read. It returns the last public id as next_cursor only if another public job is found. If lookahead stops early, confirmed public jobs are returned with a null cursor.",
+"description": "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous results use opaque cursors and may have empty items while a continuation exists. Continue until next_cursor is null. Administrators receive numeric finance cursors.",
 "operationId": "list",
 "parameters": [
 {
@@ -7258,13 +7268,22 @@
 }
 },
 {
-"description": "Exclusive last id in ascending order",
+"description": "Previous next_cursor or a legacy nonnegative decimal job id",
 "in": "query",
 "name": "cursor",
 "required": false,
 "schema": {
+"oneOf": [
+{
 "format": "int64",
+"minimum": 0,
 "type": "integer"
+},
+{
+"pattern": "^v1\\.[A-Za-z0-9_-]{48}$",
+"type": "string"
+}
+]
 }
 }
 ],
@@ -7280,6 +7299,16 @@
 "description": ""
 },
 "422": {
+"content": {
+"application/json": {
+"schema": {
+"$ref": "#/components/schemas/ErrorBody"
+}
+}
+},
+"description": ""
+},
+"500": {
 "content": {
 "application/json": {
 "schema": {

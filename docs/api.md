@@ -60,14 +60,16 @@ system/status 的 finance.circuit 为 closed、open 或 half_open。finance 不�
 | --- | --- |
 | POST /api/v1/backtests | 管理员 Bearer 或同源会话。Idempotency-Key 必填，1 至 128 个可见 ASCII 字符。JSON 请求接受原 `JobRequest` 或 `BundleSubmission`。返回 202 与 id。每次最多向 finance 发送一次 |
 | GET /api/v1/backtests/{id} | 返回状态、请求、结果摘要及错误。原有作业可公开读取，StrategyBundle 作业仅管理员可见。找不到或不可见时返回 404 |
-| GET /api/v1/backtests | 按 id 递增分页。limit 默认 20，范围 1 至 100，cursor 为上页的 next_cursor。匿名分页只计公开作业。已确认还有公开作业时，next_cursor 为本页最后一条公开作业的 id |
+| GET /api/v1/backtests | 按 id 递增分页。limit 默认 20，范围 1 至 100。将上页的 next_cursor 原样传给 cursor，仍可传原有的非负十进制作业 ID。匿名页返回不透明字符串游标，管理员页保留 finance 的数字游标 |
 | GET /api/v1/market/status | 公开读取行情来源、状态、快照时间、最大年龄及逐合约的 stale 与 age_seconds |
 
 POST 写入关闭返回 403，鉴权失败返回 401，超过 token 的滑动窗口限额返回 429 并提供 Retry-After。幂等键冲突保留 409，参数错误返回 422。504 的提交结果未知，同一请求可用原始键重交，已知 id 可直接查询。GET、POST 仅调用内部 finance，不将管理员 token 传给 finance。
 
 作业列表、详情、提交和按键查询返回 `Cache-Control: no-store`。
 
-匿名列表每次最多读取四个 finance 页。首读遵循常规请求时限。续读从首读开始计时，最多使用总时限的一半。遇到私有作业后，后续每页最多读取 100 条以跨过私有记录。读完或续读达到限制、遇到错误时，返回已确认的公开作业和 `next_cursor: null`。因此匿名页可能少于 `limit`，更远处的公开作业可能尚未扫描到。管理员列表按 finance 的分页返回完整队列。
+匿名列表每次最多读取四个 finance 页。首读遵循常规请求时限。续读从首读开始计时，最多使用总时限的一半。遇到私有作业后，后续每页最多读取 100 条。续读达到限制或遇到错误时，返回已确认的公开作业及不透明续页游标。即使 `items` 为空，也应继续使用非空的 `next_cursor`，直至其为 `null`。只有确认 finance 已耗尽才返回 `null`。
+
+匿名游标用进程密钥认证加密。客户端原样回传字符串，跨进程重启或游标校验失败返回 422，可从首页重新开始。管理员列表按 finance 的分页返回完整队列。
 
 system/status 的 market 字段包含 state、fresh、source、updated_at、instrument_count 与 stale_count。仅在状态为 ready、存在合约且均未过期时 fresh 才为 true。finance 可回复但尚未 ready 时，web 仍可读取行情以展示过期原因。应用层不可达时，state 为 unavailable，fresh 为 false。
 

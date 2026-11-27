@@ -655,6 +655,7 @@ pub fn openapi() -> serde_json::Value {
     ] {
         web_schemas.insert(name.into(), schemas[name].clone());
     }
+    backtests::register_openapi(&mut spec);
     spec
 }
 

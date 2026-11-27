@@ -972,3 +972,19 @@ fn generated_research_models_round_trip_precise_plans_and_evaluations() {
     let evaluation: models::FactorEvaluationItem = serde_json::from_value(factor_report()).unwrap();
     assert_eq!(serde_json::to_value(evaluation).unwrap(), factor_report());
 }
+
+#[tokio::test]
+async fn anonymous_backtest_rejects_unverifiable_cursor_before_finance() {
+    let web = Gateway::with_finance_url("http://127.0.0.1:1".into());
+    for raw in ["-1".to_owned(), format!("v1.{}", "A".repeat(48))] {
+        let rejected = web
+            .json(
+                Request::get(format!("{JOBS}?limit=1&cursor={raw}")),
+                Value::Null,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            )
+            .await;
+        assert_eq!(rejected["error"]["code"], "invalid_request");
+        assert!(!rejected.to_string().contains(&raw));
+    }
+}

@@ -12,14 +12,16 @@ use finance_client::{
     apis::{jobs_api, research_api},
     models,
 };
-use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
 use std::time::Duration;
 use tokio::time::{Instant, timeout_at};
 
 const DEFAULT_PAGE_LIMIT: u32 = 20;
 const MAX_PAGE_LIMIT: u32 = 100;
 const MAX_PUBLIC_PAGE_READS: usize = 4;
+
+mod cursor;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -115,9 +117,28 @@ impl BundleSubmission {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Pagination {
+pub(crate) struct ListQuery {
+    limit: Option<u32>,
+    cursor: Option<String>,
+}
+
+struct Pagination {
     limit: Option<u32>,
     cursor: Option<i64>,
+}
+
+impl ListQuery {
+    fn pagination(self) -> Option<Pagination> {
+        let cursor = match self.cursor.as_deref() {
+            Some(value) => Some(cursor::parse(value)?),
+            None => None,
+        };
+        let limit = self.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+        (1..=MAX_PAGE_LIMIT).contains(&limit).then_some(Pagination {
+            limit: self.limit,
+            cursor,
+        })
+    }
 }
 
 fn invalid(message: &str) -> Response {
@@ -237,19 +258,22 @@ pub(crate) async fn detail(
 }
 
 #[utoipa::path(get, path = "/api/v1/backtests",
-    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pagination reads at most four finance pages. Additional reads stop halfway to the request deadline, measured from the initial read. It returns the last public id as next_cursor only if another public job is found. If lookahead stops early, confirmed public jobs are returned with a null cursor.",
+    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous results use opaque cursors and may have empty items while a continuation exists. Continue until next_cursor is null. Administrators receive numeric finance cursors.",
     security((), ("adminBearer" = []), ("adminSession" = [])),
     params(("limit" = Option<u32>, Query, description="1..100, default 20"),
-        ("cursor" = Option<i64>, Query, description="Exclusive last id in ascending order")),
+        ("cursor" = Option<String>, Query, description="Previous next_cursor or a legacy nonnegative decimal job id")),
     responses((status=200,body=ref("#/components/schemas/Page")),(status=422,body=ErrorBody),
-    (status=502,body=ErrorBody),(status=503,body=ErrorBody),(status=504,body=ErrorBody)))]
+    (status=500,body=ErrorBody),(status=502,body=ErrorBody),(status=503,body=ErrorBody),(status=504,body=ErrorBody)))]
 pub(crate) async fn list(
     State(s): State<AppState>,
     headers: HeaderMap,
-    query: Result<Query<Pagination>, QueryRejection>,
+    query: Result<Query<ListQuery>, QueryRejection>,
 ) -> Response {
-    let Ok(Query(p)) = query else {
+    let Ok(Query(query)) = query else {
         return invalid("Invalid pagination parameters");
+    };
+    let Some(p) = query.pagination() else {
+        return invalid("Invalid pagination or expired cursor");
     };
     if s.write_access.authorize_stream(&headers, false).is_ok() {
         return s
@@ -260,10 +284,6 @@ pub(crate) async fn list(
             .into_response();
     }
 
-    let limit = p.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
-    if !(1..=MAX_PAGE_LIMIT).contains(&limit) || p.cursor.is_some_and(|cursor| cursor < 0) {
-        return invalid("Invalid pagination");
-    }
     let lookahead_budget = Duration::from_millis(s.config.server.request_timeout_ms) / 2;
     public_page(p, lookahead_budget, |limit, cursor| {
         let finance = &s.finance;
@@ -274,15 +294,43 @@ pub(crate) async fn list(
         }
     })
     .await
-    .map(Json)
+    .map(ScannedPage::into_response)
     .into_response()
+}
+
+struct ScannedPage {
+    items: Vec<models::Job>,
+    next_position: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct PublicPage {
+    items: Vec<models::Job>,
+    next_cursor: Option<String>,
+}
+
+impl ScannedPage {
+    fn into_response(self) -> Response {
+        match self.next_position.map(cursor::seal).transpose() {
+            Ok(next_cursor) => Json(PublicPage {
+                items: self.items,
+                next_cursor,
+            })
+            .into_response(),
+            Err(()) => api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Could not issue a backtest cursor",
+            ),
+        }
+    }
 }
 
 async fn public_page<Fut>(
     query: Pagination,
     lookahead_budget: Duration,
     mut read: impl FnMut(Option<u32>, Option<i64>) -> Fut,
-) -> Result<models::Page, Fault>
+) -> Result<ScannedPage, Fault>
 where
     Fut: Future<Output = Result<models::Page, Fault>> + Send,
 {
@@ -305,36 +353,65 @@ where
             page
         };
         let next = page.next_cursor.flatten();
-        if let Some(next) = next
-            && (next <= cursor.unwrap_or(0) || page.items.last().is_none_or(|job| job.id != next))
-        {
+        let last = page.items.last().map(|job| job.id);
+        let ordered = page
+            .items
+            .iter()
+            .scan(cursor.unwrap_or(0), |previous, job| {
+                let advances = job.id > *previous;
+                *previous = job.id;
+                Some(advances)
+            })
+            .all(|advances| advances);
+        if !ordered || next.is_some_and(|next| last != Some(next)) {
             if index == 0 {
                 return Err(Fault::invalid_response());
             }
             break;
         }
         for job in page.items {
-            if !is_legacy(&job) {
-                upstream_limit = Some(MAX_PAGE_LIMIT);
-                continue;
-            }
-            if items.len() == limit {
-                return Ok(models::Page {
-                    next_cursor: Some(items.last().map(|job| job.id)),
+            let public = is_legacy(&job);
+            if public && items.len() == limit {
+                return Ok(ScannedPage {
                     items,
+                    next_position: cursor,
                 });
             }
-            items.push(job);
+            cursor = Some(job.id);
+            if public {
+                items.push(job);
+            } else {
+                upstream_limit = Some(MAX_PAGE_LIMIT);
+            }
         }
-        let Some(next) = next else {
-            break;
-        };
-        cursor = Some(next);
+        if next.is_none() {
+            return Ok(ScannedPage {
+                items,
+                next_position: None,
+            });
+        }
     }
-    Ok(models::Page {
+    Ok(ScannedPage {
         items,
-        next_cursor: Some(None),
+        next_position: cursor,
     })
+}
+
+pub(crate) fn register_openapi(spec: &mut Value) {
+    let decimal = json!({"type":"integer", "format":"int64", "minimum":0});
+    let opaque = json!({"type":"string", "pattern":cursor::PATTERN});
+    let params = spec["paths"]["/api/v1/backtests"]["get"]["parameters"]
+        .as_array_mut()
+        .expect("backtest list parameters");
+    let cursor = params
+        .iter_mut()
+        .find(|p| p["name"] == "cursor")
+        .expect("backtest cursor parameter");
+    cursor["schema"] = json!({"oneOf":[decimal, opaque]});
+    spec["components"]["schemas"]["Page"]["properties"]["next_cursor"] = json!({
+        "oneOf":[decimal, opaque, {"type":"null"}],
+        "description":"Opaque for anonymous pages, numeric for administrator pages. Null means the underlying scan has ended."
+    });
 }
 
 #[cfg(test)]

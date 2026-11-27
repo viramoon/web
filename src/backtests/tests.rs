@@ -39,6 +39,29 @@ fn one_job_query(cursor: Option<i64>) -> Pagination {
     }
 }
 
+async fn public_body(result: ScannedPage) -> Value {
+    let response = result.into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+fn continuation(body: &Value) -> Pagination {
+    let token = body["next_cursor"].as_str().expect("opaque cursor");
+    assert!(token.starts_with("v1."));
+    assert!(token.parse::<i64>().is_err());
+    let uri = format!("/api/v1/backtests?limit=1&cursor={token}")
+        .parse()
+        .unwrap();
+    Query::<ListQuery>::try_from_uri(&uri)
+        .unwrap()
+        .0
+        .pagination()
+        .unwrap()
+}
+
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const LOOKAHEAD_BUDGET: Duration = Duration::from_millis(7500);
 
@@ -61,21 +84,27 @@ async fn public_backtest_cursor_only_refers_to_visible_jobs_across_private_pages
         .await
         .ok()
         .unwrap();
-    assert_eq!(first, page(vec![legacy(7)], Some(7)));
-    let second = public_page(
-        one_job_query(first.next_cursor.flatten()),
-        LOOKAHEAD_BUDGET,
-        read,
-    )
-    .await
-    .ok()
-    .unwrap();
-    assert_eq!(second, page(vec![legacy(13)], None));
+    let first = public_body(first).await;
+    assert_eq!(first["items"], json!([legacy(7)]));
+    // The browser can continue with the opaque position or the previous, public job id.
+    for query in [continuation(&first), one_job_query(Some(7))] {
+        let second = public_page(query, LOOKAHEAD_BUDGET, read)
+            .await
+            .ok()
+            .unwrap();
+        assert_eq!(
+            public_body(second).await,
+            json!({"items":[legacy(13)], "next_cursor":null})
+        );
+    }
     let private_only = public_page(one_job_query(Some(17)), LOOKAHEAD_BUDGET, read)
         .await
         .ok()
         .unwrap();
-    assert_eq!(private_only, page(vec![], None));
+    assert_eq!(
+        public_body(private_only).await,
+        json!({"items":[], "next_cursor":null})
+    );
 }
 
 #[tokio::test]
@@ -132,16 +161,19 @@ async fn slow_private_backtest_history_keeps_the_public_response_and_bounds_read
             }),
         )
         .await;
-        let response = result
-            .expect("public list must finish before HTTP deadline")
-            .map(Json)
-            .into_response();
-        assert_eq!(response.status(), StatusCode::OK, "{private_count}");
-        let body = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .unwrap();
-        let actual: models::Page = serde_json::from_slice(&body).unwrap();
-        assert_eq!(actual, page(vec![legacy(7)], None), "{private_count}");
+        let actual = public_body(
+            result
+                .expect("public list must finish before HTTP deadline")
+                .ok()
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(actual["items"], json!([legacy(7)]), "{private_count}");
+        if private_count == 1000 {
+            assert_eq!(continuation(&actual).cursor, Some(208));
+        } else {
+            assert!(actual["next_cursor"].is_null(), "{private_count}");
+        }
         assert_eq!(reads.len(), expected_reads, "{private_count}");
         assert_eq!(reads[0], (Some(1), None));
         if private_count > 0 {
@@ -176,9 +208,26 @@ async fn public_backtest_lookahead_time_budget_keeps_confirmed_jobs() {
     .unwrap()
     .ok()
     .unwrap();
-    assert_eq!(result, page(vec![legacy(7)], None));
     assert_eq!(reads, [None, Some(7), Some(8), Some(108)]);
     assert_eq!(start.elapsed(), LOOKAHEAD_BUDGET);
+    let actual = public_body(result).await;
+    assert_eq!(actual["items"], json!([legacy(7)]));
+    assert_eq!(continuation(&actual).cursor, Some(108));
+    let resumed = public_page(
+        continuation(&actual),
+        LOOKAHEAD_BUDGET,
+        |_, cursor| async move {
+            assert_eq!(cursor, Some(108));
+            Ok(page(vec![legacy(109)], None))
+        },
+    )
+    .await
+    .ok()
+    .unwrap();
+    assert_eq!(
+        public_body(resumed).await,
+        json!({"items":[legacy(109)],"next_cursor":null})
+    );
 }
 
 #[tokio::test]
@@ -197,5 +246,99 @@ async fn failed_backtest_lookahead_keeps_the_successful_initial_page() {
     .await
     .ok()
     .unwrap();
-    assert_eq!(result, page(vec![legacy(7)], None));
+    let actual = public_body(result).await;
+    assert_eq!(actual["items"], json!([legacy(7)]));
+    assert_eq!(continuation(&actual).cursor, Some(7));
+}
+
+#[tokio::test]
+async fn anonymous_cursor_reaches_the_public_job_after_301_private_jobs() {
+    let mut jobs = vec![legacy(7)];
+    jobs.extend((8..309).map(bundle));
+    jobs.push(legacy(309));
+    let read = |limit, cursor| {
+        let reply = finance_page(&jobs, limit, cursor);
+        async move { Ok(reply) }
+    };
+    let first = public_page(one_job_query(None), LOOKAHEAD_BUDGET, read)
+        .await
+        .ok()
+        .unwrap();
+    let first = public_body(first).await;
+    assert_eq!(first["items"], json!([legacy(7)]));
+    let next = continuation(&first);
+    assert_eq!(next.cursor, Some(208));
+
+    // A legacy numeric cursor starts within the same gap and must also remain resumable.
+    for mut query in [next, one_job_query(Some(7))] {
+        let mut public_ids = Vec::new();
+        for _ in 0..3 {
+            let result = public_page(query, LOOKAHEAD_BUDGET, read)
+                .await
+                .ok()
+                .unwrap();
+            let body = public_body(result).await;
+            let items: Vec<models::Job> = serde_json::from_value(body["items"].clone()).unwrap();
+            assert!(items.iter().all(is_legacy));
+            public_ids.extend(items.into_iter().map(|job| job.id));
+            if body["next_cursor"].is_null() {
+                break;
+            }
+            assert!(public_ids.is_empty(), "the final public job is the tail");
+            query = continuation(&body);
+        }
+        assert_eq!(public_ids, [309]);
+    }
+}
+
+#[tokio::test]
+async fn empty_anonymous_page_can_continue_across_multiple_scan_windows() {
+    let mut jobs: Vec<_> = (1..1001).map(bundle).collect();
+    jobs.push(legacy(1001));
+    let read = |limit, cursor| {
+        let reply = finance_page(&jobs, limit, cursor);
+        async move { Ok(reply) }
+    };
+    let mut query = one_job_query(None);
+    for expected_position in [301, 602, 903] {
+        let page = public_page(query, LOOKAHEAD_BUDGET, read)
+            .await
+            .ok()
+            .unwrap();
+        let body = public_body(page).await;
+        assert_eq!(body["items"], json!([]));
+        query = continuation(&body);
+        assert_eq!(query.cursor, Some(expected_position));
+    }
+    let tail = public_page(query, LOOKAHEAD_BUDGET, read)
+        .await
+        .ok()
+        .unwrap();
+    assert_eq!(
+        public_body(tail).await,
+        json!({"items":[legacy(1001)],"next_cursor":null})
+    );
+}
+
+#[test]
+fn openapi_keeps_numeric_cursors_and_declares_opaque_public_continuations() {
+    let spec = crate::openapi();
+    let operation = &spec["paths"]["/api/v1/backtests"]["get"];
+    let parameters = operation["parameters"].as_array().unwrap();
+    let cursor = parameters.iter().find(|p| p["name"] == "cursor").unwrap();
+    let variants = json!([
+        {"type":"integer", "format":"int64", "minimum":0},
+        {"type":"string", "pattern":r"^v1\.[A-Za-z0-9_-]{48}$"}
+    ]);
+    assert_eq!(cursor["schema"]["oneOf"], variants);
+    let page = &spec["components"]["schemas"]["Page"];
+    assert_eq!(
+        page["properties"]["items"]["items"]["$ref"],
+        "#/components/schemas/Job"
+    );
+    let result = page["properties"]["next_cursor"]["oneOf"]
+        .as_array()
+        .unwrap();
+    assert_eq!(&result[..2], variants.as_array().unwrap());
+    assert_eq!(result[2], json!({"type":"null"}));
 }

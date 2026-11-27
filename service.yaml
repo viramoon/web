@@ -74,7 +74,7 @@ strategy_research:
     submission: /api/v1/backtests
     lookup: /api/v1/backtests/by-key
     write_retries: 0
-    anonymous_cursor: public_job_id
+    anonymous_cursor: process_scoped_authenticated_encryption
     anonymous_max_pages: 4
     anonymous_lookahead_deadline: half_request_timeout_from_first_read
   interface: docs/api.md#策略与研究
