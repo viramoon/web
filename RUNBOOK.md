@@ -222,19 +222,28 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 
 ## 告警与邮件进程
 
-先在同一个 web 数据库上执行 `web migrate`，再交由 fertile 的进程管理器启动 `target/release/web-notifier`。进程读取专用的部署环境并使用同一 `DATABASE_URL`。它不监听端口，依赖 Linux `/proc`、系统 CA 和 `/usr/bin/curl` 的 SMTP/SMTPS 支持。SMTP 使用 TLS 1.2 或更高版本，证书与主机名由系统 CA 验证。SIGINT 或 SIGTERM 停止领取新任务。配置快照目录时，最长发送与结算宽限为 78 秒，随后留两秒关闭连接池。部署管理器设置 85 秒停止宽限。
+默认关闭邮件进程。`FERTILE_ENABLE_WEB_NOTIFIER=0` 时，fertile 守护器不会启动 `web-notifier`。需要启用时，先对与 web 共用的 `DATABASE_URL` 执行 `web migrate`，确认专用部署环境中有完整的 SMTP 主槽，包括中继、发件人、本人收件人和中继所需的认证，再在 fertile 设置 `FERTILE_ENABLE_WEB_NOTIFIER=1`。启用后用隔离队列核对一次投递结果。进程不监听端口，依赖 Linux `/proc`、系统 CA 和 `/usr/bin/curl` 的 SMTP/SMTPS 支持。SMTP 使用 TLS 1.2 或更高版本，证书与主机名由系统 CA 验证。
 
-web-notifier 与 web 共用日志过滤器。启动失败时，标准错误的 JSON 事件记录固定的 `stage` 和 `reason`，进程以状态码 1 退出。提高 RUST_LOG 级别仍会过滤第三方追踪。
+如果直接启动二进制时传入 `FERTILE_ENABLE_WEB_NOTIFIER=0`，或本机缺少任何可能可用的 SMTP 配置，进程在连接 PostgreSQL 前进入安全空转。否则启动时只读检查数据库选择的 SMTP 配置。本机配置和数据库预检判定空转时都先记录一次 `notifier idle`，再等待停止信号。诊断使用固定阶段和原因。空转保留 outbox、尝试、延迟和投递健康记录，无 SMTP 请求。修复配置后重启，原队列继续应用投递策略。
+
+尚未启用 W4 SMTP 版本时，普通任务和独立渠道测试依赖主槽。主槽要求有效的 `WEB_SMTP_HOST`、`WEB_SMTP_FROM`、`WEB_SMTP_TO` 以及配置的可选字段。此时仅配置备选槽和快照目录会空转。启用 W4 后，普通任务与独立渠道测试使用活动版本绑定的快照。保留 `WEB_SMTP_SNAPSHOT_DIR`、对应密钥和可读取解密的绑定文件后，移除主槽并重启仍可投递。缺目录、缺文件或快照无法解密时，保留原队列并等待恢复。备选槽用于创建 W4 候选快照，空目录在主槽缺失时不会生成新密钥。
+
+普通投递可用时，启动检查也会读取待重试 W4 候选测试已绑定的快照。若已配置存储但该文件缺失或无法解密，进程记录一次 `SMTP candidate test paused`，保留该候选的尝试、下次投递时间和测试证据，继续处理其他可投递邮件。恢复原文件和密钥后重启，候选按原 UUID 重试。未设置快照目录时，W3 主槽仍可投递，W4 候选继续排队。如果前一进程已领取候选，接手者等满 70 秒后将该次尝试结算为 `interrupted`，按原重试上限处理，释放发送名额给 W3。
+
+通过管理接口停用 SMTP 时，以数据库领取任务的时刻为界。停用事务先提交，普通任务继续排队。已领取的尝试按实际结果结算。切换活动版本时，下一次领取重新核对当前绑定。
+
+SIGINT 或 SIGTERM 让空转进程以状态码 0 退出。正常投递的进程收到同样信号后停止领取新任务，并结算已领取的任务。配置快照目录时，最长发送与结算宽限为 78 秒，随后留两秒关闭连接池。部署管理器设置 85 秒停止宽限。有效 SMTP 已配置时，其他启动失败仍以状态码 1 退出。notifier 与 web 共用日志过滤器，标准错误的 JSON 事件使用固定 `stage` 和 `reason`。提高 `RUST_LOG` 级别仍会过滤第三方追踪。
 
 | notifier 环境变量 | 含义及默认值 |
 | --- | --- |
+| `FERTILE_ENABLE_WEB_NOTIFIER` | fertile 守护器的进程开关，默认 `0`。直接执行且显式传入 `0` 时进入空转 |
 | `DATABASE_URL` | 由部署注入，与 web API 共用 PostgreSQL |
 | `WEB_SMTP_HOST`、`WEB_SMTP_PORT` | 固定中继的主机名或 IP。隐式 TLS 默认端口 465，STARTTLS 默认 587 |
 | `WEB_SMTP_TLS` | `implicit`（默认）或 `starttls` |
 | `WEB_SMTP_FROM`、`WEB_SMTP_TO` | 固定发件地址和本人收件地址，各一个邮箱 |
 | `WEB_SMTP_CREDENTIAL_FILE` | 可选，部署提供的本机秘密文件绝对路径，运行用户所有、0600 普通文件、存放于静态目录之外。仅含 `username` 和 `password` 两个 JSON 字符串字段 |
 | `WEB_SMTP_TIMEOUT_SECONDS` | 单次 SMTP 超时，默认 10 秒，范围 1–60 |
-| `WEB_SMTP_SNAPSHOT_DIR` | W4 候选测试所需。由 notifier 运行用户独占的 0700 持久绝对目录，置于静态资源树之外 |
+| `WEB_SMTP_SNAPSHOT_DIR` | W4 候选测试和已绑定快照的投递所需。由 notifier 运行用户独占的 0700 持久绝对目录，置于静态资源树之外 |
 | `WEB_STATIC_ROOT` | 配置快照目录时必填。由部署为 Web 和 notifier 传入同一个静态根绝对路径 |
 | `WEB_PUBLIC_ORIGIN` | 可选，与 web API 相同的规范 HTTPS origin。配置后邮件附私有 `/alerts` 绝对链接 |
 | `WEB_NOTIFIER_QUIET_TIME_ZONE` | 默认 `Asia/Shanghai`，从 PostgreSQL 的 IANA 时区表校验 |
@@ -243,13 +252,13 @@ web-notifier 与 web 共用日志过滤器。启动失败时，标准错误的 J
 | `WEB_NOTIFIER_NORMAL_HOURLY_LIMIT`、`WEB_NOTIFIER_URGENT_HOURLY_LIMIT` | 滚动一小时各自允许的投递尝试数，默认普通 6、紧急 2，各允许 1–1000 |
 | `WEB_NOTIFIER_URGENT_BYPASS_QUIET` | 默认 `true`，紧急投递可绕过静默，仍计入紧急额度 |
 
-notifier 在打开或创建快照密钥前核对快照目录与部署给 Web 的静态根及其解析目标。静态根缺失、无效或不可用时，notifier 启动失败。快照路径必须逐级为实际目录，包含符号链接或父目录穿越的路径会被拒绝。静态根可使用部署的 `current` 链接。
+notifier 在打开或创建快照密钥前核对快照目录与部署给 Web 的静态根及其解析目标。配置了快照存储且静态根缺失、无效或不可用时，notifier 空转。快照路径必须逐级为实际目录，包含符号链接或父目录穿越的路径会被拒绝。静态根可使用部署的 `current` 链接。
 
 更新 SMTP 部署槽位后重启 notifier，再创建并测试候选版本。现有活动版本仍使用绑定的加密快照。目录中的 `snapshot.key` 和快照均为 0600 文件。备份与恢复时保留数据库、全部仍被引用的快照和对应密钥，限制密钥访问。升级时，早期 W4 未绑定快照的测试需要重新运行，未绑定的旧活动配置需在补测通过后重新启用才会投递。运维验证可由管理员通过 W4 集成测试，或用新 UUID 通过邮件渠道发起测试，按各接口返回的路径查询。测试邮件占用普通额度，可在静默窗口执行。[API](docs/api.md#告警规则与邮件通知)
 
 | 现象 | 诊断与恢复 |
 | --- | --- |
-| 测试一直 `pending` | 在测试记录中核对 `available_at` 和 `deferrals`，确认进程正在运行且可读取已迁移的目标库 |
+| 测试一直 `pending` | 确认 fertile 已启用 notifier，查看是否有 `notifier idle` 启动日志。投递进程运行时，在测试记录中核对 `available_at` 和 `deferrals`，确认可读取已迁移的目标库 |
 | 投递 `pending` 且最近结果为 `timeout`、`transient` 或 `interrupted` | 查看尝试表、静默和额度，进程按 30 秒起的指数退避自动重试，最多 5 次尝试 |
 | 投递 `failed` | 核对有限错误分类、TLS 证书、部署地址和本机凭据文件权限，修复后使用新 UUID 发测试邮件 |
 | system/status 的 `notifications.state` 为 `degraded` | 管理员可在 `/alerts` 查看一次 SMTP 失效事件与后续恢复。每轮故障后的首次 SMTP 接受都会记录恢复并排入该轮失败尝试汇总，包括上一轮汇总重试成功的情况 |

@@ -96,7 +96,15 @@ processes:
   - name: web-notifier
     command: web-notifier
     requires: [PostgreSQL, "/usr/bin/curl (SMTP/SMTPS)", system_ca, linux_proc]
+    startup:
+      supervisor_enable_env: FERTILE_ENABLE_WEB_NOTIFIER
+      supervisor_default_enabled: false
+      idle_when: 直接启动时显式关闭、W3 默认主槽不可用、活动 W4 快照不可用，或已配置的快照存储无效
+      idle_behavior: 单次固定空转诊断，可只读检查活动 W4 版本，保留 outbox 和投递记录，收到 SIGTERM 或 SIGINT 时以状态码 0 退出
+      documentation: RUNBOOK.md#告警与邮件进程
     delivery_policy:
+      smtp_candidate: 启动时待重试候选的绑定快照不可读则暂停该测试，恢复后重启。W3 主槽可用时仍可投递，遗留候选发送满 70 秒按 interrupted 结算
+      smtp_disable: 领取普通任务时原子核对 SMTP 启用状态和活动绑定，停用先提交则保留队列
       manual_silence: 规则或单条告警匹配时暂停领取，到期或解除后按原策略处理
       documentation: docs/api.md#主动静默
     environment:
@@ -111,7 +119,7 @@ processes:
       WEB_SMTP_CREDENTIAL_FILE: 可选，仅引用由本机部署提供的 0600 秘密文件绝对路径
       WEB_SMTP_TIMEOUT_SECONDS: 10
       WEB_SMTP_SECONDARY_HOST: 可选，备选 SMTP 槽位。其他 WEB_SMTP_SECONDARY_* 参数与主槽位同名
-      WEB_SMTP_SNAPSHOT_DIR: W4 SMTP 必需，notifier 独占的 0700 持久绝对目录，逐级校验且位于静态资源树外
+      WEB_SMTP_SNAPSHOT_DIR: W4 候选测试和活动快照投递必需，notifier 独占的 0700 持久绝对目录，逐级校验且位于静态资源树外
       WEB_NOTIFIER_QUIET_TIME_ZONE: Asia/Shanghai
       WEB_NOTIFIER_QUIET_START: "23:00"
       WEB_NOTIFIER_QUIET_END: "08:00"
