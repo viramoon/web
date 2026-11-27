@@ -73,6 +73,8 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W2b 需要含 F10b 的 finance API。策略版本、因子快照和回测队列由 finance 管理，执行由 F13 回测 worker 负责。W2b 复用 web 现有配置、数据库、监听端口和进程。[生成客户端说明](src/finance_client/README.md) · [契约差异](docs/api.md#finance-契约版本)
 
+`FINANCE_BASE_URL` 指向数字回环地址（如 `127.0.0.1` 或 `[::1]`）时，web 直接连接 finance，忽略环境代理。
+
 ## 管理员写权限
 
 web 启动时读取 WEB_ADMIN_TOKEN_FILE 指定的文件，默认 /home/box/fertile/secrets/web.env。缺少文件时，匿名读取照常可用，POST 返回 403。新建或轮换时，以运行 web 的账号在受控终端执行。生成的新值直接写入同目录临时文件，原子替换后按 fertile 的进程管理流程重启 web。

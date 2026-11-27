@@ -64,6 +64,15 @@ impl Fault {
         )
     }
 
+    pub(crate) fn invalid_response() -> Self {
+        Self::new(
+            StatusCode::BAD_GATEWAY,
+            "finance_invalid_response",
+            "Invalid finance response",
+            true,
+        )
+    }
+
     fn upstream<E>(err: Error<E>) -> Self {
         match err {
             Error::Reqwest(e) if e.is_timeout() => Self::timeout(),
@@ -98,12 +107,7 @@ impl Fault {
                 Self::unavailable()
             }
             Error::ResponseError(r) if r.status == StatusCode::GATEWAY_TIMEOUT => Self::timeout(),
-            Error::Serde(_) => Self::new(
-                StatusCode::BAD_GATEWAY,
-                "finance_invalid_response",
-                "Invalid finance response",
-                true,
-            ),
+            Error::Serde(_) => Self::invalid_response(),
             _ => Self::new(
                 StatusCode::BAD_GATEWAY,
                 "finance_upstream_error",
@@ -143,25 +147,24 @@ pub struct Finance {
 
 impl Finance {
     pub fn new(config: &FinanceConfig) -> Result<Self, ConfigError> {
-        let client_builder = || {
-            reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never())
-                .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
-                .timeout(Duration::from_millis(config.request_timeout_ms))
-        };
+        let builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
+            .timeout(Duration::from_millis(config.request_timeout_ms));
+        let local = loopback_endpoint(&config.base_url);
+        let builder = if local { builder.no_proxy() } else { builder };
+        let client = builder.build()?;
+        let probe_client = local.then(|| client.clone());
         let connection = Configuration {
             base_path: config.base_url.trim_end_matches('/').into(),
-            client: client_builder().build()?,
+            client,
             user_agent: Some(concat!("web/", env!("CARGO_PKG_VERSION")).into()),
             basic_auth: None,
             oauth_access_token: None,
             bearer_access_token: None,
             api_key: None,
         };
-        let probe_client = loopback_endpoint(&config.base_url)
-            .then(|| client_builder().no_proxy().build())
-            .transpose()?;
         Ok(Self {
             connection: Arc::new(connection),
             probe_client,
@@ -306,6 +309,67 @@ mod tests {
     use axum::body::to_bytes;
     use finance_client::apis::ResponseContent;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn loopback_finance_client_ignores_environment_proxy() {
+        const TEST: &str = "finance::tests::loopback_finance_client_ignores_environment_proxy";
+        const DIRECT_PORT: &str = "WEB_TEST_FINANCE_DIRECT_PORT";
+        if let Ok(port) = std::env::var(DIRECT_PORT) {
+            let port: u16 = port.parse().unwrap();
+            let base_url = format!("http://127.0.0.1:{port}");
+            let mut config =
+                crate::config::Settings::load(std::path::Path::new("config"), |_| None)
+                    .unwrap()
+                    .finance;
+            config.base_url = base_url.clone();
+            // Check that a client using environment proxies would hit the local proxy.
+            let through_proxy = reqwest::Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap()
+                .get(format!("{base_url}/healthz/ready"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(through_proxy.status(), StatusCode::BAD_GATEWAY);
+
+            let (status, reachable) = Finance::new(&config).unwrap().probe().await;
+            assert!(reachable && status.ok);
+            return;
+        }
+
+        let direct = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let direct_port = direct.local_addr().unwrap().port();
+        let origin_task = tokio::spawn(async {
+            let routes = axum::Router::new().route(
+                "/healthz/ready",
+                axum::routing::get(|| async { Json(json!({"status":"ok","checks":[]})) }),
+            );
+            axum::serve(direct, routes).await.unwrap();
+        });
+        let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+        let proxy_task = tokio::spawn(async {
+            let routes = axum::Router::new().fallback(|| async { StatusCode::BAD_GATEWAY });
+            axum::serve(proxy, routes).await.unwrap();
+        });
+        let result = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST])
+            .env_clear()
+            .env(DIRECT_PORT, direct_port.to_string())
+            .env("http_proxy", &proxy_url)
+            .env("HTTP_PROXY", &proxy_url)
+            .output()
+            .await
+            .unwrap();
+        origin_task.abort();
+        proxy_task.abort();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+    }
 
     #[tokio::test]
     async fn strategy_diagnostics_keep_redacted_path_and_source_coordinates() {

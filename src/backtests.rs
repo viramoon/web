@@ -1,4 +1,4 @@
-use crate::{AppState, ErrorBody, api_error, research};
+use crate::{AppState, ErrorBody, api_error, finance::Fault, research};
 use axum::{
     Json,
     extract::{
@@ -14,6 +14,9 @@ use finance_client::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
+
+const DEFAULT_PAGE_LIMIT: u32 = 20;
+const MAX_PAGE_LIMIT: u32 = 100;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -231,7 +234,7 @@ pub(crate) async fn detail(
 }
 
 #[utoipa::path(get, path = "/api/v1/backtests",
-    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Continue with next_cursor even when items is empty.",
+    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pagination counts only public jobs and returns the last public id as next_cursor when more public jobs exist.",
     security((), ("adminBearer" = []), ("adminSession" = [])),
     params(("limit" = Option<u32>, Query, description="1..100, default 20"),
         ("cursor" = Option<i64>, Query, description="Exclusive last id in ascending order")),
@@ -245,14 +248,68 @@ pub(crate) async fn list(
     let Ok(Query(p)) = query else {
         return invalid("Invalid pagination parameters");
     };
-    s.finance
-        .read(|cfg| async move { jobs_api::list(&cfg, p.limit, p.cursor).await })
-        .await
-        .map(|mut page| {
-            if s.write_access.authorize_stream(&headers, false).is_err() {
-                page.items.retain(is_legacy);
-            }
-            Json(page)
-        })
-        .into_response()
+    if s.write_access.authorize_stream(&headers, false).is_ok() {
+        return s
+            .finance
+            .read(|cfg| async move { jobs_api::list(&cfg, p.limit, p.cursor).await })
+            .await
+            .map(Json)
+            .into_response();
+    }
+
+    let limit = p.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+    if !(1..=MAX_PAGE_LIMIT).contains(&limit) || p.cursor.is_some_and(|cursor| cursor < 0) {
+        return invalid("Invalid pagination");
+    }
+    public_page(p.cursor, limit as usize, |cursor| {
+        let finance = &s.finance;
+        async move {
+            finance
+                .read(|cfg| async move { jobs_api::list(&cfg, p.limit, cursor).await })
+                .await
+        }
+    })
+    .await
+    .map(Json)
+    .into_response()
 }
+
+async fn public_page<Fut>(
+    mut cursor: Option<i64>,
+    limit: usize,
+    mut read: impl FnMut(Option<i64>) -> Fut,
+) -> Result<models::Page, Fault>
+where
+    Fut: Future<Output = Result<models::Page, Fault>> + Send,
+{
+    let mut items: Vec<models::Job> = Vec::with_capacity(limit);
+    // Read ahead to the next public job under the request's overall deadline.
+    loop {
+        let page = read(cursor).await?;
+        let next = page.next_cursor.flatten();
+        if let Some(next) = next
+            && (next <= cursor.unwrap_or(0) || page.items.last().is_none_or(|job| job.id != next))
+        {
+            return Err(Fault::invalid_response());
+        }
+        for job in page.items.into_iter().filter(is_legacy) {
+            if items.len() == limit {
+                return Ok(models::Page {
+                    next_cursor: Some(items.last().map(|job| job.id)),
+                    items,
+                });
+            }
+            items.push(job);
+        }
+        let Some(next) = next else {
+            return Ok(models::Page {
+                items,
+                next_cursor: Some(None),
+            });
+        };
+        cursor = Some(next);
+    }
+}
+
+#[cfg(test)]
+mod tests;

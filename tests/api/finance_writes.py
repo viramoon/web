@@ -31,6 +31,7 @@ JOB = {
     "id": JOB_ID, "request": INPUT, "status": "succeeded", "attempt": 1,
     "created_at": INPUT["start"], "summary": SUMMARY,
 }
+LATER_JOB = {**JOB, "id": JOB_ID + 1}
 
 
 def request(port, path, method="GET", headers=None, data=None):
@@ -107,8 +108,14 @@ class Finance(BaseHTTPRequestHandler):
             else:
                 self.respond(404, {"error": {"code": "job_not_found", "message": "No job for this key"}})
         elif url.path == JOBS:
-            self.server.pagination = parse_qs(url.query)
-            self.respond(200, {"items": [JOB], "next_cursor": JOB_ID})
+            query = parse_qs(url.query)
+            self.server.pagination = query
+            limit = int(query.get("limit", [20])[0])
+            cursor = int(query.get("cursor", [0])[0])
+            items = [job for job in (JOB, LATER_JOB) if job["id"] > cursor]
+            page = items[:limit]
+            next_cursor = page[-1]["id"] if len(items) > limit else None
+            self.respond(200, {"items": page, "next_cursor": next_cursor})
         elif url.path == f"{JOBS}/{JOB_ID}":
             self.respond(200, JOB)
         else:
@@ -129,8 +136,13 @@ def read_routes(port, mock):
     assert request(port, f"{JOBS}/datasets")[::2] == (200, {"items": []})
     assert request(port, f"{JOBS}/{JOB_ID}")[2] == JOB
     code, _, page = request(port, JOBS + "?limit=7&cursor=19")
-    assert code == 200 and page == {"items": [JOB], "next_cursor": JOB_ID}
+    assert code == 200 and page == {"items": [JOB, LATER_JOB], "next_cursor": None}
     assert mock.pagination == {"limit": ["7"], "cursor": ["19"]}
+    code, _, page = request(port, JOBS + "?limit=1&cursor=19")
+    assert code == 200 and page == {"items": [JOB], "next_cursor": JOB_ID}
+    assert mock.pagination == {"limit": ["1"], "cursor": [str(JOB_ID)]}
+    code, _, page = request(port, f"{JOBS}?limit=1&cursor={JOB_ID}")
+    assert code == 200 and page == {"items": [LATER_JOB], "next_cursor": None}
     error(request(port, f"{JOBS}/99"), 404)
     code, _, market = request(port, MARKET)
     assert code == 200 and market == mock.market

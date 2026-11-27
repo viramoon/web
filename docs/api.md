@@ -58,7 +58,7 @@ system/status 的 finance.circuit 为 closed、open 或 half_open。finance 不�
 | --- | --- |
 | POST /api/v1/backtests | 管理员 Bearer 或同源会话。Idempotency-Key 必填，1 至 128 个可见 ASCII 字符。JSON 请求接受原 `JobRequest` 或 `BundleSubmission`。返回 202 与 id。每次最多向 finance 发送一次 |
 | GET /api/v1/backtests/{id} | 返回状态、请求、结果摘要及错误。原有作业可公开读取，StrategyBundle 作业仅管理员可见。找不到或不可见时返回 404 |
-| GET /api/v1/backtests | 按 id 递增分页。limit 默认 20，范围 1 至 100，cursor 为上页的 next_cursor。匿名页的 items 只含公开作业。只要 next_cursor 有值即可继续翻页，items 可能为空 |
+| GET /api/v1/backtests | 按 id 递增分页。limit 默认 20，范围 1 至 100，cursor 为上页的 next_cursor。匿名分页只计公开作业。仅在还有公开作业时返回本页最后一条公开作业的 id 作为 next_cursor，否则为 null |
 | GET /api/v1/market/status | 公开读取行情来源、状态、快照时间、最大年龄及逐合约的 stale 与 age_seconds |
 
 POST 写入关闭返回 403，鉴权失败返回 401，超过 token 的滑动窗口限额返回 429 并提供 Retry-After。幂等键冲突保留 409，参数错误返回 422。504 的提交结果未知，同一请求可用原始键重交，已知 id 可直接查询。GET、POST 仅调用内部 finance，不将管理员 token 传给 finance。

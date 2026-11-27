@@ -18,7 +18,7 @@ W2a 的路由测试使用合成标的、临时管理员凭据和内存路由，�
 
 `cargo test --lib --locked websocket_` 的端到端用例使用两个随机回环端口运行 WebSocket 客户端、web 路由和合成 finance 替身，验证 101 升级、许可拒绝、注销后重连、额度占满、释放和慢端重置。fixture 用固定 F1 记录和临时管理员会话，finance 替身检查浏览器认证头和 Cookie 留在 web。`websocket_wire_handshake_rejects_unauthenticated_and_cross_origin_clients` 还通过进程内双向流发送真实握手请求，验证匿名和跨源请求在升级前分别收到 401 和 403，无需监听 socket。
 
-执行 `cargo test --lib --locked research::tests` 检查 W2b。测试从固定 YAML、UTC 日期、版本、十进制文本和临时随机管理员凭据构造合成请求与报告。回环 finance 替身验证上传与版本选择的计划一致、行列错误、幂等键恢复、旧深链、因子精度和身份边界。路由限额、深链、生成模型及 OpenAPI 引用也有无需 socket 的测试。
+执行 `cargo test --lib --locked research::tests` 检查 W2b。测试从固定 YAML、UTC 日期、版本、十进制文本和临时随机管理员凭据构造合成请求与报告。选版桩用策略 ID 和版本读取预览，覆盖同一文件的计划一致性、两个不同版本和未登记引用。回环测试还覆盖行列错误、幂等键恢复、旧深链、因子精度和身份边界。路由限额、深链、生成模型、匿名游标及 OpenAPI 引用也有无需 socket 的测试。代理隔离测试在子进程中显式配置临时回环代理并验证 finance 直连。
 
 从仓库根目录构建并运行三个本地 HTTP 验证脚本。WEB_BIN 指向本次构建产物，PATH 包含 PostgreSQL 工具。
 

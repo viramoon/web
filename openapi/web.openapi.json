@@ -7243,7 +7243,7 @@
 },
 "/api/v1/backtests": {
 "get": {
-"description": "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Continue with next_cursor even when items is empty.",
+"description": "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pagination counts only public jobs and returns the last public id as next_cursor when more public jobs exist.",
 "operationId": "list",
 "parameters": [
 {

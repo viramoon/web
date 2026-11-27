@@ -2,9 +2,10 @@ use super::*;
 use crate::{auth::WriteAccess, config::Settings, database::Database, finance::Finance, router};
 use axum::{
     body::{Body, to_bytes},
-    extract::Request,
+    extract::{Path as RoutePath, Request},
     http::{HeaderMap, HeaderValue, Method, Uri, header, request::Builder},
 };
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs, future,
@@ -25,7 +26,72 @@ const FACTOR_REPORT_URL: &str = "/api/v1/factors/synthetic.factor/evaluations/fi
 const START: &str = "2026-01-02T00:00:00Z";
 const END: &str = "2026-01-06T00:00:00Z";
 const PRECISE: &str = "0.1234567890123456789012345678900000";
-const SOURCE: &str = "# Synthetic HTTP sample, with no market data\nmetadata:\n  id: synthetic.momentum\n  version: '1.0.0'\n";
+// Fixed synthetic A1+B2 bundle derived from the finance F2 entry-exit fixture.
+// Both catalog references resolve through the compiler's synthetic example catalog.
+const SOURCE: &str = r#"
+apiVersion: fertile.finance/strategy/v1
+kind: StrategyBundle
+metadata:
+  id: synthetic.momentum
+  version: "1.0.0"
+  title: Synthetic momentum
+spec:
+  engine: nautilus_cash_equity
+  mode: backtest
+  universe: {ref: "example.us-cash-equities@1.0.0", membership: point_in_time}
+  data: {bars: "example.reviewed-us-daily@1.0.0", timeframe: 1d, price_basis: raw_split_free_reviewed, currency: USD}
+  clock:
+    calendar: XNYS
+    decide_on: session_close
+    earliest_fill: next_session_close
+    warmup_sessions: 30
+    missing_input: block_new_risk
+  factors:
+    mom20:
+      use: "factor.close_return@1.0.0"
+      params: {lookback_sessions: 20}
+  modules:
+    A1:
+      kind: entry
+      use: "entry.above_when_flat@1.0.0"
+      params: {factor: mom20, threshold: "0.020000000000000001"}
+    B2:
+      kind: exit
+      use: "exit.holding_sessions@1.0.0"
+      params: {sessions: 10, start_at: first_fill}
+    F1:
+      kind: filter
+      use: "filter.complete_session_bar@1.0.0"
+      params: {require_positive_volume: true}
+    S1:
+      kind: sizing
+      use: "sizing.equal_weight_capped@1.0.0"
+      params: {max_weight_per_asset: "0.25"}
+    R1:
+      kind: risk
+      use: "risk.long_only_cash@1.0.0"
+      params: {max_gross_weight: "1.00", allow_borrow: false}
+  recipes:
+    A1_B2: {type: entry_exit, entry: A1, exit: B2, filters: [F1], sizing: S1, risk: [R1]}
+  portfolio:
+    initial_cash: {currency: USD, amount: "100000.00"}
+    sleeves: [{recipe: A1_B2, budget_weight: "1.00", priority: 10}]
+    allocation: fixed_budgets
+    residual: cash
+    netting: by_instrument
+    max_gross_weight: "1.00"
+    max_weight_per_asset: "0.25"
+  policy:
+    on_entry_exit_collision: exit_first
+    same_session_reentry: false
+    on_missing_execution_price: defer_and_report
+    tie_break: stable_instrument_id
+  execution:
+    model: "execution.next_close_cash_equity@1.0.0"
+    lot_size_policy: instrument_master
+    commission_bps: "2.00"
+    slippage_bps: "5.00"
+"#;
 
 struct Gateway {
     app: Router,
@@ -129,7 +195,7 @@ fn document_body(content: &str) -> Value {
 }
 
 fn registered() -> Value {
-    json!({"id":SYNTHETIC_ID, "version":"1.0.0", "content_sha256":"1".repeat(64)})
+    preview()["strategy"].clone()
 }
 
 fn selection() -> Value {
@@ -156,11 +222,22 @@ fn assert_finance_headers(headers: &HeaderMap) {
 }
 
 fn preview() -> Value {
+    preview_document(SOURCE)
+}
+
+fn preview_document(source: &str) -> Value {
+    let bundle: Value = serde_yaml::from_str(source).unwrap();
+    let content_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&bundle).unwrap()));
+    let source_sha256 = format!("{:x}", Sha256::digest(source.as_bytes()));
     json!({
-        "strategy": registered(),
+        "strategy": {
+            "id": bundle["metadata"]["id"],
+            "version": bundle["metadata"]["version"],
+            "content_sha256": content_sha256
+        },
         "plan": {
-            "plan_version":"1.0", "content_sha256":"1".repeat(64), "source_sha256":"2".repeat(64),
-            "bundle": {"metadata": {"id": SYNTHETIC_ID, "version":"1.0.0"}},
+            "plan_version":"1.0", "content_sha256":content_sha256, "source_sha256":source_sha256,
+            "bundle": bundle,
             "inputs": {
                 "bars": {"id":"example.bars@1.0.0", "asset":"cash_equity",
                     "available_at":"session_close", "calendar":"XNYS", "currency":"USD",
@@ -169,7 +246,7 @@ fn preview() -> Value {
                     "available_at":"session_open", "calendar":"XNYS", "currency":"USD", "point_in_time":true}
             },
             "factors":[], "modules":[], "execution":"execution.next_close_cash_equity@1.0.0",
-            "sleeves":[{"recipe":"A1_B2", "priority":10, "budget_weight":"0.250000000000000001"}],
+            "sleeves": bundle["spec"]["portfolio"]["sleeves"],
             "conflict_rules": {"decision_snapshot":"frozen", "phase_order":[],
                 "on_entry_exit_collision":"exit_first", "same_session_reentry":false,
                 "on_missing_execution_price":"defer_and_report", "missing_input":"block_new_risk",
@@ -180,28 +257,36 @@ fn preview() -> Value {
     })
 }
 
+fn uploaded_preview(body: Value) -> Value {
+    let source = body["content"].as_str().unwrap();
+    assert_eq!(body, document_body(source));
+    preview_document(source)
+}
+
 #[tokio::test]
 async fn upload_and_registered_version_return_the_same_plan() {
-    let binding = Arc::new(Mutex::new(false));
-    let read_binding = Arc::clone(&binding);
+    let plans = Arc::new(Mutex::new(HashMap::new()));
+    let registered_plans = Arc::clone(&plans);
     let stub = Router::new()
         .route(
             VALIDATE,
             post(|headers: HeaderMap, Json(body): Json<Value>| async move {
                 assert_finance_headers(&headers);
-                assert_eq!(body, document_body(SOURCE));
-                Json(preview())
+                Json(uploaded_preview(body))
             }),
         )
         .route(
             STRATEGIES,
             post(move |headers: HeaderMap, Json(body): Json<Value>| {
-                let binding = Arc::clone(&binding);
+                let plans = Arc::clone(&registered_plans);
                 async move {
                     assert_finance_headers(&headers);
-                    assert_eq!(body, document_body(SOURCE));
-                    *binding.lock().unwrap() = true;
-                    Json(registered())
+                    let preview = uploaded_preview(body);
+                    let registered = preview["strategy"].clone();
+                    let id = registered["id"].as_str().unwrap().to_owned();
+                    let version = registered["version"].as_str().unwrap().to_owned();
+                    plans.lock().unwrap().insert((id, version), preview);
+                    Json(registered)
                 }
             })
             .get(|uri: Uri| async move {
@@ -209,16 +294,16 @@ async fn upload_and_registered_version_return_the_same_plan() {
                     uri.query(),
                     Some("id=synthetic.momentum&after=synthetic.momentum%400.9.0&limit=1")
                 );
-                Json(json!({"items":[registered()], "next_cursor":null}))
+                Json(json!({"items":[registered()], "next_cursor":"synthetic.momentum@1.0.0"}))
             }),
         )
         .route(
             VERSION,
-            get(move || {
-                let binding = Arc::clone(&read_binding);
+            get(move |RoutePath(key): RoutePath<(String, String)>| {
+                let plans = Arc::clone(&plans);
                 async move {
-                    if *binding.lock().unwrap() {
-                        Json(preview()).into_response()
+                    if let Some(plan) = plans.lock().unwrap().get(&key).cloned() {
+                        Json(plan).into_response()
                     } else {
                         api_error(
                             StatusCode::NOT_FOUND,
@@ -253,13 +338,52 @@ async fn upload_and_registered_version_return_the_same_plan() {
             .await;
         assert_eq!(binding, upload["strategy"]);
     }
+    let other_source = SOURCE
+        .replacen(r#"version: "1.0.0""#, r#"version: "2.0.0""#, 1)
+        .replace("0.020000000000000001", "0.030000000000000001");
+    let other_preview = preview_document(&other_source);
+    let other_binding = web
+        .json(
+            web.admin(Request::post(STRATEGIES)),
+            document_body(&other_source),
+            StatusCode::OK,
+        )
+        .await;
+    assert_eq!(other_binding, other_preview["strategy"]);
+    assert_ne!(
+        other_binding["content_sha256"],
+        upload["strategy"]["content_sha256"]
+    );
     let listed = web
         .get("/api/v1/strategies?id=synthetic.momentum&after=synthetic.momentum%400.9.0&limit=1")
         .await;
     assert_eq!(listed["items"], json!([upload["strategy"]]));
-    let selected = web.get(VERSION_URL).await;
+    assert_eq!(listed["next_cursor"], "synthetic.momentum@1.0.0");
+    let item = &listed["items"][0];
+    let selected_url = format!(
+        "{STRATEGIES}/{}/versions/{}",
+        item["id"].as_str().unwrap(),
+        item["version"].as_str().unwrap()
+    );
+    assert_eq!(selected_url, VERSION_URL);
+    let selected = web.get(&selected_url).await;
     assert_eq!(upload, selected);
     assert_eq!(selected, preview());
+    let other_url = "/api/v1/strategies/synthetic.momentum/versions/2.0.0";
+    assert_eq!(web.get(other_url).await, other_preview);
+    for url in [
+        "/api/v1/strategies/synthetic.momentum/versions/9.0.0",
+        "/api/v1/strategies/synthetic.unknown/versions/1.0.0",
+    ] {
+        let error = web
+            .json(
+                web.admin(Request::get(url)),
+                Value::Null,
+                StatusCode::NOT_FOUND,
+            )
+            .await;
+        assert_eq!(error["error"]["code"], "strategy_version_not_found");
+    }
 }
 
 #[tokio::test]
@@ -495,7 +619,8 @@ async fn backtest_proxy_reuses_keys_recovers_timeout_and_keeps_legacy_deep_link(
     );
     let mut bundle_request = submission(selection());
     bundle_request["content_sha256"] = registered()["content_sha256"].clone();
-    let configured = job(11, bundle_request);
+    let configured = job(11, bundle_request.clone());
+    let private_tail = job(12, bundle_request);
     let queue = Queue::default();
     let stub = Router::new()
         .route(
@@ -503,9 +628,22 @@ async fn backtest_proxy_reuses_keys_recovers_timeout_and_keeps_legacy_deep_link(
             post(submit_stub).get({
                 let legacy = legacy.clone();
                 let configured = configured.clone();
-                move || {
-                    let (legacy, configured) = (legacy.clone(), configured.clone());
-                    async move { Json(json!({"items":[legacy,configured],"next_cursor":11})) }
+                move |uri: Uri| {
+                    let (legacy, configured, private_tail) =
+                        (legacy.clone(), configured.clone(), private_tail.clone());
+                    async move {
+                        let cursor = uri.query().and_then(|query| {
+                            url::form_urlencoded::parse(query.as_bytes())
+                                .find(|(key, _)| key == "cursor")
+                                .map(|(_, value)| value.parse::<i64>().unwrap())
+                        });
+                        let page = match cursor {
+                            None => json!({"items":[legacy,configured],"next_cursor":11}),
+                            Some(11) => json!({"items":[private_tail],"next_cursor":null}),
+                            _ => panic!("unexpected list cursor: {cursor:?}"),
+                        };
+                        Json(page)
+                    }
                 }
             }),
         )
@@ -622,7 +760,15 @@ async fn backtest_proxy_reuses_keys_recovers_timeout_and_keeps_legacy_deep_link(
     let public = web
         .json(Request::get(JOBS), Value::Null, StatusCode::OK)
         .await;
-    assert_eq!(public, json!({"items":[legacy], "next_cursor":11}));
+    assert_eq!(public, json!({"items":[legacy], "next_cursor":null}));
+    let private_only = web
+        .json(
+            Request::get("/api/v1/backtests?cursor=11"),
+            Value::Null,
+            StatusCode::OK,
+        )
+        .await;
+    assert_eq!(private_only, json!({"items":[], "next_cursor":null}));
     assert_eq!(
         web.get(JOBS).await,
         json!({"items":[legacy,configured], "next_cursor":11})
