@@ -3572,7 +3572,7 @@
         "type": "null"
        },
        {
-        "$ref": "#/components/schemas/MarketWatermarks"
+        "$ref": "#/components/schemas/QualityWatermarks"
        }
       ]
      }
@@ -3735,12 +3735,88 @@
     ],
     "type": "object"
    },
+   "QualitySourceObservation": {
+    "additionalProperties": false,
+    "properties": {
+     "channel": {
+      "type": "string"
+     },
+     "epoch": {
+      "$ref": "#/components/schemas/ExactCount"
+     },
+     "exchange_ts": {
+      "oneOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/components/schemas/ExactCount",
+        "description": "UTC nanoseconds since the Unix epoch, as observed by the market source."
+       }
+      ]
+     },
+     "instrument_id": {
+      "type": "string"
+     },
+     "receive_ts": {
+      "$ref": "#/components/schemas/ExactCount",
+      "description": "UTC nanoseconds since the Unix epoch, as observed by the collector."
+     },
+     "seq": {
+      "$ref": "#/components/schemas/ExactCount"
+     }
+    },
+    "required": [
+     "channel",
+     "instrument_id",
+     "epoch",
+     "seq",
+     "receive_ts"
+    ],
+    "type": "object"
+   },
    "QualityState": {
     "enum": [
      "unavailable",
      "available"
     ],
     "type": "string"
+   },
+   "QualityWatermarks": {
+    "additionalProperties": false,
+    "properties": {
+     "local_durable": {
+      "$ref": "#/components/schemas/ExactCount"
+     },
+     "projected": {
+      "$ref": "#/components/schemas/ExactCount"
+     },
+     "remote_verified": {
+      "oneOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/components/schemas/ExactCount"
+       }
+      ]
+     },
+     "source_latest": {
+      "oneOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/components/schemas/QualitySourceObservation"
+       }
+      ]
+     }
+    },
+    "required": [
+     "local_durable",
+     "projected"
+    ],
+    "type": "object"
    },
    "RecoveryOutcome": {
     "enum": [

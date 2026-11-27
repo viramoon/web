@@ -1,7 +1,7 @@
 use super::{
     OpsConfig,
     quality::{
-        MAX_STREAMS, MarketWatermarks, QUALITY_MAX_BYTES, QualityFile, ReportFile, StreamFile,
+        MAX_STREAMS, QUALITY_MAX_BYTES, QualityFile, QualityWatermarks, ReportFile, StreamFile,
         token,
     },
     read_snapshot,
@@ -127,7 +127,7 @@ impl Inputs {
                     .query::<Vec<ReportFile>>("quality", Some(approved))
                     .await?;
                 let watermarks = self
-                    .query::<MarketWatermarks>("watermarks", Some(approved))
+                    .query::<QualityWatermarks>("watermarks", Some(approved))
                     .await?;
                 let stream = StreamFile {
                     source: approved.source.clone(),

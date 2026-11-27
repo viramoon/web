@@ -36,7 +36,7 @@ F9c 的场所深度、F9b 的行情线预算、F12 的历史期权与费用估�
 
 同一提交的 1.0 读流产物保存在 web，内容与 `617ed83` 的导出一致。[市场 WS schema](../openapi/finance.market-ws.schema.json) · [行情状态 SSE schema](../openapi/finance.market-status-sse.schema.json) · [合成回放样本](../openapi/finance.read-stream-examples.json)
 
-web 原有路径、权限与查询参数保持原状。[web OpenAPI](../openapi/web.openapi.json) 的 `Event`、`Message`、`FundingRate`、`OpenInterest` 对应新版 WAL 与投影响应。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制和大整数文本。web 已有的 bars 和指标端点仍使用 W2a 的 WAL 视图。市场 WebSocket 继续发 1.0 数据帧，遇到 2.0 事件发出 `unsupported_version` 重置。web 运维 SSE 仍按下文的 `/events` 契约运行。
+web 原有路径、权限与查询参数保持原状。[web OpenAPI](../openapi/web.openapi.json) 的 `Event`、`Message`、`FundingRate`、`OpenInterest` 对应新版 WAL 与投影响应。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制和大整数文本。web 已有的 bars 和指标端点仍使用 W2a 的 WAL 视图。市场 WebSocket 继续发 1.0 数据帧，遇到 2.0 事件发出 `unsupported_version` 重置。web 运维 SSE 仍按下文的 `/events` 契约运行。运维缺口响应的水位组件见[备份与采集质量](#备份与采集质量)。
 
 合并后，frontend 按已合并的 web SHA 更新 `openapi/web.commit`、快照及生成客户端。fertile 在对应 frontend 变更合并后更新 gitlinks，并用 finance `fc5e153` 和已合并的 web 提交运行 T3 契约比对和隔离复测。[生成及校验流程](../src/finance_client/README.md)
 
@@ -150,6 +150,8 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 
 - 备份响应包含 `state`、`observed_at`、`last_recoverable_point`、`last_recoverable_at`、`last_full_at`、`last_hourly_at`、`age_seconds`、`alert`、`degraded` 及 `last_isolated_restore`。未配置时状态为 `disabled`。缺失或不合格的文件显示 `unavailable`。有效状态的 `observed_at` 取自 T2b 文件发布时间，`last_recoverable_at` 取自已验证恢复点的数据截点。降级观测可以保留原截点。备份已启用时，水位缺失、时钟倒置、点龄超过 3600 秒或生产者降级均使 `alert` 为真。隔离恢复凭据包括同一远端实际恢复的 `point`、`recoverable_at` 和 `restored_at`，可为空。
 - 缺口响应包含 `state`、`as_of`、`coverage`、`items` 和 `next_offset`。`unavailable` 表示暂无有效观测，`available` 可返回空结果。支持 `source`、`product`、`from`、`to` 筛选，与记录的 UTC 半开区间相交即匹配。列表按起始时间倒序，`limit` 范围 1–100，默认 20，`offset` 默认为 0。翻页比较 `as_of`，快照变化后从首屏重新读取。每段含源、产品、标的、频道、原因、恢复类别和可选计数。恢复类别为 `tick_backfilled`、`bar_backfilled`、`book_restored_from_snapshot`、`history_unrecoverable`，`null` 表示待恢复。覆盖项包含许可和可选的源最新、本机持久、投影和远端已验证水位。WAL 位置、纳秒时间和计数使用精确十进制字符串。
+
+在 web OpenAPI 中，`QualityCoverage.watermarks` 为 `null` 或 `QualityWatermarks`，后者直接包含 `local_durable`、`projected`、`remote_verified` 和 `source_latest`。非空 `source_latest` 使用 `QualitySourceObservation`。行情端点 `GET /api/v1/market/watermarks` 使用 finance 的 `MarketWatermarks` 包装和 `SourceObservation`。缺口接口的响应字段与运行时行为保持原状。
 
 质量文件上限 1 MiB。`web publish-quality INPUTS` 对获准且可持久化的产品读取 finance F3 `finance-market-wal quality` 与 `watermarks`，校验后原子发布。根字段为 `version`（`1`）、`observed_at`（RFC 3339 UTC 时间）及 `streams`（最多 64 项）。每项含 F1 `source`、`product`、`license`、可空的 F3 `watermarks` 对象及 F3 `reports` 数组。web 将 F3 闭区间的 `to_ts` 增加一纳秒后导出半开区间。生产者未提供远端水位时 `remote_verified` 为空。有效快照发布前接口返回 `unavailable`。[发布配置](quality-publishing.md) · [运行手册](../RUNBOOK.md#备份与采集缺口)
 

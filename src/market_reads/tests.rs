@@ -86,9 +86,9 @@ fn wal_accepts_mixed_versions_with_exact_context_and_v2_control_payloads() {
             "gap",
             json!({"from_ts": "1", "to_ts": "2", "reason": "rotation"}),
         ),
-        ("reset", json!({"reason": "disconnected"})),
         ("heartbeat", json!({})),
         ("status", json!({"state": "degraded"})),
+        ("reset", json!({"reason": "disconnected"})),
     ] {
         let mut wire = event(kind, payload);
         wire["schema_version"] = json!("2.0");
@@ -102,6 +102,7 @@ fn wal_accepts_mixed_versions_with_exact_context_and_v2_control_payloads() {
     }
     let mut wire = wal_rows(events);
     let reset = wire["records"].as_array_mut().unwrap().last_mut().unwrap();
+    assert_eq!(reset["event"]["kind"], "reset");
     reset["event"]["epoch"] = json!("8");
     reset["event"]["seq"] = json!("0");
     let page: models::MarketWalPage = serde_json::from_value(wire.clone()).unwrap();

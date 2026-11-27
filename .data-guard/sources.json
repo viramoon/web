@@ -2,7 +2,7 @@
   "version": 1,
   "fixtures": {
     "src/market_reads/tests.rs": {
-      "sha256": "eeb30f8d4eab692d081fc34c6da81243dc7aa5f51f4ccfaac00b7b58ab8ab4a8",
+      "sha256": "e61b27f0195291a8b62b75d83478d9589c8526a3c421dca94f259a10a11b4b4c",
       "generator": "src/market_reads/tests/synthetic.rs",
       "seed": "fixed",
       "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。 W6 用相同固定值构造混合版本 WAL，包含资金费率、持仓量和控制帧。"
