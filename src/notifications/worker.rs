@@ -2,6 +2,9 @@
 
 mod store;
 
+#[cfg(test)]
+mod snapshot_recovery_tests;
+
 use crate::{config::ConfigError, database::Database};
 use chrono::{DateTime, NaiveTime, TimeDelta, Utc};
 use serde::Serialize;
@@ -208,7 +211,17 @@ pub async fn run(
     db: &Database,
     policy: &NotificationPolicy,
     channel: &impl NotificationChannel,
+    shutdown: watch::Receiver<bool>,
+) -> Result<(), ConfigError> {
+    run_with_clock(db, policy, channel, shutdown, Utc::now).await
+}
+
+async fn run_with_clock(
+    db: &Database,
+    policy: &NotificationPolicy,
+    channel: &impl NotificationChannel,
     mut shutdown: watch::Receiver<bool>,
+    clock: impl Fn() -> DateTime<Utc>,
 ) -> Result<(), ConfigError> {
     channel.validate()?;
     let valid_zone = time::timeout(DB_DEADLINE, store::valid_time_zone(db, &policy.time_zone))
@@ -231,7 +244,7 @@ pub async fn run(
     }
     let mut database_failed = false;
     while !*shutdown.borrow() {
-        let result = dispatch(db, policy, channel, paused_candidate, Utc::now).await;
+        let result = dispatch(db, policy, channel, paused_candidate, &clock).await;
         if result.is_err() != database_failed {
             database_failed = result.is_err();
             if database_failed {

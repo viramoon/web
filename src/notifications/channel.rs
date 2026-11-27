@@ -492,6 +492,8 @@ pub struct EmailChannels {
     primary: Option<Arc<EmailChannel>>,
     secondary: Option<Arc<EmailChannel>>,
     snapshots: Option<Arc<SnapshotStore>>,
+    #[cfg(test)]
+    test_ca_file: Option<std::path::PathBuf>,
 }
 
 impl EmailChannels {
@@ -552,7 +554,14 @@ impl EmailChannels {
             primary,
             secondary,
             snapshots,
+            #[cfg(test)]
+            test_ca_file: None,
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn trust_test_ca(&mut self, certificate: &Path) {
+        self.test_ca_file = Some(certificate.to_owned());
     }
 
     pub fn drain_timeout(&self) -> Duration {
@@ -631,10 +640,16 @@ impl NotificationChannel for EmailChannels {
     }
 
     async fn test_snapshot(&self, snapshot: Uuid, id: Uuid) -> DeliveryOutcome {
-        match self.open_snapshot(snapshot).await {
-            Some(channel) => channel.test(id).await,
-            None => DeliveryOutcome::SnapshotUnavailable,
+        let Some(channel) = self.open_snapshot(snapshot).await else {
+            return DeliveryOutcome::SnapshotUnavailable;
+        };
+        #[cfg(test)]
+        if let Some(certificate) = &self.test_ca_file {
+            let mut curl = Command::new(CURL_BIN);
+            curl.args(["--disable", "--cacert"]).arg(certificate);
+            return channel.deliver_with(curl, id, MessageKind::Test).await;
         }
+        channel.test(id).await
     }
 
     async fn send_snapshot(&self, snapshot: Uuid, id: Uuid, mail: MailKind) -> DeliveryOutcome {
