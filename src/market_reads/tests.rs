@@ -336,14 +336,35 @@ fn generated_read_models_preserve_unknown_coverage_and_distinguish_display_permi
 
 #[test]
 fn public_openapi_preserves_f1_composition_and_declares_restricted_reads() {
+    use sha2::{Digest, Sha256};
+
     let spec = crate::openapi();
     let finance: Value =
         serde_json::from_str(include_str!("../../openapi/finance.openapi.json")).unwrap();
-    for name in ["Event", "Message", "MarketWalPage", "MarketQualityPage"] {
+    for name in ["MarketWalPage", "MarketQualityPage"] {
         assert_eq!(
             spec["components"]["schemas"][name],
             finance["components"]["schemas"][name]
         );
+    }
+    // Pin the W6 browser schemas as finance adds internal event variants.
+    let schemas = &spec["components"]["schemas"];
+    for (name, expected) in [
+        (
+            "Event",
+            "63c145de5d78aec89ff7df667c3f02ffbdefc61f7025419b827ac52a586356a0",
+        ),
+        (
+            "Message",
+            "600e8d31883f5e6676733787de1c3fa4f95176b47fddb82eef4dee480e8fbc9b",
+        ),
+        (
+            "SchemaVersion",
+            "fb53b7e875d10b1df60bed5adbfd1171bc958e6bba750ba93a7427e1f9d439c0",
+        ),
+    ] {
+        let bytes = serde_json::to_vec(&schemas[name]).unwrap();
+        assert_eq!(format!("{:x}", Sha256::digest(bytes)), expected, "{name}");
     }
     for path in [PRODUCTS, WAL, PROJECTION, WATERMARKS, FINANCE_GAPS] {
         let operation = &spec["paths"][path]["get"];
@@ -352,6 +373,22 @@ fn public_openapi_preserves_f1_composition_and_declares_restricted_reads() {
             json!([{"adminBearer": []}, {"adminSession": []}])
         );
         assert!(operation["responses"].get("429").is_some());
+    }
+}
+
+#[test]
+fn option_history_evidence_is_rejected_at_the_display_boundary() {
+    let payload = json!({
+        "batch":{"requested_start_ts":"1","page":"1","occurrence":"1","request_id":null},
+        "price":PRICE,"quantity":SIZE,"contract_multiplier":"100","exchange":"XTEST",
+        "special_conditions":"","condition_mapping_version":"fixture-v1","past_limit":false,"unreported":false
+    });
+    let mut wire = event("option_history_trade", payload);
+    wire["asset_kind"] = json!("option");
+    for version in ["1.0", "2.0", "3.0"] {
+        wire["schema_version"] = json!(version);
+        let event: models::Event = serde_json::from_value(wire.clone()).unwrap();
+        assert!(!event_version_matches(&event), "{version}");
     }
 }
 

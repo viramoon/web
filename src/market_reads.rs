@@ -160,7 +160,13 @@ pub(crate) fn event_version_matches(event: &models::Event) -> bool {
         Message::MessageOneOf(_) | Message::MessageOneOf1(_) | Message::MessageOneOf7(_)
     );
     match event.schema_version {
-        models::SchemaVersion::Variant10 => !perpetual_context,
+        models::SchemaVersion::Variant10 => {
+            !perpetual_context
+                && !matches!(
+                    message,
+                    Message::MessageOneOf8(_) | Message::MessageOneOf9(_)
+                )
+        }
         models::SchemaVersion::Variant20 => {
             event.asset_kind == models::AssetKind::Perpetual
                 && event.revision == "0"
@@ -173,6 +179,7 @@ pub(crate) fn event_version_matches(event: &models::Event) -> bool {
                             | Message::MessageOneOf6(_)
                     ))
         }
+        models::SchemaVersion::Variant30 => false,
     }
 }
 
@@ -441,6 +448,42 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
     ] {
         schemas[name] = upstream_schemas[name].clone();
     }
+    restrict_display_event_schemas(schemas);
+}
+
+fn restrict_display_event_schemas(schemas: &mut Value) {
+    // The finance contract also covers internal F9e option history evidence.
+    let is_option_history = |kind: &Value| {
+        matches!(
+            kind.as_str(),
+            Some("option_history_trade" | "option_history_quote")
+        )
+    };
+    schemas["SchemaVersion"]["enum"]
+        .as_array_mut()
+        .expect("finance event schema versions")
+        .retain(|version| version != "3.0");
+    schemas["Message"]["oneOf"]
+        .as_array_mut()
+        .expect("finance message variants")
+        .retain(|message| !is_option_history(&message["properties"]["kind"]["enum"][0]));
+    let event_versions = schemas["Event"]["allOf"]
+        .as_array_mut()
+        .expect("finance event schema composition")
+        .iter_mut()
+        .find_map(|rule| rule.get_mut("oneOf").and_then(Value::as_array_mut))
+        .expect("finance event version constraints");
+    let is_version =
+        |schema: &Value, version: &str| schema["properties"]["schema_version"]["const"] == version;
+    event_versions.retain(|rule| !is_version(rule, "3.0"));
+    let v1 = event_versions
+        .iter_mut()
+        .find(|rule| is_version(rule, "1.0"))
+        .expect("F1 event constraints");
+    v1["properties"]["kind"]["not"]["enum"]
+        .as_array_mut()
+        .expect("message kinds excluded from F1")
+        .retain(|kind| !is_option_history(kind));
 }
 
 #[cfg(test)]

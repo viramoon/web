@@ -38,7 +38,9 @@ F9c 的场所深度、F9b 的行情线预算、F12 的历史期权与费用估�
 
 web OpenAPI 的 `Event`、`Message`、`FundingRate`、`OpenInterest` 对应新版 WAL 与投影响应。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制和大整数文本。web 已有的 bars 和指标端点仍使用 W2a 的 WAL 视图。市场 WebSocket 继续发 1.0 数据帧，遇到 2.0 事件发出 `unsupported_version` 重置。web 运维 SSE 仍按下文的 `/events` 契约运行。运维缺口响应的水位组件见[备份与采集质量](#备份与采集质量)。
 
-W2b 从包含 F10b 的开发提交 `f834478f87dce2e91a560c071334ef9cba4e8f19` 导出 HTTP 和读流产物，三份读流产物与 W6 一致。F10b 的 finance 主线合并提交 `356818db` 在编译 `finance-collector` 时缺少 F9e 模块和类型的导出，主线导出待上游修复。当前内部 HTTP 新增策略校验、版本列表及详情、单份因子评价、作业取消、worker 状态和决策信号。浏览器使用策略与因子读取，以及现有回测代理。取消、worker 状态和决策信号由 finance 内部契约保留。[finance 来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json)
+W2b 从 F10b 的 finance 主线合并提交 `356818db39b7a35752ec81c380d6a7a520be0930` 导出 HTTP 和读流产物。内部 HTTP 新增策略校验、版本列表及详情、单份因子评价、作业取消、worker 状态和决策信号。浏览器使用策略与因子读取，以及现有回测代理。取消、worker 状态和决策信号由 finance 内部契约保留。
+
+该主线提交同时包含 F9e。内部 `Event`、`Message` 和 `SchemaVersion` 包含 3.0 历史期权证据，新增 `OptionHistoryBatch`、`OptionHistoryTrade` 和 `OptionHistoryQuote`。Web 展示边界仅接收 1.0 与 2.0 的既有类型，公开 OpenAPI 按该边界导出，三份 1.0 读流产物与 W6 一致。[finance 来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json)
 
 协调者按 finance 主线 → web → frontend → fertile 更新契约链。frontend 按已合并的 web SHA 更新 `openapi/web.commit`、快照及生成客户端。fertile 更新对应 gitlinks 并运行 T3 契约比对和隔离复测。[生成及校验流程](../src/finance_client/README.md)
 
