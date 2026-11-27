@@ -229,6 +229,74 @@
         ],
         "type": "object"
       },
+      "BaselineCohort": {
+        "properties": {
+          "expiry": {
+            "format": "date",
+            "type": "string"
+          },
+          "session_segment": {
+            "description": "Zero-based 30-minute segment since the start of this liquid session.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "underlying_con_id": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "underlying_con_id",
+          "expiry",
+          "session_segment"
+        ],
+        "type": "object"
+      },
+      "BaselineVolumeRate": {
+        "description": "Exact contracts-per-millisecond ratio for the typical rate.",
+        "properties": {
+          "contracts": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "elapsed_millis": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "contracts",
+          "elapsed_millis"
+        ],
+        "type": "object"
+      },
+      "BinanceProfileState": {
+        "enum": [
+          "disabled_by_profile",
+          "enabled_by_profile"
+        ],
+        "type": "string"
+      },
+      "BinanceReadStatus": {
+        "properties": {
+          "products": {
+            "items": {
+              "$ref": "#/components/schemas/ProductPolicy"
+            },
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/BinanceProfileState"
+          }
+        },
+        "required": [
+          "state",
+          "products"
+        ],
+        "type": "object"
+      },
       "BlockedOrder": {
         "properties": {
           "bar_volume": {
@@ -338,6 +406,61 @@
           "side",
           "price",
           "quantity"
+        ],
+        "type": "object"
+      },
+      "BudgetStatus": {
+        "properties": {
+          "account_lines": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "as_of": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "confirmed_options": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "discovery_complete": {
+            "type": "boolean"
+          },
+          "hot_lines": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_options": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/SchedulerPhase"
+          },
+          "reserve_lines": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rotation_lines": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stock_lines": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "as_of",
+          "account_lines",
+          "reserve_lines",
+          "stock_lines",
+          "hot_lines",
+          "rotation_lines",
+          "confirmed_options",
+          "observed_options",
+          "discovery_complete"
         ],
         "type": "object"
       },
@@ -789,6 +912,71 @@
         ],
         "type": "object"
       },
+      "ConditionInterpretation": {
+        "properties": {
+          "mapping_version": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "meaning": {
+            "$ref": "#/components/schemas/ConditionMeaning"
+          }
+        },
+        "required": [
+          "mapping_version",
+          "meaning"
+        ],
+        "type": "object"
+      },
+      "ConditionMeaning": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "empty"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "unrecognized"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "condition": {
+                "$ref": "#/components/schemas/MappedCondition"
+              },
+              "status": {
+                "enum": [
+                  "mapped"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "condition",
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ConflictRules": {
         "properties": {
           "decision_snapshot": {
@@ -867,6 +1055,21 @@
           "disconnected"
         ],
         "type": "string"
+      },
+      "ContractVolatility": {
+        "properties": {
+          "implied_volatility": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "instrument_id": {
+            "$ref": "#/components/schemas/InstrumentId"
+          }
+        },
+        "required": [
+          "instrument_id",
+          "implied_volatility"
+        ],
+        "type": "object"
       },
       "Correction": {
         "additionalProperties": false,
@@ -961,6 +1164,31 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "DealerScenario": {
+        "enum": [
+          "absolute",
+          "dealer_short",
+          "dealer_long",
+          "call_long_put_short"
+        ],
+        "type": "string"
+      },
+      "DecimalObservation": {
+        "properties": {
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "value",
+          "observed_at"
         ],
         "type": "object"
       },
@@ -1076,6 +1304,162 @@
         ],
         "type": "string"
       },
+      "DepthBook": {
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/ProductPolicy"
+          },
+          "asks": {
+            "items": {
+              "$ref": "#/components/schemas/DepthLevel"
+            },
+            "type": "array"
+          },
+          "bids": {
+            "items": {
+              "$ref": "#/components/schemas/DepthLevel"
+            },
+            "type": "array"
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DepthError"
+              }
+            ]
+          },
+          "market_data_type": {
+            "description": "Null when no request-specific data type is supplied by the upstream.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/DepthPermissions"
+          },
+          "received_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_rows": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "returned_rows": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DepthBookState"
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/DepthSymbol"
+          },
+          "venue": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "access",
+          "symbol",
+          "venue",
+          "permissions",
+          "state",
+          "requested_rows",
+          "returned_rows",
+          "bids",
+          "asks"
+        ],
+        "type": "object"
+      },
+      "DepthBookState": {
+        "enum": [
+          "permission_unconfirmed",
+          "awaiting",
+          "receiving",
+          "reset",
+          "inactive",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "DepthError": {
+        "enum": [
+          "unsupported_symbol",
+          "invalid_focus",
+          "invalid_request",
+          "unconfirmed_contract",
+          "not_entitled",
+          "capacity",
+          "competing_session",
+          "pacing",
+          "timeout",
+          "disconnected",
+          "transport",
+          "stream_ended",
+          "invalid_callback",
+          "cancel_failed"
+        ],
+        "type": "string"
+      },
+      "DepthLevel": {
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "size": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "price",
+          "size"
+        ],
+        "type": "object"
+      },
+      "DepthPermissions": {
+        "description": "Operator confirmations from the paper user's market data entitlement review.\nDepth callbacks do not identify the individual account products.",
+        "properties": {
+          "eds_confirmed": {
+            "type": "boolean"
+          },
+          "equity_l1_confirmed": {
+            "type": "boolean"
+          },
+          "totalview_confirmed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "equity_l1_confirmed",
+          "totalview_confirmed",
+          "eds_confirmed"
+        ],
+        "type": "object"
+      },
+      "DepthSymbol": {
+        "enum": [
+          "QQQ",
+          "AAPL",
+          "MSFT",
+          "NVDA",
+          "AMZN",
+          "GOOGL",
+          "META",
+          "TSLA"
+        ],
+        "type": "string"
+      },
       "DisplayPolicy": {
         "enum": [
           "authorized_display"
@@ -1124,6 +1508,14 @@
           "message"
         ],
         "type": "object"
+      },
+      "EstimatedSide": {
+        "enum": [
+          "estimated_buy",
+          "estimated_sell",
+          "unknown"
+        ],
+        "type": "string"
       },
       "EvaluationPhase": {
         "enum": [
@@ -1288,6 +1680,39 @@
         "description": "One event and its position in an instrument stream.",
         "unevaluatedProperties": false
       },
+      "Exclusions": {
+        "description": "Independent counts. A contract may contribute to several exclusion reasons.",
+        "properties": {
+          "missing_gamma": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "missing_open_interest": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "spot_gamma_skew": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stale_gamma": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stale_spot": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "missing_open_interest",
+          "missing_gamma",
+          "stale_spot",
+          "stale_gamma",
+          "spot_gamma_skew"
+        ],
+        "type": "object"
+      },
       "ExecutionAudit": {
         "properties": {
           "blocked_insufficient_cash": {
@@ -1336,6 +1761,233 @@
           "blocked_insufficient_cash",
           "recent_fills",
           "recent_blocked"
+        ],
+        "type": "object"
+      },
+      "ExpiryExposure": {
+        "properties": {
+          "expiry": {
+            "format": "date",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/ExposureTotals"
+          }
+        },
+        "required": [
+          "expiry",
+          "totals"
+        ],
+        "type": "object"
+      },
+      "ExposureCoverage": {
+        "properties": {
+          "candidate_contracts": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "eligible_open_interest": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "exclusions": {
+            "$ref": "#/components/schemas/Exclusions"
+          },
+          "gamma_observed": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ObservationRange"
+              }
+            ]
+          },
+          "max_oi_gamma_skew": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ObservationSkew"
+              }
+            ]
+          },
+          "observed": {
+            "$ref": "#/components/schemas/ObservationRange"
+          },
+          "open_interest_dates": {
+            "items": {
+              "format": "date",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "open_interest_observed": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ObservationRange"
+              }
+            ]
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "total_open_interest": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecimalText"
+              }
+            ]
+          },
+          "unconfirmed_open_interest_dates": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "universe_complete": {
+            "type": "boolean"
+          },
+          "valid_contracts": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "universe_complete",
+          "candidate_contracts",
+          "valid_contracts",
+          "partial",
+          "eligible_open_interest",
+          "exclusions",
+          "open_interest_dates",
+          "unconfirmed_open_interest_dates",
+          "observed"
+        ],
+        "type": "object"
+      },
+      "ExposureReport": {
+        "properties": {
+          "all": {
+            "$ref": "#/components/schemas/ExposureView"
+          },
+          "as_of": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "gamma_grid": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GammaGridProvenance"
+              }
+            ]
+          },
+          "later": {
+            "$ref": "#/components/schemas/ExposureView"
+          },
+          "model_version": {
+            "type": "string"
+          },
+          "scenario": {
+            "$ref": "#/components/schemas/DealerScenario"
+          },
+          "session_date": {
+            "format": "date",
+            "type": "string"
+          },
+          "spot": {
+            "$ref": "#/components/schemas/DecimalObservation"
+          },
+          "timing": {
+            "$ref": "#/components/schemas/TimingPolicy"
+          },
+          "underlying_id": {
+            "$ref": "#/components/schemas/InstrumentId"
+          },
+          "zero_dte": {
+            "$ref": "#/components/schemas/ExposureView"
+          }
+        },
+        "required": [
+          "scenario",
+          "model_version",
+          "underlying_id",
+          "as_of",
+          "session_date",
+          "spot",
+          "timing",
+          "all",
+          "zero_dte",
+          "later"
+        ],
+        "type": "object"
+      },
+      "ExposureTotals": {
+        "properties": {
+          "absolute": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecimalText"
+              }
+            ]
+          },
+          "gex": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecimalText"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ExposureView": {
+        "properties": {
+          "by_expiry": {
+            "items": {
+              "$ref": "#/components/schemas/ExpiryExposure"
+            },
+            "type": "array"
+          },
+          "by_strike": {
+            "items": {
+              "$ref": "#/components/schemas/StrikeExposure"
+            },
+            "type": "array"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/ExposureCoverage"
+          },
+          "flip": {
+            "$ref": "#/components/schemas/GammaFlip"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/ExposureTotals"
+          },
+          "walls": {
+            "$ref": "#/components/schemas/GammaWalls"
+          }
+        },
+        "required": [
+          "totals",
+          "by_strike",
+          "by_expiry",
+          "walls",
+          "coverage",
+          "flip"
         ],
         "type": "object"
       },
@@ -1936,6 +2588,73 @@
         ],
         "type": "object"
       },
+      "FlipCrossing": {
+        "properties": {
+          "lower_spot": {
+            "$ref": "#/components/schemas/DecimalText",
+            "description": "Adjacent opposite-sign samples, or the extent of a sampled zero run between opposite signs."
+          },
+          "upper_spot": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "lower_spot",
+          "upper_spot"
+        ],
+        "type": "object"
+      },
+      "FlipUnavailableReason": {
+        "enum": [
+          "not_directional_scenario",
+          "no_gamma_grid",
+          "no_eligible_contracts",
+          "missing_contract_gamma"
+        ],
+        "type": "string"
+      },
+      "FlowObservation": {
+        "description": "No trade ID, direction, or participant is implied by these local samples.",
+        "properties": {
+          "cohort": {
+            "$ref": "#/components/schemas/BaselineCohort"
+          },
+          "con_id": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "multiplier": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/ObservationEvidence"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "rule_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationStatus"
+          }
+        },
+        "required": [
+          "rule_version",
+          "status",
+          "con_id",
+          "generation",
+          "cohort",
+          "multiplier",
+          "observed_at",
+          "observation"
+        ],
+        "type": "object"
+      },
       "FundingRate": {
         "additionalProperties": false,
         "properties": {
@@ -1958,6 +2677,137 @@
           "rate",
           "next_funding_ts"
         ],
+        "type": "object"
+      },
+      "GammaFlip": {
+        "oneOf": [
+          {
+            "properties": {
+              "reason": {
+                "$ref": "#/components/schemas/FlipUnavailableReason"
+              },
+              "status": {
+                "enum": [
+                  "unavailable"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "No reversal was detected within the sampled spot range for the eligible subset.",
+            "properties": {
+              "status": {
+                "enum": [
+                  "no_flip"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "crossings": {
+                "items": {
+                  "$ref": "#/components/schemas/FlipCrossing"
+                },
+                "type": "array"
+              },
+              "status": {
+                "enum": [
+                  "crossings"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "crossings",
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GammaGridProvenance": {
+        "properties": {
+          "annual_dividend_yield": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "annual_risk_free_rate": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "as_of": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "implied_volatilities": {
+            "items": {
+              "$ref": "#/components/schemas/ContractVolatility"
+            },
+            "type": "array"
+          },
+          "model": {
+            "$ref": "#/components/schemas/NonEmptyText"
+          },
+          "spots": {
+            "items": {
+              "$ref": "#/components/schemas/DecimalText"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "as_of",
+          "model",
+          "annual_risk_free_rate",
+          "annual_dividend_yield",
+          "spots",
+          "implied_volatilities"
+        ],
+        "type": "object"
+      },
+      "GammaWalls": {
+        "properties": {
+          "largest_absolute": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Wall"
+              }
+            ]
+          },
+          "largest_positive": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Wall"
+              }
+            ]
+          },
+          "most_negative": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Wall"
+              }
+            ]
+          }
+        },
         "type": "object"
       },
       "Gap": {
@@ -2013,6 +2863,86 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "HistoricalBatch": {
+        "description": "Request and receipt evidence. The broker request ID is scoped to its connection.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/HistoricalKind"
+          },
+          "obtained_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "page": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "provider_request_id": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "requested_start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "requested_start",
+          "obtained_at",
+          "page"
+        ],
+        "type": "object"
+      },
+      "HistoricalCounts": {
+        "properties": {
+          "non_trade_markers": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending_intervals": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending_trade_rows": {
+            "description": "Raw TRADES rows in a conflicting pagination interval.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unavailable_intervals": {
+            "description": "Reported unavailable intervals, counted separately for each tick kind.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unknown": {
+            "description": "Verified active prints with unknown direction.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unresolved_amendments": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verified": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "verified",
+          "unknown",
+          "pending_trade_rows",
+          "unavailable_intervals",
+          "pending_intervals",
+          "unresolved_amendments",
+          "non_trade_markers"
+        ],
+        "type": "object"
+      },
       "HistoricalDecision": {
         "properties": {
           "comparisons": {
@@ -2043,6 +2973,278 @@
           "cost_bps",
           "rule",
           "comparisons"
+        ],
+        "type": "object"
+      },
+      "HistoricalIssue": {
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/HistoricalKind"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/HistoricalIssueReason"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "start",
+          "end",
+          "observed_at",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "HistoricalIssueReason": {
+        "enum": [
+          "expired_contract",
+          "no_history",
+          "permission_denied",
+          "pacing",
+          "timeout",
+          "disconnected",
+          "unsupported",
+          "provider_error",
+          "incomplete_page",
+          "page_limit",
+          "inconsistent_overlap",
+          "unconfirmed_contract",
+          "future_window",
+          "pacing_state"
+        ],
+        "type": "string"
+      },
+      "HistoricalKind": {
+        "enum": [
+          "trades",
+          "bid_ask"
+        ],
+        "type": "string"
+      },
+      "HistoricalOptionBars": {
+        "oneOf": [
+          {
+            "properties": {
+              "bars": {
+                "items": {
+                  "$ref": "#/components/schemas/OptionMinuteBar"
+                },
+                "type": "array"
+              },
+              "status": {
+                "enum": [
+                  "available"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "bars",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "no_bars"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "expired"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "request_failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "HistoricalOptionResult": {
+        "properties": {
+          "instrument_id": {
+            "$ref": "#/components/schemas/InstrumentId"
+          },
+          "result": {
+            "$ref": "#/components/schemas/HistoricalOptionBars"
+          }
+        },
+        "required": [
+          "instrument_id",
+          "result"
+        ],
+        "type": "object"
+      },
+      "HistoricalTick_HistoryQuote": {
+        "properties": {
+          "batch": {
+            "$ref": "#/components/schemas/HistoricalBatch"
+          },
+          "occurrence": {
+            "description": "One-based distinct row position within this complete second and kind.\nIB does not supply an execution ID or establish order across streams.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "row": {
+            "properties": {
+              "ask": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DecimalText"
+                  }
+                ]
+              },
+              "ask_past_high": {
+                "type": "boolean"
+              },
+              "ask_quantity": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DecimalText"
+                  }
+                ]
+              },
+              "bid": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DecimalText"
+                  }
+                ]
+              },
+              "bid_past_low": {
+                "type": "boolean"
+              },
+              "bid_quantity": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DecimalText"
+                  }
+                ]
+              },
+              "occurred_at": {
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "occurred_at",
+              "bid_past_low",
+              "ask_past_high"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "row",
+          "batch",
+          "occurrence"
+        ],
+        "type": "object"
+      },
+      "HistoricalTick_HistoryTrade": {
+        "properties": {
+          "batch": {
+            "$ref": "#/components/schemas/HistoricalBatch"
+          },
+          "occurrence": {
+            "description": "One-based distinct row position within this complete second and kind.\nIB does not supply an execution ID or establish order across streams.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "row": {
+            "properties": {
+              "exchange": {
+                "type": "string"
+              },
+              "occurred_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "past_limit": {
+                "type": "boolean"
+              },
+              "price": {
+                "$ref": "#/components/schemas/DecimalText"
+              },
+              "quantity": {
+                "$ref": "#/components/schemas/DecimalText"
+              },
+              "special_conditions": {
+                "type": "string"
+              },
+              "unreported": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "occurred_at",
+              "price",
+              "quantity",
+              "exchange",
+              "special_conditions",
+              "past_limit",
+              "unreported"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "row",
+          "batch",
+          "occurrence"
         ],
         "type": "object"
       },
@@ -2175,6 +3377,13 @@
         ],
         "type": "object"
       },
+      "InferenceConfidence": {
+        "enum": [
+          "estimate",
+          "unknown"
+        ],
+        "type": "string"
+      },
       "InstrumentId": {
         "pattern": "^(?=[A-Z0-9_.-]{1,96}\\.[A-Z0-9][A-Z0-9_-]{0,31}(?![\\s\\S]))[A-Z0-9][A-Z0-9_-]*(?:\\.[A-Z0-9][A-Z0-9_-]*)*\\.[A-Z0-9][A-Z0-9_-]{0,31}(?![\\s\\S])",
         "type": "string"
@@ -2305,6 +3514,31 @@
         ],
         "type": "string"
       },
+      "L1Sample": {
+        "properties": {
+          "received_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "value",
+          "received_at"
+        ],
+        "type": "object"
+      },
+      "LineSchedulerPhase": {
+        "enum": [
+          "starting",
+          "online",
+          "reconnecting",
+          "stopped"
+        ],
+        "type": "string"
+      },
       "Location": {
         "properties": {
           "column": {
@@ -2321,6 +3555,18 @@
           "column"
         ],
         "type": "object"
+      },
+      "MappedCondition": {
+        "description": "Exact raw condition tokens are interpreted only under an identified mapping.",
+        "enum": [
+          "regular",
+          "complex_leg",
+          "provider_sweep",
+          "provider_block",
+          "correction",
+          "cancellation"
+        ],
+        "type": "string"
       },
       "MarketMessage": {
         "description": "The complete replacement value carried by a correction.",
@@ -2844,6 +4090,89 @@
         "minLength": 1,
         "type": "string"
       },
+      "ObservationEvidence": {
+        "oneOf": [
+          {
+            "properties": {
+              "evidence": {
+                "$ref": "#/components/schemas/VolumeIncrease"
+              },
+              "kind": {
+                "enum": [
+                  "volume_increase"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "evidence",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "evidence": {
+                "$ref": "#/components/schemas/QuoteWidening"
+              },
+              "kind": {
+                "enum": [
+                  "quote_widening"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "evidence",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ObservationRange": {
+        "properties": {
+          "earliest": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "latest": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "earliest",
+          "latest"
+        ],
+        "type": "object"
+      },
+      "ObservationSkew": {
+        "description": "Serde's wire representation of a standard Duration.",
+        "properties": {
+          "nanos": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "secs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "secs",
+          "nanos"
+        ],
+        "type": "object"
+      },
+      "ObservationStatus": {
+        "enum": [
+          "pending_verification"
+        ],
+        "type": "string"
+      },
       "OpenInterest": {
         "additionalProperties": false,
         "properties": {
@@ -2853,6 +4182,274 @@
         },
         "required": [
           "quantity"
+        ],
+        "type": "object"
+      },
+      "OptionChainContract": {
+        "properties": {
+          "con_id": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "expiry": {
+            "format": "date",
+            "type": "string"
+          },
+          "multiplier": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "primary_exchange": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "right": {
+            "$ref": "#/components/schemas/OptionChainRight"
+          },
+          "strike": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "con_id",
+          "symbol",
+          "expiry",
+          "strike",
+          "right",
+          "multiplier"
+        ],
+        "type": "object"
+      },
+      "OptionChainPage": {
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/ProductPolicy"
+          },
+          "as_of": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "discovery_complete": {
+            "description": "Discovery status for the scheduler's watchlist.",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OptionChainContract"
+            },
+            "type": "array"
+          },
+          "next_after_con_id": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "underlying_con_id": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "access",
+          "as_of",
+          "underlying_con_id",
+          "discovery_complete",
+          "items"
+        ],
+        "type": "object"
+      },
+      "OptionChainRight": {
+        "enum": [
+          "call",
+          "put"
+        ],
+        "type": "string"
+      },
+      "OptionExposureResponse": {
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/ProductPolicy"
+          },
+          "report": {
+            "$ref": "#/components/schemas/ExposureReport"
+          }
+        },
+        "required": [
+          "access",
+          "report"
+        ],
+        "type": "object"
+      },
+      "OptionFlowObservation": {
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/BudgetStatus"
+          },
+          "clue": {
+            "$ref": "#/components/schemas/FlowObservation"
+          },
+          "coverage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SubscriptionCoverage"
+              }
+            ]
+          }
+        },
+        "required": [
+          "clue",
+          "budget",
+          "coverage"
+        ],
+        "type": "object"
+      },
+      "OptionFlowObservationPage": {
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/ProductPolicy"
+          },
+          "as_of": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "con_id": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OptionFlowObservation"
+            },
+            "type": "array"
+          },
+          "next_offset": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access",
+          "as_of",
+          "con_id",
+          "start",
+          "end",
+          "items",
+          "next_offset"
+        ],
+        "type": "object"
+      },
+      "OptionFlowVerificationPage": {
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/ProductPolicy"
+          },
+          "con_id": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/HistoricalCounts"
+          },
+          "durable_through": {
+            "description": "F3 local WAL watermark for ibkr/opra-history, when local recording is licensed.",
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)(?![\\s\\S])",
+                "type": "string"
+              }
+            ]
+          },
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/HistoricalIssue"
+            },
+            "type": "array"
+          },
+          "max_quote_age_ms": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "multiplier": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "next_offset": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "observation_coverage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SubscriptionCoverage"
+              }
+            ]
+          },
+          "quote_start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "trades": {
+            "items": {
+              "$ref": "#/components/schemas/VerifiedTrade"
+            },
+            "type": "array"
+          },
+          "verified_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access",
+          "con_id",
+          "start",
+          "end",
+          "quote_start",
+          "multiplier",
+          "verified_at",
+          "max_quote_age_ms",
+          "counts",
+          "issues",
+          "observation_coverage",
+          "durable_through",
+          "trades",
+          "next_offset"
         ],
         "type": "object"
       },
@@ -2886,6 +4483,49 @@
           "page",
           "occurrence",
           "request_id"
+        ],
+        "type": "object"
+      },
+      "OptionHistoryPage": {
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/ProductPolicy"
+          },
+          "as_of": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "end": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HistoricalOptionResult"
+            },
+            "type": "array"
+          },
+          "next_offset": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "start": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "underlying_con_id": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "access",
+          "as_of",
+          "underlying_con_id",
+          "start",
+          "end",
+          "items"
         ],
         "type": "object"
       },
@@ -3000,6 +4640,21 @@
           "condition_mapping_version",
           "past_limit",
           "unreported"
+        ],
+        "type": "object"
+      },
+      "OptionMinuteBar": {
+        "properties": {
+          "close_ts": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ClosedBar"
+          }
+        },
+        "required": [
+          "close_ts",
+          "data"
         ],
         "type": "object"
       },
@@ -3147,6 +4802,12 @@
             "type": "object"
           }
         ]
+      },
+      "ParticipantIdentity": {
+        "enum": [
+          "unknown"
+        ],
+        "type": "string"
       },
       "PerpetualContext": {
         "additionalProperties": false,
@@ -3332,6 +4993,83 @@
         ],
         "type": "object"
       },
+      "QuoteEvidence": {
+        "properties": {
+          "age_ms": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "quote": {
+            "$ref": "#/components/schemas/HistoricalTick_HistoryQuote"
+          }
+        },
+        "required": [
+          "quote",
+          "age_ms"
+        ],
+        "type": "object"
+      },
+      "QuoteReason": {
+        "enum": [
+          "at_or_above_ask",
+          "at_or_below_bid",
+          "closer_to_ask",
+          "closer_to_bid",
+          "midpoint",
+          "missing_quote",
+          "quote_coverage_unknown",
+          "trade_overlap_conflict",
+          "same_second_unordered",
+          "prior_quote_order_unknown",
+          "stale_quote",
+          "invalid_quote",
+          "locked_quote",
+          "crossed_quote",
+          "provider_quote_flag",
+          "provider_trade_flag",
+          "complex_leg",
+          "condition_unrecognized",
+          "inactive_trade",
+          "precision_unavailable"
+        ],
+        "type": "string"
+      },
+      "QuoteWidening": {
+        "properties": {
+          "ask": {
+            "$ref": "#/components/schemas/L1Sample"
+          },
+          "ask_size": {
+            "$ref": "#/components/schemas/L1Sample"
+          },
+          "baseline_samples": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bid": {
+            "$ref": "#/components/schemas/L1Sample"
+          },
+          "bid_size": {
+            "$ref": "#/components/schemas/L1Sample"
+          },
+          "spread": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "typical_spread": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "bid",
+          "ask",
+          "bid_size",
+          "ask_size",
+          "spread",
+          "typical_spread",
+          "baseline_samples"
+        ],
+        "type": "object"
+      },
       "RecoveryOutcome": {
         "enum": [
           "tick_backfilled",
@@ -3484,6 +5222,15 @@
         ],
         "type": "object"
       },
+      "SchedulerPhase": {
+        "enum": [
+          "starting",
+          "online",
+          "reconnecting",
+          "stopped"
+        ],
+        "type": "string"
+      },
       "SchemaVersion": {
         "enum": [
           "1.0",
@@ -3537,6 +5284,39 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "SideInference": {
+        "properties": {
+          "confidence": {
+            "$ref": "#/components/schemas/InferenceConfidence"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/EstimatedSide"
+          },
+          "quote": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QuoteEvidence"
+              }
+            ]
+          },
+          "reason": {
+            "$ref": "#/components/schemas/QuoteReason"
+          },
+          "rule_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "direction",
+          "confidence",
+          "reason",
+          "rule_version"
+        ],
         "type": "object"
       },
       "SmaSignal": {
@@ -3787,6 +5567,21 @@
         ],
         "type": "object"
       },
+      "StrikeExposure": {
+        "properties": {
+          "strike": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/ExposureTotals"
+          }
+        },
+        "required": [
+          "strike",
+          "totals"
+        ],
+        "type": "object"
+      },
       "SubmitRequest": {
         "oneOf": [
           {
@@ -3796,6 +5591,178 @@
             "$ref": "#/components/schemas/BundleSubmission"
           }
         ]
+      },
+      "SubscriptionBudget": {
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/ProductPolicy"
+          },
+          "account_lines": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "as_of": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "confirmed_options": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "discovery_complete": {
+            "type": "boolean"
+          },
+          "hot_lines": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_options": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/LineSchedulerPhase"
+          },
+          "reserve_lines": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rotation_lines": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stock_lines": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "access",
+          "phase",
+          "as_of",
+          "account_lines",
+          "reserve_lines",
+          "stock_lines",
+          "hot_lines",
+          "rotation_lines",
+          "confirmed_options",
+          "observed_options",
+          "discovery_complete"
+        ],
+        "type": "object"
+      },
+      "SubscriptionCoverage": {
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/ProductPolicy"
+          },
+          "con_id": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "covered": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionCoverageInterval"
+            },
+            "type": "array"
+          },
+          "last_observed_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "uncovered": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionCoverageInterval"
+            },
+            "type": "array"
+          },
+          "unknown": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionCoverageInterval"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "access",
+          "con_id",
+          "covered",
+          "uncovered",
+          "unknown"
+        ],
+        "type": "object"
+      },
+      "SubscriptionCoverageInterval": {
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "SuspectedScale": {
+        "properties": {
+          "block_contracts_threshold": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecimalText",
+                "description": "A size heuristic, independent of any provider block condition."
+              }
+            ]
+          },
+          "institution_scale_premium_threshold": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecimalText",
+                "description": "A premium heuristic, independent of either participant's identity."
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TimingPolicy": {
+        "properties": {
+          "max_gamma_age_seconds": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_spot_age_seconds": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_spot_gamma_skew_seconds": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_spot_age_seconds",
+          "max_gamma_age_seconds",
+          "max_spot_gamma_skew_seconds"
+        ],
+        "type": "object"
       },
       "Token": {
         "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}(?![\\s\\S])",
@@ -3821,11 +5788,131 @@
         ],
         "type": "object"
       },
+      "TradeAction": {
+        "description": "Provider or trusted replay metadata for a single occurrence.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "original"
+                ],
+                "type": "string"
+              },
+              "native_id": {
+                "$ref": "#/components/schemas/NonEmptyText"
+              }
+            },
+            "required": [
+              "native_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The linked historical row is a full replacement, including event time.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "correction"
+                ],
+                "type": "string"
+              },
+              "revision": {
+                "$ref": "#/components/schemas/U64Text"
+              },
+              "target_native_id": {
+                "$ref": "#/components/schemas/NonEmptyText"
+              }
+            },
+            "required": [
+              "target_native_id",
+              "revision",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "cancellation"
+                ],
+                "type": "string"
+              },
+              "revision": {
+                "$ref": "#/components/schemas/U64Text"
+              },
+              "target_native_id": {
+                "$ref": "#/components/schemas/NonEmptyText"
+              }
+            },
+            "required": [
+              "target_native_id",
+              "revision",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TradeLink": {
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/TradeAction"
+          },
+          "occurrence": {
+            "$ref": "#/components/schemas/TradeOccurrence"
+          }
+        },
+        "required": [
+          "occurrence",
+          "action"
+        ],
+        "type": "object"
+      },
+      "TradeOccurrence": {
+        "description": "The local within-request evidence key. This is never a provider trade ID.",
+        "properties": {
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "occurrence": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "page": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "page",
+          "occurred_at",
+          "occurrence"
+        ],
+        "type": "object"
+      },
       "TradeSide": {
         "enum": [
           "buy",
           "sell",
           "unknown"
+        ],
+        "type": "string"
+      },
+      "TradeStatus": {
+        "enum": [
+          "active",
+          "pending_verification",
+          "superseded",
+          "cancelled",
+          "applied_cancellation",
+          "unresolved_amendment",
+          "non_trade_marker"
         ],
         "type": "string"
       },
@@ -3941,6 +6028,145 @@
         "pattern": "^[A-Z0-9][A-Z0-9_-]{0,31}(?![\\s\\S])",
         "type": "string"
       },
+      "VerifiedTrade": {
+        "properties": {
+          "condition": {
+            "$ref": "#/components/schemas/ConditionInterpretation"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/ParticipantIdentity"
+          },
+          "inference": {
+            "$ref": "#/components/schemas/SideInference"
+          },
+          "link": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TradeLink"
+              }
+            ]
+          },
+          "premium": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecimalText"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/TradeStatus"
+          },
+          "suspected_scale": {
+            "$ref": "#/components/schemas/SuspectedScale"
+          },
+          "trade": {
+            "$ref": "#/components/schemas/HistoricalTick_HistoryTrade"
+          }
+        },
+        "required": [
+          "trade",
+          "condition",
+          "status",
+          "inference",
+          "identity",
+          "suspected_scale"
+        ],
+        "type": "object"
+      },
+      "VolumeComparison": {
+        "properties": {
+          "baseline_samples": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "elapsed_millis": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "elevated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "typical_rate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BaselineVolumeRate"
+              }
+            ]
+          }
+        },
+        "required": [
+          "elapsed_millis",
+          "baseline_samples"
+        ],
+        "type": "object"
+      },
+      "VolumeIncrease": {
+        "properties": {
+          "comparison": {
+            "$ref": "#/components/schemas/VolumeComparison"
+          },
+          "delta_contracts": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "earlier_cumulative_volume": {
+            "$ref": "#/components/schemas/L1Sample"
+          },
+          "estimated_premium": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecimalText",
+                "description": "Hypothetical amount using one sampled price for the entire volume change."
+              }
+            ]
+          },
+          "later_cumulative_volume": {
+            "$ref": "#/components/schemas/L1Sample"
+          },
+          "sampled_last_price": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/L1Sample"
+              }
+            ]
+          },
+          "sampled_last_size": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/L1Sample"
+              }
+            ]
+          }
+        },
+        "required": [
+          "earlier_cumulative_volume",
+          "later_cumulative_volume",
+          "delta_contracts",
+          "comparison"
+        ],
+        "type": "object"
+      },
       "WalRecord": {
         "additionalProperties": false,
         "description": "A committed event and its WAL-local position and writer generation.",
@@ -3959,6 +6185,21 @@
           "position",
           "generation",
           "event"
+        ],
+        "type": "object"
+      },
+      "Wall": {
+        "properties": {
+          "exposure": {
+            "$ref": "#/components/schemas/DecimalText"
+          },
+          "strike": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "strike",
+          "exposure"
         ],
         "type": "object"
       },
@@ -5315,6 +7556,106 @@
         ]
       }
     },
+    "/api/v1/market/binance/status": {
+      "get": {
+        "operationId": "binance_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceReadStatus"
+                }
+              }
+            },
+            "description": "Binance profile state and configured permission flags"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Binance profile could not be read or is invalid"
+          }
+        },
+        "tags": [
+          "binance_read"
+        ]
+      }
+    },
+    "/api/v1/market/book": {
+      "get": {
+        "operationId": "book",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "enum": [
+                "QQQ",
+                "AAPL",
+                "MSFT",
+                "NVDA",
+                "AMZN",
+                "GOOGL",
+                "META",
+                "TSLA"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepthBook"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "market_options::depth"
+        ]
+      }
+    },
     "/api/v1/market/products": {
       "get": {
         "operationId": "products",
@@ -5513,6 +7854,116 @@
         ]
       }
     },
+    "/api/v1/market/subscriptions": {
+      "get": {
+        "operationId": "subscriptions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionBudget"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "market_options::lines"
+        ]
+      }
+    },
+    "/api/v1/market/subscriptions/coverage": {
+      "get": {
+        "operationId": "coverage",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "con_id",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionCoverage"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "market_options::lines"
+        ]
+      }
+    },
     "/api/v1/market/wal": {
       "get": {
         "operationId": "wal",
@@ -5681,6 +8132,532 @@
         },
         "tags": [
           "market_read"
+        ]
+      }
+    },
+    "/api/v1/options/chain": {
+      "get": {
+        "operationId": "chain",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "underlying_con_id",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expiry",
+            "required": false,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_con_id",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionChainPage"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "market_options::lines"
+        ]
+      }
+    },
+    "/api/v1/options/exposure": {
+      "get": {
+        "operationId": "exposure",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "underlying_id",
+            "required": true,
+            "schema": {
+              "pattern": "^(?=[A-Z0-9_.-]{1,96}\\.[A-Z0-9][A-Z0-9_-]{0,31}(?![\\s\\S]))[A-Z0-9][A-Z0-9_-]*(?:\\.[A-Z0-9][A-Z0-9_-]*)*\\.[A-Z0-9][A-Z0-9_-]{0,31}(?![\\s\\S])",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scenario",
+            "required": false,
+            "schema": {
+              "default": "absolute",
+              "oneOf": [
+                {
+                  "enum": [
+                    "absolute",
+                    "dealer_short",
+                    "dealer_long",
+                    "call_long_put_short"
+                  ],
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionExposureResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "market_options::analytics"
+        ]
+      }
+    },
+    "/api/v1/options/flow/observations": {
+      "get": {
+        "operationId": "observations",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "con_id",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionFlowObservationPage"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Retained OPRA L1 clues by receipt time in [start, end).",
+        "tags": [
+          "market_options::flow"
+        ]
+      }
+    },
+    "/api/v1/options/flow/verification": {
+      "get": {
+        "operationId": "verification",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "con_id",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionFlowVerificationPage"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Existing historical verification for one exact, whole-second trade window.",
+        "tags": [
+          "market_options::flow"
+        ]
+      }
+    },
+    "/api/v1/options/history": {
+      "get": {
+        "operationId": "history",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "underlying_con_id",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)(?![\\s\\S])",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)(?![\\s\\S])",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionHistoryPage"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "market_options::analytics"
         ]
       }
     },

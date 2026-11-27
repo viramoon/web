@@ -24,4 +24,4 @@ scripts/gen-finance-client.sh from-snapshot ../contracts/finance.openapi.json \
   "$(git -C ../finance rev-parse HEAD)" /tmp/finance-read-stream
 ```
 
-`from-finance` 和 `--check-from-finance` 从指定或已记录的 Git 提交解出临时源码树。两者用 `cargo run --locked -p finance-api` 执行 `export-openapi` 和 `export-read-stream DIRECTORY`。离线使用已缓存的依赖并设置 `CARGO_NET_OFFLINE=true`。`--check` 在临时目录从已记录的 HTTP 快照独立生成客户端并逐文件比对，也检查读流产物齐全。提供外部 HTTP 快照或读流目录时，逐字节比对相应文件。模板、数值映射和兼容性取舍见 [ADR-0002](../../docs/adr/ADR-0002-finance-client.md)。
+`from-finance` 和 `--check-from-finance` 从指定或已记录的 Git 提交解出临时源码树。两者用 `cargo run --locked -p finance-api` 执行 `export-openapi` 和 `export-read-stream DIRECTORY`。离线使用已缓存的依赖并设置 `CARGO_NET_OFFLINE=true`。`--check` 在临时目录从已记录的 HTTP 快照独立生成客户端并逐文件比对，也检查读流产物齐全。提供外部 HTTP 快照或读流目录时，逐字节比对相应文件。F10c 和 F10d 的展示读取由生成器保留查询参数和错误类型，并提供泛型 JSON 解码。web 选用原始 JSON 解码，仅检查许可边界，以保留 finance 的缺值、未知枚举值和精确文本。模板、数值映射和兼容性取舍见 [ADR-0002](../../docs/adr/ADR-0002-finance-client.md)。

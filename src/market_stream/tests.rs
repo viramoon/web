@@ -32,6 +32,10 @@ struct StreamTestApp {
 
 impl StreamTestApp {
     fn new() -> Self {
+        Self::with_origin(Some(ORIGIN))
+    }
+
+    fn with_origin(public_origin: Option<&str>) -> Self {
         let directory = tempfile::tempdir_in("/tmp").unwrap();
         let token_path = directory.path().join("admin.env");
         let token = Uuid::new_v4().to_string();
@@ -48,7 +52,7 @@ impl StreamTestApp {
         let config = Settings::load(Path::new("config"), |_| None).unwrap();
         let access = WriteAccess::load(&token_path, 10, Duration::from_secs(1))
             .unwrap()
-            .with_sessions(Some(ORIGIN), Duration::from_secs(300))
+            .with_sessions(public_origin, Duration::from_secs(300))
             .unwrap();
         let state = AppState {
             finance: Finance::new(&config.finance).unwrap(),
@@ -297,6 +301,52 @@ async fn market_stream_commands_share_quota_and_release_it_on_reset() {
         Ok(Some(MarketStreamControl::Unsubscribed))
     );
     assert!(preferences.acquire().is_some());
+}
+
+#[tokio::test]
+async fn loopback_cookie_market_stream_rechecks_authority_during_replay() {
+    let fixture = StreamTestApp::with_origin(None);
+    let access = fixture.state.write_access.clone();
+    let app = router(fixture.state);
+    let preferences = Arc::new(MarketPreferences::default());
+    for host in ["127.0.0.1:8090", "localhost:8090"] {
+        let origin = format!("http://{host}");
+        let session = send(
+            &app,
+            Request::post(SESSION_PATH)
+                .header(header::AUTHORIZATION, &fixture.bearer)
+                .header(header::HOST, host)
+                .header(header::ORIGIN, &origin),
+        )
+        .await;
+        assert_eq!(session.status(), StatusCode::CREATED);
+        let cookie = session.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static(host));
+        headers.insert(header::ORIGIN, HeaderValue::from_str(&origin).unwrap());
+        headers.insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
+        let mut stream =
+            MarketStreamSession::open(access.clone(), &headers, preferences.clone()).unwrap();
+        assert_eq!(stream.command(SUBSCRIBE), Ok(None));
+        let frames = stream
+            .poll_with(async |_, after, _| {
+                assert_eq!(after, 0);
+                Ok(page(1, 1, None, vec![snapshot(1, 1, SEQ)]))
+            })
+            .await;
+        assert_eq!(frames.len(), 2);
+        let snapshot: Value = serde_json::from_str(&frames[0].to_text().unwrap()).unwrap();
+        assert_eq!(snapshot["seq"], SEQ.to_string());
+        assert_eq!(
+            frames[1].to_text().unwrap(),
+            r#"{"type":"checkpoint","after":"1"}"#
+        );
+    }
 }
 
 #[tokio::test]

@@ -23,7 +23,7 @@
     target/release/web migrate
     target/release/web serve
 
-migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使数据库暂时不可达也会先建立监听，后台重连；默认执行兼容迁移后才将数据库标为 ready。完成独立迁移后可设 WEB_AUTO_MIGRATE=false。向 web 进程发送 SIGTERM 或 SIGINT 时，进程停止接纳新连接并等待在途请求，默认宽限 20 秒。完整部署与守护定义见 [fertile/deploy](https://github.com/viramoon/fertile/tree/main/deploy)。
+migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使数据库暂时不可达也会先建立监听，后台重连；默认执行兼容迁移后才将数据库标为 ready。完成同一发布的显式迁移后可设 WEB_AUTO_MIGRATE=false。向 web 进程发送 SIGTERM 或 SIGINT 时，进程停止接纳新连接并等待在途请求，默认宽限 20 秒。完整部署与守护定义见 [fertile/deploy](https://github.com/viramoon/fertile/tree/main/deploy)。
 
     curl -fsS http://127.0.0.1:8090/healthz/live
     curl -i http://127.0.0.1:8090/healthz/ready
@@ -37,12 +37,65 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 | 静态目录缺失 | 检查 WEB_STATIC_ROOT 和 index.html 的存在及权限，恢复完整版本目录，验证深链接与 /assets 缺失时的 404 |
 | finance 不可达 | system/status 仍提供退化信息。检查 FINANCE_BASE_URL 与 finance 自身 ready。默认 web ready 为 degraded，如配置必须依赖 finance，则返回 503 |
 | 数据库迁移失败 | 保存错误与迁移版本，核对备份；先修复失败原因再执行 migrate，不修改已应用脚本 |
-| 回滚 | 确认数据库向后兼容，按 fertile 指针组合恢复上一套 web 二进制、配置和静态目录。必要时先在独立库演练恢复 |
+| 含新增迁移的发布回退 | 将迁移前备份恢复到独立库和数据根，再按下节启动旧发布 |
 | 本地接口正常、公网失败 | 由 Ruler 核对 https://fertile.viramoon.com 的 DNS、Tunnel 路由与外部可达性。web 源站使用 127.0.0.1:8090 |
 
 按照请求的 X-Request-Id 查找标准错误的 JSON 日志，可看到状态、方法、匹配的路由模板与耗时。发行与回滚由 fertile 管理。
 
 非标准方法统一记为 OTHER，未匹配路由记为 <unmatched>。启动或显式迁移失败时按日志中的 stage 检查相应配置、文件权限或服务状态。panic 只记固定事件，HTTP 请求内的 panic 返回通用 500。提高 RUST_LOG 级别可查看 web 自身的诊断事件，第三方追踪仍被过滤。日志和故障资料留在获准的私有目录。字段说明见[日志、样本与 CI 防护](docs/data-guard.md)。
+
+### 含新增迁移的发布回退
+
+旧代码绝不在新发布写过的数据库上运行。凡含新增迁移的发布，在首次运行迁移前保留已验证可恢复的备份和上一套发布制品。回退时，从同一迁移前快照恢复独立数据库 `web_rollback_<sha>` 与独立数据根 `data-paper-rollback-<sha>`，然后在这套目标上运行旧发布。`<sha>` 取自要恢复的旧 fertile 发布提交，两处使用同一标识。
+
+#### 先确认目标实例
+
+暂停接入或停止服务前，从部署记录核对目标实例的绝对持久根、PostgreSQL 端口和进程管理器。在 fertile 源码目录的同一个 Bash 会话中设置经核对的值，并在下列检查成功后继续。后续命令沿用这个会话的实例配置。
+
+```bash
+[[ "${FERTILE_ROOT:?先设置目标实例的绝对持久根}" == /* && -d "$FERTILE_ROOT" &&
+   "${FERTILE_POSTGRES_PORT:?先设置目标实例的 PostgreSQL 端口}" =~ ^[1-9][0-9]{3,4}$ &&
+   "$FERTILE_POSTGRES_PORT" -gt 1023 && "$FERTILE_POSTGRES_PORT" -lt 65536 ]] &&
+  export FERTILE_ROOT FERTILE_POSTGRES_PORT
+```
+
+使用本机受管 PostgreSQL 时，核对恢复连接的 `PGHOST` 为 `$FERTILE_ROOT/run/postgres`，`PGPORT` 为已确认的 `FERTILE_POSTGRES_PORT`。使用外部 PostgreSQL 时，由数据库管理员确认恢复连接及其权限。
+
+暂停接入和任务领取，等待在途作业结束。保全新版数据库、数据根和发布指针，记录 notifier 原启用状态。核对备份清单的截点早于首次迁移，并与选定的旧发布匹配。留存备份后到切换前的写入与投递记录，供恢复后对账。
+
+#### systemd 实例
+
+先核对 `fertile.target` 的单元绑定到已确认的实例根，并确认旧发布支持 systemd。管理员按[备份手册的恢复步骤](https://github.com/viramoon/fertile/blob/main/ops/backup.md#恢复步骤)执行 `sudo systemctl stop fertile.target` 停栈，单独启动该实例的 PostgreSQL，完成预检与正式恢复。两次恢复命令都显式指向本节规定的新建 `web_rollback_<sha>` 与 `data-paper-rollback-<sha>`。核对恢复库的 `_sqlx_migrations` 与旧发布相符后，停止单独启动的 PostgreSQL。
+
+在目标实例的 systemd 运行配置中指定恢复库和数据根，将独立研究目录指向恢复根下的对应目录，并设置 `FERTILE_ENABLE_WEB_NOTIFIER=0`。按[普通服务器部署指南](https://github.com/viramoon/fertile/blob/main/deploy/linux-server.md#systemd)选定旧发布并重新安装 unit，确认旧版 unit 使用这套配置后，再由 systemd 启动。启动后核对旧版实际使用的库和数据根，确认 notifier 未运行并完成[队列对账](#告警与邮件进程)，再按原启用状态恢复投递。
+
+#### supervisord 实例
+
+1. 从 fertile 仓库根目录执行 `scripts/fertile down` 停止整栈，确认 supervisord 已退出。随后执行 `scripts/postgres.sh start` 单独启动 PostgreSQL。等待数据库可用后再执行预检和正式恢复，期间保持业务进程停止。正式恢复会检查 supervisord 是否仍在运行。
+2. 在 fertile 仓库根目录，以受控的 PostgreSQL 恢复角色运行下例。预先设置旧发布提交 `old_sha` 和经核对的迁移前快照绝对路径 `pre_migration_snapshot`。选择尚未建立的目标库和数据根。预检或恢复失败时停止切换，核对目标占用、归档和访问权限。
+
+   ```bash
+   (
+     set -e
+     : "${FERTILE_ROOT:?先设置受控实例根}"
+     : "${pre_migration_snapshot:?先选择迁移前快照}"
+     export FERTILE_ROOT
+     [[ ${old_sha:-} =~ ^[0-9a-f]{7,40}$ ]]
+     test -f "$pre_migration_snapshot/postgres.dump"
+     rollback_data="$FERTILE_ROOT/data-paper-rollback-$old_sha"
+     rollback_db="web_rollback_$old_sha"
+     scripts/restore.sh "$pre_migration_snapshot" --dry-run \
+       --target-data-root "$rollback_data" --target-database "$rollback_db"
+     scripts/restore.sh "$pre_migration_snapshot" \
+       --target-data-root "$rollback_data" --target-database "$rollback_db"
+   )
+   ```
+
+3. 核对恢复库的 `_sqlx_migrations` 与旧发布相符，并核对旧版所需的数据库角色、权限、业务状态及文件引用。执行 `scripts/postgres.sh stop` 停止单独启动的 PostgreSQL，交由 supervisor 随旧发布启动。按 Ruler 手册准备 `old_env`。为旧发布设置恢复后的 `FERTILE_DATA_ROOT`，将任何独立研究目录配置指向恢复根下的对应目录，并将 `web` 和 `web-notifier` 的 `DATABASE_URL` 指向同一个恢复库。使用 fertile 本机数据库配置时，核对 `FERTILE_WEB_DATABASE` 指向该库。运行 `"${old_env[@]}" FERTILE_ENABLE_WEB_NOTIFIER=0 scripts/fertile rollback --switch-only "$old_sha"` 切换旧版二进制、配置和静态产物。
+4. 运行 `"${old_env[@]}" FERTILE_ENABLE_WEB_NOTIFIER=0 scripts/fertile ensure-up` 启动旧发布。对账完成前，每次 `ensure-up` 都沿用同一组恢复目标及 notifier 禁用设置。用 `scripts/fertile status --json` 确认 notifier 未运行。核实旧版进程实际使用的数据库及数据根，再检查 `/healthz/ready`、旧版页面和备份截点前的业务记录，完成[队列对账](#告警与邮件进程)。
+5. 对账和验证通过后，若原部署已启用 notifier 且旧发布包含该进程，运行 `"${old_env[@]}" FERTILE_ENABLE_WEB_NOTIFIER=1 scripts/fertile ensure-up` 恢复邮件投递，并核对 notifier 已连接恢复库。其余情况下保持 notifier 禁用。恢复业务接入。新版数据库和数据根单独保留用于对账以及切回新版。
+
+完整的快照恢复与发布切换由 fertile 管理。[备份与恢复](https://github.com/viramoon/fertile/blob/main/ops/backup.md) · [Ruler 回滚手册](https://github.com/viramoon/fertile/blob/main/ops/ruler-runbook.md#从升级前快照回滚并切回新版)
 
 ## 安装仓库数据防护
 
@@ -71,7 +124,9 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 网页出现 502、503、504 时，先查 /api/v1/system/status 中的 finance.ok、latency_ms、circuit，再查 finance 的监听和 ready。熔断打开后等待对应 profile 的 circuit_open_ms，下一次访问会试探，成功后自动恢复。若请求为写操作，超时后先查作业状态，重交时沿用同一幂等键。
 
-finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W2b 需要含 F10b 的 finance API。策略版本、因子快照和回测队列由 finance 管理，执行由 F13 回测 worker 负责。W2b 复用 web 现有配置、数据库、监听端口和进程。[生成客户端说明](src/finance_client/README.md) · [契约差异](docs/api.md#finance-契约版本)
+finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W9 使用包含 F10d 的锁定契约。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约版本](docs/api.md#finance-契约版本)
+
+策略版本、因子快照和幂等队列由 finance 管理。W2b 复用 web 现有配置、数据库、监听端口和进程。
 
 `FINANCE_BASE_URL` 指向数字回环地址（如 `127.0.0.1` 或 `[::1]`）时，web 直接连接 finance，忽略环境代理。
 
@@ -112,17 +167,29 @@ curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 
 在 HTTPS 入口的 web 进程环境设置 `WEB_PUBLIC_ORIGIN`，如 `https://fertile.viramoon.com`。Origin 包含协议、主机和非默认端口，省略尾部斜杠。保留 `WEB_ADMIN_TOKEN_FILE` 供会话登录和脚本鉴权。可用 `WEB_ADMIN_SESSION_TTL_SECONDS` 设置 1 至 900 秒的会话期限，默认 900 秒。
 
+本地运行时可省略 `WEB_PUBLIC_ORIGIN`，使用 `http://127.0.0.1:8090` 或 `http://localhost:8090` 打开终端，并沿用所选主机与端口登录、调用 REST 和接收 SSE、WebSocket。请使用支持回环 HTTP 上 Secure Cookie 的浏览器，入口代理应保留原始 `Host` 和 `Origin`。写入仍需同源 `Origin` 与 `X-CSRF-Token`。同源 REST GET 和 EventSource 在省略 `Origin` 时依靠浏览器的 `Sec-Fetch-Site: same-origin`。
+
 浏览器以 Bearer 登录并接收 HttpOnly Cookie。页面使用返回的 CSRF token 执行同源写入，可从能力接口恢复 CSRF token。退出立即撤销该会话。管理 Bearer 轮换或进程重启后，浏览器重新登录。W1 的会话状态保存在单个 web 进程中。
 
 ## 行情网关与运维事件
 
-升级前按既有方式备份 PostgreSQL，再执行 `web migrate` 或启用默认自动迁移。迁移 `20261127040000` 创建自选表，备份和恢复应包含该表。只使用受控的 `FINANCE_BASE_URL` 及管理员会话或 bearer。浏览器经 `WEB_PUBLIC_ORIGIN` 同源访问。WAL 和投影事件正文须同时具备 finance 本机记录与显示许可。保留部署侧的 IBKR paper 只读配置，行情网关读取既有 finance 契约。
+升级前按[迁移与回退流程](#含新增迁移的发布回退)保留快照，再执行 `web migrate` 或启用默认自动迁移。迁移 `20261127040000` 创建自选表，迁移后的备份应包含该表。只使用受控的 `FINANCE_BASE_URL` 及管理员会话或 bearer。浏览器通过已配置的 HTTPS 入口或本地回环地址同源访问。WAL 和投影事件正文须同时具备 finance 本机记录与显示许可。保留部署侧的 IBKR paper 只读配置，行情网关读取既有 finance 契约。
 
 `/api/v1/events` 使用现有 web 端口。入口代理应关闭 SSE 响应缓冲并允许 15 秒心跳，转发 `Last-Event-ID`。收到 `reset` 时从受保护的 REST 路径重取快照，断线后 EventSource 会携带最近游标重连。进程重启清空 SSE 回放，进程退出时主动关闭流。无效或过期的会话需重新登录。避免采集流正文、查询参数、身份头和付费数据。
 
-`GET /api/v1/market/subscriptions` 返回单管理员共享的 web 订阅额度和券商线路契约状态。focus 是进程内的盘口选择，重启后重新设置。读取盘口时显式标的优先于 focus。更新自选前读取当前 revision，写超时后先查自选或 focus 再重试。如果盘口响应为 `snapshot_required`，客户端应清空旧盘口。
+`GET /api/v1/market/subscriptions` 返回单管理员共享的 web 订阅额度；券商实际预算和观察覆盖分别读取 `/api/v1/market/subscriptions/budget` 与 `/api/v1/market/subscriptions/coverage`。focus 是进程内的盘口选择，重启后重新设置。读取盘口时显式标的优先于 focus。更新自选前读取当前 revision，写超时后先查自选或 focus 再重试。如果盘口响应为 `snapshot_required`，客户端应清空旧盘口。
 
-`/api/v1/stream/market` 在既有 web 端口升级。入口代理应保留 WebSocket 升级头与浏览器 Origin。握手返回 `503 finance_unavailable` 时先恢复受控的 finance API，再重连。收到重置时清空旧盘口，再以有效快照或游标建立新的订阅。期权查询返回 `finance_contract_pending`。各路径、节流和接续语义见 [W2a 接口](docs/api.md#行情自选与推送)。
+`/api/v1/stream/market` 在既有 web 端口升级。入口代理应保留 WebSocket 升级头与浏览器 Origin。握手返回 `503 finance_unavailable` 时先恢复受控的 finance API，再重连。收到重置时清空旧盘口，再以有效快照或游标建立新的订阅。各路径、节流和接续语义见[行情网关接口](docs/api.md#行情自选与推送)。
+
+## W8 期权和场所深度
+
+先部署含 F10c 的 finance，再切换 web。使用现有 `FINANCE_BASE_URL`，由 finance 的已授权 IBKR paper 只读行情所有者接入链和调度器、Nasdaq 深度回调、敞口输入快照及已取得的历史链批次。单独启动 finance API 时，这些来源可能未装配。若新读路径返回 `503 finance_unavailable`，除连通性和熔断外，还应检查该来源是否已接入且具有展示许可。上游已接入但不存在相应快照或历史窗口时，保留 404。
+
+期权链使用已确认的券商 `underlying_con_id`，仅带旧参数的合法请求仍返回 `503 finance_contract_pending`。敞口使用 F1 `underlying_id`。场所深度请读 `/api/v1/market/depth?symbol=…`，仅当状态为 `receiving` 时展示盘口。历史链查询使用已取得的精确窗口。上述 GET 仅查已接入的数据与状态，供应商会话及采集任务由行情所有者管理。[路径和参数](docs/api.md#w8-期权场所深度与券商线路)
+
+## W9 期权流
+
+先切换至包含 F10d 的 finance，再切换 web。W9 沿用 `FINANCE_BASE_URL`、现有进程和端口，无需迁移、环境变量或数据目录。共享行情所有者需以 IBKR paper 只读模式分别装配 OPRA 观察快照和 OPRA 历史核验报告。独立 finance API 未装配数据源时返回 503。在已装配的实例上，先用管理员会话按合约 `con_id` 与已知窗口查询两条读取路径。404 时核对上游库存窗口和产品展示许可。核验中的局部覆盖和无法回补原因可能随成功响应返回。GET 仅查看已有结果，保持原有订阅和采集流程。[请求与错误语义](docs/api.md#w9-期权流观察与历史核验)
 
 ## 集成配置及凭据
 
@@ -136,7 +203,7 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 
 管理员创建草稿并发起版本化测试，通过后显式启用。失败、不可用或候选变化时保留活动版本。超时先读配置 revision、活动版本和最近测试 ID。进程中断留下未结算的本机测试时，可从最新 revision 发起一次新测试，使原测试失效。回滚复用曾启用且凭据仍有效的配置，生成更高版本。
 
-部署先执行 `web migrate`，再同步更新 web 与 web-notifier。文件和 Drive 预检的部署配置槽由运维管理。SMTP 配置槽用于创建候选快照，正在投递或保留用于回滚的 SMTP 版本继续使用其绑定的快照。回退二进制前核对并结算或停用待处理的 W4 SMTP 候选，避免旧 notifier 把候选按默认渠道发送。保留前向迁移及密文，旧 web 设置 `WEB_AUTO_MIGRATE=false`。
+部署先留存迁移前备份，再执行 `web migrate` 并同步更新 web 与 web-notifier。文件和 Drive 预检的部署配置槽由运维管理。SMTP 配置槽用于创建候选快照，正在投递或保留用于配置版本回滚的 SMTP 版本继续使用其绑定的快照。发布回退按[独立库和数据根流程](#含新增迁移的发布回退)执行。核对恢复库仍引用的 SMTP 快照和密钥，以及新版待处理的 W4 SMTP 候选，按下文完成对账后再启动旧 notifier。
 
 | 集成 | 部署侧设置及测试行为 |
 | --- | --- |
@@ -159,19 +226,28 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 
 ## 告警与邮件进程
 
-先在同一个 web 数据库上执行 `web migrate`，再交由 fertile 的进程管理器启动 `target/release/web-notifier`。进程读取专用的部署环境并使用同一 `DATABASE_URL`。它不监听端口，依赖 Linux `/proc`、系统 CA 和 `/usr/bin/curl` 的 SMTP/SMTPS 支持。SMTP 使用 TLS 1.2 或更高版本，证书与主机名由系统 CA 验证。SIGINT 或 SIGTERM 停止领取新任务。配置快照目录时，最长发送与结算宽限为 78 秒，随后留两秒关闭连接池。部署管理器设置 85 秒停止宽限。
+默认关闭邮件进程。`FERTILE_ENABLE_WEB_NOTIFIER=0` 时，fertile 守护器不会启动 `web-notifier`。需要启用时，先对与 web 共用的 `DATABASE_URL` 执行 `web migrate`，确认专用部署环境中有完整的 SMTP 主槽，包括中继、发件人、本人收件人和中继所需的认证，再在 fertile 设置 `FERTILE_ENABLE_WEB_NOTIFIER=1`。启用后用隔离队列核对一次投递结果。进程不监听端口，依赖 Linux `/proc`、系统 CA 和 `/usr/bin/curl` 的 SMTP/SMTPS 支持。SMTP 使用 TLS 1.2 或更高版本，证书与主机名由系统 CA 验证。
 
-web-notifier 与 web 共用日志过滤器。启动失败时，标准错误的 JSON 事件记录固定的 `stage` 和 `reason`，进程以状态码 1 退出。提高 RUST_LOG 级别仍会过滤第三方追踪。
+如果直接启动二进制时传入 `FERTILE_ENABLE_WEB_NOTIFIER=0`，或本机缺少任何可能可用的 SMTP 配置，进程在连接 PostgreSQL 前进入安全空转。否则启动时只读检查数据库选择的 SMTP 配置。本机配置和数据库预检判定空转时都先记录一次 `notifier idle`，再等待停止信号。诊断使用固定阶段和原因。空转保留 outbox、尝试、延迟和投递健康记录，无 SMTP 请求。修复配置后重启，原队列继续应用投递策略。
+
+尚未启用 W4 SMTP 版本时，普通任务和独立渠道测试依赖主槽。主槽要求有效的 `WEB_SMTP_HOST`、`WEB_SMTP_FROM`、`WEB_SMTP_TO` 以及配置的可选字段。此时仅配置备选槽和快照目录会空转。启用 W4 后，普通任务与独立渠道测试使用活动版本绑定的快照。保留 `WEB_SMTP_SNAPSHOT_DIR`、对应密钥和可读取解密的绑定文件后，移除主槽并重启仍可投递。缺目录、缺文件或快照无法解密时，保留原队列并等待恢复。备选槽用于创建 W4 候选快照，空目录在主槽缺失时不会生成新密钥。
+
+普通投递可用时，启动检查也会读取待重试 W4 候选测试已绑定的快照。若已配置存储但该文件缺失或无法解密，进程记录一次 `SMTP candidate test paused`，保留该候选的尝试、下次投递时间和测试证据，继续处理其他可投递邮件。恢复原文件和密钥后重启，候选按原 UUID 重试。未设置快照目录时，W3 主槽仍可投递，W4 候选继续排队。如果前一进程已领取候选，接手者等满 70 秒后将该次尝试结算为 `interrupted`，按原重试上限处理，释放发送名额给 W3。
+
+通过管理接口停用 SMTP 时，以数据库领取任务的时刻为界。停用事务先提交，普通任务继续排队。已领取的尝试按实际结果结算。切换活动版本时，下一次领取重新核对当前绑定。
+
+SIGINT 或 SIGTERM 让空转进程以状态码 0 退出。正常投递的进程收到同样信号后停止领取新任务，并结算已领取的任务。配置快照目录时，最长发送与结算宽限为 78 秒，随后留两秒关闭连接池。部署管理器设置 85 秒停止宽限。有效 SMTP 已配置时，其他启动失败仍以状态码 1 退出。notifier 与 web 共用日志过滤器，标准错误的 JSON 事件使用固定 `stage` 和 `reason`。提高 `RUST_LOG` 级别仍会过滤第三方追踪。
 
 | notifier 环境变量 | 含义及默认值 |
 | --- | --- |
+| `FERTILE_ENABLE_WEB_NOTIFIER` | fertile 守护器的进程开关，默认 `0`。直接执行且显式传入 `0` 时进入空转 |
 | `DATABASE_URL` | 由部署注入，与 web API 共用 PostgreSQL |
 | `WEB_SMTP_HOST`、`WEB_SMTP_PORT` | 固定中继的主机名或 IP。隐式 TLS 默认端口 465，STARTTLS 默认 587 |
 | `WEB_SMTP_TLS` | `implicit`（默认）或 `starttls` |
 | `WEB_SMTP_FROM`、`WEB_SMTP_TO` | 固定发件地址和本人收件地址，各一个邮箱 |
 | `WEB_SMTP_CREDENTIAL_FILE` | 可选，部署提供的本机秘密文件绝对路径，运行用户所有、0600 普通文件、存放于静态目录之外。仅含 `username` 和 `password` 两个 JSON 字符串字段 |
 | `WEB_SMTP_TIMEOUT_SECONDS` | 单次 SMTP 超时，默认 10 秒，范围 1–60 |
-| `WEB_SMTP_SNAPSHOT_DIR` | W4 候选测试所需。由 notifier 运行用户独占的 0700 持久绝对目录，置于静态资源树之外 |
+| `WEB_SMTP_SNAPSHOT_DIR` | W4 候选测试和已绑定快照的投递所需。由 notifier 运行用户独占的 0700 持久绝对目录，置于静态资源树之外 |
 | `WEB_STATIC_ROOT` | 配置快照目录时必填。由部署为 Web 和 notifier 传入同一个静态根绝对路径 |
 | `WEB_PUBLIC_ORIGIN` | 可选，与 web API 相同的规范 HTTPS origin。配置后邮件附私有 `/alerts` 绝对链接 |
 | `WEB_NOTIFIER_QUIET_TIME_ZONE` | 默认 `Asia/Shanghai`，从 PostgreSQL 的 IANA 时区表校验 |
@@ -180,25 +256,25 @@ web-notifier 与 web 共用日志过滤器。启动失败时，标准错误的 J
 | `WEB_NOTIFIER_NORMAL_HOURLY_LIMIT`、`WEB_NOTIFIER_URGENT_HOURLY_LIMIT` | 滚动一小时各自允许的投递尝试数，默认普通 6、紧急 2，各允许 1–1000 |
 | `WEB_NOTIFIER_URGENT_BYPASS_QUIET` | 默认 `true`，紧急投递可绕过静默，仍计入紧急额度 |
 
-notifier 在打开或创建快照密钥前核对快照目录与部署给 Web 的静态根及其解析目标。静态根缺失、无效或不可用时，notifier 启动失败。快照路径必须逐级为实际目录，包含符号链接或父目录穿越的路径会被拒绝。静态根可使用部署的 `current` 链接。
+notifier 在打开或创建快照密钥前核对快照目录与部署给 Web 的静态根及其解析目标。配置了快照存储且静态根缺失、无效或不可用时，notifier 空转。快照路径必须逐级为实际目录，包含符号链接或父目录穿越的路径会被拒绝。静态根可使用部署的 `current` 链接。
 
 更新 SMTP 部署槽位后重启 notifier，再创建并测试候选版本。现有活动版本仍使用绑定的加密快照。目录中的 `snapshot.key` 和快照均为 0600 文件。备份与恢复时保留数据库、全部仍被引用的快照和对应密钥，限制密钥访问。升级时，早期 W4 未绑定快照的测试需要重新运行，未绑定的旧活动配置需在补测通过后重新启用才会投递。运维验证可由管理员通过 W4 集成测试，或用新 UUID 通过邮件渠道发起测试，按各接口返回的路径查询。测试邮件占用普通额度，可在静默窗口执行。[API](docs/api.md#告警规则与邮件通知)
 
 | 现象 | 诊断与恢复 |
 | --- | --- |
-| 测试一直 `pending` | 在测试记录中核对 `available_at` 和 `deferrals`，确认进程正在运行且可读取已迁移的目标库 |
+| 测试一直 `pending` | 确认 fertile 已启用 notifier，查看是否有 `notifier idle` 启动日志。投递进程运行时，在测试记录中核对 `available_at` 和 `deferrals`，确认可读取已迁移的目标库 |
 | 投递 `pending` 且最近结果为 `timeout`、`transient` 或 `interrupted` | 查看尝试表、静默和额度，进程按 30 秒起的指数退避自动重试，最多 5 次尝试 |
 | 投递 `failed` | 核对有限错误分类、TLS 证书、部署地址和本机凭据文件权限，修复后使用新 UUID 发测试邮件 |
 | system/status 的 `notifications.state` 为 `degraded` | 管理员可在 `/alerts` 查看一次 SMTP 失效事件与后续恢复。每轮故障后的首次 SMTP 接受都会记录恢复并排入该轮失败尝试汇总，包括上一轮汇总重试成功的情况 |
 | 投递 `accepted` | SMTP 中继已接受邮件。收件箱送达、异步退信与垃圾箱状态由邮件系统跟踪 |
 
-一次尝试的结果未知时，同一 outbox ID 生成相同 `Message-ID`。SMTP 接收后进程崩溃或响应超时可能产生重复邮件。数据库保留每次尝试、延迟决定及汇总关联。回滚时先停 notifier，再切换 web 二进制，保留前向兼容的数据库迁移和历史投递记录。
+一次尝试的结果未知时，同一 outbox ID 生成相同 `Message-ID`。SMTP 接收后进程崩溃或响应超时可能产生重复邮件。数据库保留每次尝试、延迟决定及汇总关联。发布回退时先停 notifier，并按[独立库和数据根流程](#含新增迁移的发布回退)恢复。用新版投递记录核对恢复库中待发或待重试的 outbox，处理备份后已接收或结果未知的投递，避免重复发送。核对候选测试及其快照引用后，才允许旧 notifier 使用恢复库的 `DATABASE_URL` 启动。
 
 停用等待重试的汇总中的任一规则后，notifier 会停止原汇总的后续发送，为仍可发送的告警排入带新 `Message-ID` 的替代投递。替代投递沿用原汇总的重试等待，并接受当前冷却、静默和限流检查。
 
 排查成员告警时，读取其 `GET /api/v1/alerts/{id}` 详情。在原成员投递的 `summary_attempts` 中查找汇总的拒绝或超时，在 `summary_deferrals` 中查看该汇总的延迟记录。用替代投递的 `replaces_id` 对照原成员投递的 `id`，再看替代投递自身的 `attempts`。需要读取主告警详情时，使用原成员投递的 `summary_alert_id` 作为请求路径中的告警 UUID。
 
-W5 升级时，停下旧 notifier，在共用 PostgreSQL 上执行 `web migrate`，再使用包含 W5 的 web 和 notifier。使用独立数据库角色时，给 web 角色授予 `app.notification_silences` 的读取、插入、更新权限及其序列使用权，给 notifier 角色授予表的读取权与静默判断函数的执行权。备份需包含静默审计表。回退旧 notifier 前，先在升级版本中核对仍有效的静默。旧 notifier 会按原队列策略发送待投递邮件。
+W5 升级时，停下旧 notifier，保留迁移前快照，在共用 PostgreSQL 上执行 `web migrate`，再使用包含 W5 的 web 和 notifier。使用独立数据库角色时，给 web 角色授予 `app.notification_silences` 的读取、插入、更新权限及其序列使用权，给 notifier 角色授予表的读取权与静默判断函数的执行权。迁移后的备份需包含静默审计表。回退至 W5 前版本时按[独立库和数据根流程](#含新增迁移的发布回退)恢复，并在对账时核对新版仍有效的静默。旧 notifier 会按旧队列策略投递，需先处理受静默影响的待发邮件。
 
 主动静默覆盖紧急告警，独立测试邮件仍可用于检查 SMTP。排查持续 `pending` 的业务邮件时，分别查询告警实例和所属规则的 `/silence`。在最后一个适用静默解除或到期后，notifier 下一轮轮询重新检查投递资格，并继续应用静默时段、冷却、重试等待和额度。已经领取的尝试按 SMTP 实际结果结算。[主动静默接口](docs/api.md#主动静默)
 

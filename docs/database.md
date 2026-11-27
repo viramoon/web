@@ -68,4 +68,6 @@ SQLX_OFFLINE=true cargo test --locked
 
 `.sqlx/` 由 SQLx CLI 0.8.6 对已迁移的隔离库生成。修改查询或迁移后重新生成。数据库恢复测试用 initdb、pg_ctl、createdb 和 psql 创建一个带专用 Unix socket 的一次性集群，通过同一 web 进程执行未迁移 → 迁移 → 停库 → 恢复的 HTTP 验证。将目标 PostgreSQL 的 bin 目录加入 PATH 后运行 `cargo test --test api postgres_ -- --nocapture`，同时验证启动时断库后能自动迁移。
 
-正式部署前先备份和演练恢复，再执行前向迁移。W1 追加迁移可在空库及已有初始化迁移的库执行，保留原 schema 版本标记和数据。回退到 W1 前的 web 二进制时保留数据库及已执行迁移，并设置 `WEB_AUTO_MIGRATE=false`。持久化目录随 fertile 设置，默认 `/home/box/fertile/data/postgres`。
+正式部署前先备份和演练恢复，再执行新增迁移。W1 追加迁移可在空库及已有初始化迁移的库执行，保留原 schema 版本标记和数据。含新增迁移的发布回退时，将迁移前备份恢复到独立库 `web_rollback_<sha>` 和独立数据根 `data-paper-rollback-<sha>`，核对 `_sqlx_migrations` 后再运行旧发布。旧代码绝不在新发布写过的数据库上运行。[回退操作](../RUNBOOK.md#含新增迁移的发布回退)
+
+PostgreSQL 集群的持久化目录随 fertile 设置，默认 `/home/box/fertile/data/postgres`。

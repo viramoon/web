@@ -2,10 +2,10 @@
   "version": 1,
   "fixtures": {
     "src/market_reads/tests.rs": {
-      "sha256": "96ea1a4db700574734e15800a18b4f3e98d13531e41afbe5c12ae52ef56f7bf4",
+      "sha256": "96d59c83bfe18eaed7d5939700ef115798d51f79f70c2a4b421bcf899fac18c6",
       "generator": "src/market_reads/tests/synthetic.rs",
       "seed": "fixed",
-      "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。 W6 用相同固定值构造混合版本 WAL，包含资金费率、持仓量和控制帧。W2b 用同一组固定十进制生成 F9e 证据，验证历史期权仅由内部契约读取。"
+      "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。 W6 用相同固定值构造混合版本 WAL，包含资金费率、持仓量和控制帧。 使用同一组固定十进制与缺省交易所时间验证历史期权事件在旧展示边界的拒绝。"
     },
     "src/market_stream/replay/tests.rs": {
       "sha256": "9854b024eb2cdd8a4154cfa385836021945ef215a532fb1d0d7fb7dd054a074a",
@@ -14,10 +14,10 @@
       "source": "运行 cargo test --locked --offline market_stream::replay。用固定时钟、十进制和超出 JavaScript 安全整数的序号构造合成快照、增量、重置和永续合约上下文。"
     },
     "src/market_stream/transport_tests.rs": {
-      "sha256": "081cbb4a16ef523f766e26c799b37b1466c8ebe5335c0c5e67706ef1400be538",
+      "sha256": "2345298af5ca21ff6a600618947d5437eab0d963e55136bc88112c3d652d5627",
       "generator": "src/market_stream/fixture.rs",
       "seed": "fixed",
-      "source": "运行 cargo test --lib --locked --offline websocket_。通过随机数字回环端口投递固定 F1 快照和 WAL 位置，验证浏览器升级、许可、续接、重置与额度。"
+      "source": "运行 cargo test --lib --locked --offline websocket_。通过随机数字回环端口投递固定 F1 快照和 WAL 位置，验证两种回环 Host 的浏览器会话升级、许可、续接、重置与额度。"
     },
     "tests/api/database.rs": {
       "sha256": "ae247ff845a2bf689d49afe4b0544167f0b1943fc6ca3c9ef7033996cb33f37f",
@@ -37,11 +37,23 @@
       "seed": "finance fc5e153e9727181f5748659c0610b2fbc2b49769 protocol/v1/examples.json + 1760000000",
       "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE fc5e153e9727181f5748659c0610b2fbc2b49769。finance-api export-read-stream 从已提交的合成 F1 种子构造 WS 回放，并用固定时钟、虚构标的和大整数文本生成 SSE 样本。"
     },
+    "src/market_reads/tests/options.rs": {
+      "sha256": "f9b49c5e08509fccf9921f5bb3d2117e4344e9964495b63c73991cf94dc15cdd",
+      "generator": "src/market_reads/tests/synthetic.rs",
+      "seed": "固定虚构标的、十进制文本、UTC 时钟和券商标识",
+      "source": "运行 cargo test --locked --offline --lib f10c_。期权、深度、敞口、历史、预算、覆盖和版本 3.0 的证据都在测试运行时构造。"
+    },
     "openapi/finance.openapi.json": {
-      "sha256": "d18212216c15b8fb65e3b4a39a9b3d2f9693dc0442e3f54a18e446b49ba8cff8",
+      "sha256": "0c16e01ecdcc7057d0453b857c3c06ba1889a049efa99625404ece7a34f962ad",
       "generator": "scripts/gen-finance-client.sh",
-      "seed": "finance 356818db39b7a35752ec81c380d6a7a520be0930 export-openapi",
-      "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE 356818db39b7a35752ec81c380d6a7a520be0930。finance-api 从代码导出 HTTP 路径和 schema。F9e 新增历史期权价格与数量的 schema 声明，未嵌入行情记录。"
+      "seed": "finance main 19eb173751487befc504c78f60bfbb6be68f97e6",
+      "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE 19eb173751487befc504c78f60bfbb6be68f97e6。快照由 finance-api export-openapi 根据 handler 和类型导出，含期权和期权流价量字段的 schema 声明，无行情行或示例。"
+    },
+    "src/market_reads/tests/flow.rs": {
+      "sha256": "8cdb4c75f61b4cffc5e4acbf4ed1c1e735cd13be67571c61a813e5f469b4dd29",
+      "generator": "src/market_reads/tests/synthetic.rs",
+      "seed": "固定合约 ID 201、UTC 时钟和精确数字文本",
+      "source": "运行 cargo test --locked --offline --lib f10d_。测试代码以固定字面量在内存中构造观察、核验、预算和覆盖响应，使用随机回环端口上的替身验证转发。"
     }
   }
 }

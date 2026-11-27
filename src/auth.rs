@@ -39,9 +39,10 @@ struct Policy {
 pub const SESSION_COOKIE_NAME: &str = "__Host-web_admin_session";
 const MAX_SESSIONS: usize = 64;
 const CSRF_HEADER: header::HeaderName = header::HeaderName::from_static("x-csrf-token");
+const FETCH_SITE: header::HeaderName = header::HeaderName::from_static("sec-fetch-site");
 
 struct Sessions {
-    origin: HeaderValue,
+    origin: Option<HeaderValue>,
     ttl: Duration,
     entries: Mutex<VecDeque<Session>>,
 }
@@ -141,6 +142,58 @@ fn unique_header(headers: &HeaderMap, name: header::HeaderName) -> Option<&Heade
     values.next().is_none().then_some(value)
 }
 
+fn same_origin_fetch(headers: &HeaderMap) -> bool {
+    unique_header(headers, FETCH_SITE).is_some_and(|site| site == "same-origin")
+}
+
+pub(crate) fn stream_auth_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut retained = HeaderMap::new();
+    for name in [
+        header::AUTHORIZATION,
+        header::COOKIE,
+        header::HOST,
+        header::ORIGIN,
+        FETCH_SITE,
+    ] {
+        for value in headers.get_all(&name) {
+            let mut value = value.clone();
+            value.set_sensitive(true);
+            retained.append(name.clone(), value);
+        }
+    }
+    retained
+}
+
+fn check_loopback_origin(headers: &HeaderMap, require_origin: bool) -> Result<(), WriteDenied> {
+    let authority = unique_header(headers, header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .ok_or(WriteDenied::OriginRejected)?;
+    // Compare the wire form so URL normalization cannot turn an alias into an allowed host.
+    let (host, port) = authority
+        .split_once(':')
+        .ok_or(WriteDenied::OriginRejected)?;
+    if !matches!(host, "127.0.0.1" | "localhost")
+        || port.starts_with('0')
+        || !port.bytes().all(|byte| byte.is_ascii_digit())
+        || port.parse::<u16>().is_err()
+    {
+        return Err(WriteDenied::OriginRejected);
+    }
+    let same_origin_fetch = same_origin_fetch(headers);
+    let allowed = if require_origin || headers.contains_key(header::ORIGIN) {
+        unique_header(headers, header::ORIGIN)
+            .and_then(|origin| origin.to_str().ok())
+            .and_then(|origin| origin.strip_prefix("http://"))
+            == Some(authority)
+    } else {
+        same_origin_fetch
+    };
+    if !allowed || (headers.contains_key(&FETCH_SITE) && !same_origin_fetch) {
+        return Err(WriteDenied::OriginRejected);
+    }
+    Ok(())
+}
+
 fn cookie_digest(headers: &HeaderMap) -> Option<[u8; 32]> {
     let mut token = None;
     for value in headers.get_all(header::COOKIE) {
@@ -177,10 +230,10 @@ fn session_cookie(token: &str, max_age: u64) -> HeaderValue {
 
 impl Sessions {
     fn check_origin(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
-        if unique_header(headers, header::ORIGIN) != Some(&self.origin) {
-            return Err(WriteDenied::OriginRejected);
+        match &self.origin {
+            Some(origin) => check_configured_origin(headers, origin),
+            None => check_loopback_origin(headers, true),
         }
-        Ok(())
     }
 
     fn read(&self, digest: &[u8; 32]) -> Result<Arc<str>, WriteDenied> {
@@ -245,6 +298,13 @@ impl Sessions {
             .retain(|entry| !bool::from(entry.token_digest.ct_eq(&digest)));
         Ok(())
     }
+}
+
+fn check_configured_origin(headers: &HeaderMap, origin: &HeaderValue) -> Result<(), WriteDenied> {
+    if unique_header(headers, header::ORIGIN) != Some(origin) {
+        return Err(WriteDenied::OriginRejected);
+    }
+    Ok(())
 }
 
 fn load_digest(path: &Path) -> Result<Option<[u8; 32]>, ConfigError> {
@@ -377,13 +437,11 @@ impl WriteAccess {
         origin: Option<&str>,
         ttl: Duration,
     ) -> Result<Self, ConfigError> {
-        self.sessions = session_origin(origin, ttl)?.map(|origin| {
-            Arc::new(Sessions {
-                origin,
-                ttl,
-                entries: Mutex::new(VecDeque::new()),
-            })
-        });
+        self.sessions = Some(Arc::new(Sessions {
+            origin: session_origin(origin, ttl)?,
+            ttl,
+            entries: Mutex::new(VecDeque::new()),
+        }));
         Ok(self)
     }
 
@@ -416,7 +474,15 @@ impl WriteAccess {
     }
 
     pub fn authenticate(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
-        self.identity(headers).map(|_| ())
+        self.read_identity(headers).map(|_| ())
+    }
+
+    fn read_identity(&self, headers: &HeaderMap) -> Result<Identity, WriteDenied> {
+        let identity = self.identity(headers)?;
+        if matches!(identity, Identity::Session(_)) && self.session_policy()?.origin.is_none() {
+            check_loopback_origin(headers, false)?;
+        }
+        Ok(identity)
     }
 
     pub fn check_read(&self, headers: &HeaderMap, product: Product) -> Result<(), WriteDenied> {
@@ -431,18 +497,23 @@ impl WriteAccess {
         headers: &HeaderMap,
         require_session_origin: bool,
     ) -> Result<(), WriteDenied> {
-        let session = matches!(self.identity(headers)?, Identity::Session(_));
-        if session {
-            let fetch_site = header::HeaderName::from_static("sec-fetch-site");
-            if headers.contains_key(&fetch_site)
-                && unique_header(headers, fetch_site)
-                    .is_none_or(|site| site != HeaderValue::from_static("same-origin"))
-            {
-                return Err(WriteDenied::OriginRejected);
+        match self.identity(headers)? {
+            Identity::Session(_) => {
+                let sessions = self.session_policy()?;
+                if sessions.origin.is_none() {
+                    return check_loopback_origin(headers, require_session_origin);
+                }
+                if headers.contains_key(&FETCH_SITE) && !same_origin_fetch(headers) {
+                    return Err(WriteDenied::OriginRejected);
+                }
+                if require_session_origin || headers.contains_key(header::ORIGIN) {
+                    sessions.check_origin(headers)?;
+                }
             }
-        }
-        if headers.contains_key(header::ORIGIN) || (session && require_session_origin) {
-            self.session_policy()?.check_origin(headers)?;
+            Identity::Bearer if headers.contains_key(header::ORIGIN) => {
+                self.check_bearer_origin(headers)?;
+            }
+            Identity::Bearer => {}
         }
         Ok(())
     }
@@ -478,11 +549,20 @@ impl WriteAccess {
         match self.identity(headers)? {
             Identity::Session(csrf) => self.session_policy()?.check_csrf(headers, &csrf)?,
             Identity::Bearer if check_bearer_origin && headers.contains_key(header::ORIGIN) => {
-                self.session_policy()?.check_origin(headers)?;
+                self.check_bearer_origin(headers)?;
             }
             Identity::Bearer => {}
         }
         self.consume_write_quota()
+    }
+
+    fn check_bearer_origin(&self, headers: &HeaderMap) -> Result<(), WriteDenied> {
+        let origin = self
+            .session_policy()?
+            .origin
+            .as_ref()
+            .ok_or(WriteDenied::SessionDisabled)?;
+        check_configured_origin(headers, origin)
     }
 
     fn session_policy(&self) -> Result<&Sessions, WriteDenied> {
@@ -520,7 +600,7 @@ fn consume_quota(
 }
 
 #[utoipa::path(post, path = "/api/v1/admin/session", security(("adminBearer" = [])),
-    params(("Origin" = String, Header, description="Configured HTTPS origin")),
+    params(("Origin" = String, Header, description="Configured HTTPS origin, or http://127.0.0.1:<port> or http://localhost:<port> matching Host when unset")),
     responses((status=201, body=SessionCreated,
         headers(("Set-Cookie" = String, description="HttpOnly, Secure, SameSite=Strict session cookie"))),
         (status=401, body=ErrorBody), (status=403, body=ErrorBody), (status=413, body=ErrorBody),
@@ -544,7 +624,7 @@ pub(crate) async fn create_session(
 }
 
 #[utoipa::path(delete, path = "/api/v1/admin/session", security(("adminSession" = [])),
-    params(("Origin" = String, Header, description="Configured HTTPS origin"),
+    params(("Origin" = String, Header, description="Configured HTTPS origin, or http://127.0.0.1:<port> or http://localhost:<port> matching Host when unset"),
         ("X-CSRF-Token" = String, Header, description="Token for the administrator session")),
     responses((status=204, headers(("Set-Cookie" = String, description="Expires the session cookie"))),
         (status=401, body=ErrorBody), (status=403, body=ErrorBody), (status=413, body=ErrorBody)))]
@@ -567,7 +647,7 @@ pub(crate) async fn capabilities(
     State(s): State<AppState>,
     headers: HeaderMap,
 ) -> Json<Capabilities> {
-    let (subject, csrf_token) = match s.write_access.identity(&headers) {
+    let (subject, csrf_token) = match s.write_access.read_identity(&headers) {
         Ok(Identity::Session(token)) => (Subject::Admin, Some(token.to_string())),
         Ok(Identity::Bearer) => (Subject::Admin, None),
         Err(_) => (Subject::Anonymous, None),
@@ -611,6 +691,60 @@ mod tests {
             Duration::from_secs(901),
         ] {
             assert!(validate_session_settings(Some(ORIGIN), invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn loopback_origin_requires_an_exact_unambiguous_http_authority() {
+        for (host, origin) in [
+            ("127.0.0.1:8090", "http://127.0.0.1:8090"),
+            ("localhost:65535", "http://localhost:65535"),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, HeaderValue::from_static(host));
+            headers.insert(header::ORIGIN, HeaderValue::from_static(origin));
+            assert!(check_loopback_origin(&headers, true).is_ok());
+            headers.append(header::ORIGIN, HeaderValue::from_static(origin));
+            assert!(check_loopback_origin(&headers, false).is_err());
+            headers.remove(header::ORIGIN);
+            assert!(check_loopback_origin(&headers, false).is_err());
+            headers.insert(FETCH_SITE, HeaderValue::from_static("same-origin"));
+            assert!(check_loopback_origin(&headers, false).is_ok());
+            assert!(check_loopback_origin(&headers, true).is_err());
+            headers.append(FETCH_SITE, HeaderValue::from_static("same-origin"));
+            assert!(check_loopback_origin(&headers, false).is_err());
+            headers.insert(FETCH_SITE, HeaderValue::from_static("same-origin"));
+            headers.append(header::HOST, HeaderValue::from_static(host));
+            assert!(check_loopback_origin(&headers, false).is_err());
+        }
+
+        for authority in [
+            "127.0.0.1.evil:8090",
+            "localhost.evil:8090",
+            "user@localhost:8090",
+            "localhost:8090@localhost:8090",
+            "127.0.0.2:8090",
+            "127.1:8090",
+            "2130706433:8090",
+            "[::1]:8090",
+            "localhost.:8090",
+            "localhost",
+            "localhost:",
+            "localhost:0",
+            "localhost:08090",
+            "localhost:+8090",
+            "localhost:65536",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, HeaderValue::from_static(authority));
+            headers.insert(
+                header::ORIGIN,
+                HeaderValue::from_str(&format!("http://{authority}")).unwrap(),
+            );
+            assert!(
+                check_loopback_origin(&headers, true).is_err(),
+                "{authority}"
+            );
         }
     }
 

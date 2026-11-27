@@ -43,11 +43,8 @@ fn run() -> Result<(), Failure> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if args == ["export-openapi"] {
         let mut output = io::stdout().lock();
-        // Keep a line-oriented diff while fitting the repository's blob limit.
-        let formatter = serde_json::ser::PrettyFormatter::with_indent(b"");
-        let mut serializer = serde_json::Serializer::with_formatter(&mut output, formatter);
-        serde::Serialize::serialize(&openapi(), &mut serializer)
-            .map_err(|_| ("openapi_export", None))?;
+        // Keep the combined browser contract within the repository's data guard size limit.
+        serde_json::to_writer(&mut output, &openapi()).map_err(|_| ("openapi_export", None))?;
         writeln!(output).map_err(|_| ("openapi_export", None))?;
         return Ok(());
     }

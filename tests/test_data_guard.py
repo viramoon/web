@@ -535,7 +535,11 @@ sys.exit(data_guard.main())
 
     def test_reviewed_market_source_requires_the_exact_path_and_bytes(self):
         path = "src/notifications/worker.rs"
-        original = (ROOT / path).read_bytes()
+        # The reviewed digest covers the W4 blob, whose bytes stay fixed as the worker evolves.
+        original = subprocess.check_output(
+            ["git", "cat-file", "blob", f"e46a991c60f84bb71a30162cf90b65bb27cbcdb6:{path}"],
+            cwd=ROOT,
+        )
         self.write(path, original)
         self.git("add", path)
         self.git("commit", "-qm", "Add W3 source by reviewed digest")
