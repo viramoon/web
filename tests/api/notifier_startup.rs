@@ -32,11 +32,33 @@ fn notifier() -> Command {
     command
 }
 
+enum IdleStartup {
+    LocalConfiguration,
+    DatabasePreflight,
+}
+
 async fn assert_idle(
     command: &mut Command,
     reason: &str,
     signal: Option<Signal>,
     markers: &[&str],
+) {
+    assert_idle_startup(
+        command,
+        reason,
+        signal,
+        markers,
+        IdleStartup::LocalConfiguration,
+    )
+    .await;
+}
+
+async fn assert_idle_startup(
+    command: &mut Command,
+    reason: &str,
+    signal: Option<Signal>,
+    markers: &[&str],
+    startup: IdleStartup,
 ) {
     let stdout = tempfile::tempfile_in("/tmp").unwrap();
     let stderr = tempfile::NamedTempFile::new_in("/tmp").unwrap();
@@ -55,7 +77,14 @@ async fn assert_idle(
             .collect::<Vec<_>>()
     };
     let is_idle = |event: &Value| event["fields"]["message"] == "notifier idle";
-    timeout(Duration::from_secs(5), async {
+    // PostgreSQL preflight has its own five-second budget, beginning after
+    // the subprocess has started and finished validating local configuration.
+    let launch_budget = Duration::from_secs(5);
+    let startup_budget = match startup {
+        IdleStartup::LocalConfiguration => launch_budget,
+        IdleStartup::DatabasePreflight => launch_budget + Duration::from_secs(5),
+    };
+    timeout(startup_budget, async {
         loop {
             if events(&read_log()).iter().any(is_idle) {
                 break;
@@ -65,7 +94,12 @@ async fn assert_idle(
         }
     })
     .await
-    .expect("notifier never announced idle startup");
+    .unwrap_or_else(|error| {
+        panic!(
+            "notifier did not announce idle startup ({reason}) within {startup_budget:?}: +             {error}\n{}",
+            read_log()
+        )
+    });
 
     // Stay alive beyond one worker poll and the supervisor startup window.
     sleep(Duration::from_millis(2200)).await;
@@ -227,6 +261,43 @@ async fn activate_snapshot(pool: &PgPool, command: &Command) -> Uuid {
     snapshot
 }
 
+struct ActiveSnapshotFixture {
+    command: Command,
+    marker: String,
+    snapshot_path: PathBuf,
+    listener: TcpListener,
+    pool: PgPool,
+    _dir: tempfile::TempDir,
+    pg: Cluster,
+}
+
+impl ActiveSnapshotFixture {
+    async fn create() -> Self {
+        let pg = Cluster::create();
+        let pool = outbox_fixture(&pg).await;
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut command = notifier();
+        let marker = smtp_fixture(&mut command, &listener, dir.path());
+        configure_secondary_smtp(&mut command, listener.local_addr().unwrap().port());
+        let snapshots = snapshot_fixture(&mut command, dir.path());
+        command
+            .env("DATABASE_URL", pg.url())
+            .env("WEB_SMTP_TO", "receiver@example.invalid");
+        let snapshot = activate_snapshot(&pool, &command).await;
+        Self {
+            command,
+            marker,
+            snapshot_path: snapshots.join(format!("{snapshot}.smtp")),
+            listener,
+            pool,
+            _dir: dir,
+            pg,
+        }
+    }
+}
+
 #[tokio::test]
 async fn notifier_without_smtp_keeps_the_outbox_intact() {
     let pg = Cluster::create();
@@ -293,36 +364,39 @@ async fn notifier_with_only_secondary_smtp_idles_before_opening_snapshot_storage
 
 #[tokio::test]
 async fn notifier_with_active_w4_and_unavailable_snapshot_keeps_outbox_intact() {
-    let pg = Cluster::create();
-    let pool = outbox_fixture(&pg).await;
-    let dir = tempfile::tempdir_in("/tmp").unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let mut command = notifier();
-    let marker = smtp_fixture(&mut command, &listener, dir.path());
-    configure_secondary_smtp(&mut command, listener.local_addr().unwrap().port());
-    let snapshots = snapshot_fixture(&mut command, dir.path());
-    let snapshot = activate_snapshot(&pool, &command).await;
-    let before = delivery_state(&pool).await;
-    command
-        .env("DATABASE_URL", pg.url())
-        .env("WEB_SMTP_TO", "receiver@example.invalid")
-        .env_remove("WEB_SMTP_SNAPSHOT_DIR");
-    assert_idle(
-        &mut command,
+    let mut fixture = ActiveSnapshotFixture::create().await;
+    let before = delivery_state(&fixture.pool).await;
+    fixture.command.env_remove("WEB_SMTP_SNAPSHOT_DIR");
+    assert_idle_startup(
+        &mut fixture.command,
         SNAPSHOT_REQUIRED,
         Some(Signal::TERM),
-        &[&marker],
+        &[&fixture.marker],
+        IdleStartup::DatabasePreflight,
     )
     .await;
-    assert_eq!(delivery_state(&pool).await, before);
+    assert_eq!(
+        fixture.listener.accept().unwrap_err().kind(),
+        ErrorKind::WouldBlock
+    );
+    assert_eq!(delivery_state(&fixture.pool).await, before);
+}
 
-    // The same guard must hold when the snapshot becomes unavailable after startup.
-    command.env("WEB_SMTP_SNAPSHOT_DIR", &snapshots);
-    let channel = EmailChannels::for_notifier(|key| command_setting(&command, key)).unwrap();
-    let db = Database::new(&pg.url(), Duration::from_secs(2), Duration::from_secs(2)).unwrap();
+#[tokio::test]
+async fn notifier_with_deleted_active_snapshot_idles_and_keeps_outbox_intact() {
+    let mut fixture = ActiveSnapshotFixture::create().await;
+    let before = delivery_state(&fixture.pool).await;
+    let channel =
+        EmailChannels::for_notifier(|key| command_setting(&fixture.command, key)).unwrap();
+    let db = Database::new(
+        &fixture.pg.url(),
+        Duration::from_secs(2),
+        Duration::from_secs(2),
+    )
+    .unwrap();
     assert_eq!(worker::smtp_idle_reason(&db, &channel).await.unwrap(), None);
-    fs::remove_file(snapshots.join(format!("{snapshot}.smtp"))).unwrap();
+    // Check both a running worker's next reservation and a newly started process.
+    fs::remove_file(&fixture.snapshot_path).unwrap();
     assert!(
         !worker::dispatch_one(
             &db,
@@ -333,15 +407,19 @@ async fn notifier_with_active_w4_and_unavailable_snapshot_keeps_outbox_intact() 
         .await
         .unwrap()
     );
-    assert_idle(
-        &mut command,
+    assert_idle_startup(
+        &mut fixture.command,
         SNAPSHOT_REQUIRED,
         Some(Signal::TERM),
-        &[&marker],
+        &[&fixture.marker],
+        IdleStartup::DatabasePreflight,
     )
     .await;
-    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
-    assert_eq!(delivery_state(&pool).await, before);
+    assert_eq!(
+        fixture.listener.accept().unwrap_err().kind(),
+        ErrorKind::WouldBlock
+    );
+    assert_eq!(delivery_state(&fixture.pool).await, before);
 }
 
 #[tokio::test]
