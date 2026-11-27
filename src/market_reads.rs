@@ -1,6 +1,7 @@
 use crate::{
     AppState, api_error,
     finance::{Fault, Finance},
+    market_types::parse_u64,
 };
 use axum::{
     Json, Router,
@@ -145,6 +146,9 @@ fn check_record(
         || event.product != access.product
         || event.license != access.license
         || !event_version_matches(event)
+        // W2a responses expose the original 1.0/2.0 contract. Reject the whole
+        // page if needed so its cursor never hides an unsupported record.
+        || event.schema_version == models::SchemaVersion::Variant30
     {
         return Err(MarketReadError::InvalidResponse);
     }
@@ -159,8 +163,12 @@ pub(crate) fn event_version_matches(event: &models::Event) -> bool {
         message,
         Message::MessageOneOf(_) | Message::MessageOneOf1(_) | Message::MessageOneOf7(_)
     );
+    let option_history = matches!(
+        message,
+        Message::MessageOneOf8(_) | Message::MessageOneOf9(_)
+    );
     match event.schema_version {
-        models::SchemaVersion::Variant10 => !perpetual_context,
+        models::SchemaVersion::Variant10 => !perpetual_context && !option_history,
         models::SchemaVersion::Variant20 => {
             event.asset_kind == models::AssetKind::Perpetual
                 && event.revision == "0"
@@ -172,6 +180,12 @@ pub(crate) fn event_version_matches(event: &models::Event) -> bool {
                             | Message::MessageOneOf5(_)
                             | Message::MessageOneOf6(_)
                     ))
+        }
+        models::SchemaVersion::Variant30 => {
+            option_history
+                && event.asset_kind == models::AssetKind::Option
+                && event.revision == "0"
+                && event.exchange_ts.as_deref().and_then(parse_u64).is_some()
         }
     }
 }
@@ -362,35 +376,7 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
         (WATERMARKS, WATERMARKS, "marketWatermarks"),
         (FINANCE_GAPS, UPSTREAM_GAPS, "marketFinanceGaps"),
     ] {
-        let mut item = upstream["paths"][source].clone();
-        let operation = &mut item["get"];
-        operation["operationId"] = json!(operation_id);
-        operation["security"] = json!([{"adminBearer": []}, {"adminSession": []}]);
-        let responses = operation["responses"]
-            .as_object_mut()
-            .expect("finance read is a GET operation with responses");
-        responses.remove("500");
-        for (status, description) in [
-            ("401", "Authentication required"),
-            ("403", "Product access denied"),
-            ("429", "Read rate limit exceeded"),
-            ("502", "Finance response error"),
-            ("503", "Finance unavailable"),
-            ("504", "Finance read timed out"),
-        ] {
-            responses.insert(
-                status.into(),
-                json!({
-                    "description": description,
-                    "content": {
-                        "application/json": {
-                            "schema": {"$ref": "#/components/schemas/ErrorBody"}
-                        }
-                    }
-                }),
-            );
-        }
-        spec["paths"][path] = item;
+        register_read_operation(spec, upstream, path, source, operation_id);
     }
 
     let upstream_schemas = upstream["components"]["schemas"]
@@ -441,6 +427,80 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
     ] {
         schemas[name] = upstream_schemas[name].clone();
     }
+    retain_legacy_event_schemas(schemas);
+}
+
+fn retain_legacy_event_schemas(schemas: &mut Value) {
+    let is_option_history = |kind: &Value| {
+        matches!(
+            kind.as_str(),
+            Some("option_history_trade" | "option_history_quote")
+        )
+    };
+    schemas["SchemaVersion"]["enum"]
+        .as_array_mut()
+        .expect("finance event versions")
+        .retain(|version| matches!(version.as_str(), Some("1.0" | "2.0")));
+    schemas["Message"]["oneOf"]
+        .as_array_mut()
+        .expect("finance event messages")
+        .retain(|message| !is_option_history(&message["properties"]["kind"]["enum"][0]));
+    // The upstream Event intersects the envelope and tagged message with
+    // a final version-specific constraint. Preserve the two W6 branches.
+    let constraints = schemas["Event"]["allOf"][2]["oneOf"]
+        .as_array_mut()
+        .expect("finance event version constraints");
+    constraints.retain(|rule| {
+        matches!(
+            rule["properties"]["schema_version"]["const"].as_str(),
+            Some("1.0" | "2.0")
+        )
+    });
+    constraints
+        .iter_mut()
+        .find(|rule| rule["properties"]["schema_version"]["const"] == "1.0")
+        .expect("finance event version 1.0")["properties"]["kind"]["not"]["enum"]
+        .as_array_mut()
+        .expect("version 1.0 message exclusions")
+        .retain(|kind| !is_option_history(kind));
+}
+
+pub(crate) fn register_read_operation(
+    spec: &mut Value,
+    upstream: &Value,
+    path: &str,
+    source: &str,
+    operation_id: &str,
+) {
+    let mut item = upstream["paths"][source].clone();
+    let operation = &mut item["get"];
+    operation["operationId"] = json!(operation_id);
+    operation["security"] = json!([{"adminBearer": []}, {"adminSession": []}]);
+    let responses = operation["responses"]
+        .as_object_mut()
+        .expect("finance read is a GET operation with responses");
+    responses.remove("500");
+    for (status, description) in [
+        ("401", "Authentication required"),
+        ("403", "Product access denied"),
+        ("429", "Read rate limit exceeded"),
+        ("502", "Finance response error"),
+        ("503", "Finance unavailable"),
+        ("504", "Finance read timed out"),
+    ] {
+        responses.insert(
+            status.into(),
+            json!({
+                "description": description,
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ErrorBody"}
+                    }
+                }
+            }),
+        );
+    }
+    spec["paths"][path] = item;
 }
 
 #[cfg(test)]

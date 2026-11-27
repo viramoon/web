@@ -7,6 +7,7 @@ use axum::{
 };
 use chrono::Utc;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     fs::OpenOptions,
@@ -18,6 +19,7 @@ use std::{
 };
 use tower::ServiceExt;
 
+mod options;
 mod synthetic;
 use synthetic::*;
 
@@ -339,10 +341,40 @@ fn public_openapi_preserves_f1_composition_and_declares_restricted_reads() {
     let spec = crate::openapi();
     let finance: Value =
         serde_json::from_str(include_str!("../../openapi/finance.openapi.json")).unwrap();
-    for name in ["Event", "Message", "MarketWalPage", "MarketQualityPage"] {
+    let schemas = &spec["components"]["schemas"];
+    for name in [
+        "MarketWalPage",
+        "ProjectedMarketEvent",
+        "WalRecord",
+        "MarketQualityPage",
+    ] {
+        assert_eq!(schemas[name], finance["components"]["schemas"][name]);
+    }
+    // SHA-256 of each sorted, compact JSON schema in 70119a2:openapi/web.openapi.json.
+    // The generated finance snapshot now includes 3.0, so it cannot serve as
+    // the compatibility reference for these legacy response components.
+    for (name, baseline) in [
+        (
+            "Event",
+            "63c145de5d78aec89ff7df667c3f02ffbdefc61f7025419b827ac52a586356a0",
+        ),
+        (
+            "Message",
+            "600e8d31883f5e6676733787de1c3fa4f95176b47fddb82eef4dee480e8fbc9b",
+        ),
+        (
+            "SchemaVersion",
+            "fb53b7e875d10b1df60bed5adbfd1171bc958e6bba750ba93a7427e1f9d439c0",
+        ),
+    ] {
+        let actual = Sha256::digest(serde_json::to_vec(&schemas[name]).unwrap());
+        assert_eq!(format!("{actual:x}"), baseline, "{name}");
+    }
+    for (path, name) in [(WAL, "MarketWalPage"), (PROJECTION, "ProjectedMarketEvent")] {
         assert_eq!(
-            spec["components"]["schemas"][name],
-            finance["components"]["schemas"][name]
+            spec["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            format!("#/components/schemas/{name}")
         );
     }
     for path in [PRODUCTS, WAL, PROJECTION, WATERMARKS, FINANCE_GAPS] {
