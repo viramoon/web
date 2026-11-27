@@ -44,14 +44,37 @@ fn command() -> Result<(), Failure> {
 
 async fn run() -> Result<(), Failure> {
     let get = |key: &str| std::env::var(key).ok();
+    let signal_error = |_| {
+        (
+            "shutdown_signals",
+            "notifier could not register shutdown signals",
+        )
+    };
+    let mut term = signal(SignalKind::terminate()).map_err(signal_error)?;
+    let mut int = signal(SignalKind::interrupt()).map_err(signal_error)?;
+    let stop_signal = async {
+        tokio::select! { _ = term.recv() => {}, _ = int.recv() => {} }
+    };
+
+    let channel = if get("FERTILE_ENABLE_WEB_NOTIFIER").as_deref() == Some("0") {
+        Err("notification delivery is disabled")
+    } else {
+        EmailChannels::from_environment(get).map_err(|error| error.reason())
+    };
+    let channel = match channel {
+        Ok(channel) => channel,
+        Err(reason) => {
+            tracing::warn!(stage = "smtp_configuration", reason, "notifier idle");
+            stop_signal.await;
+            return Ok(());
+        }
+    };
     let policy = NotificationPolicy::from_environment(get).map_err(|_| {
         (
             "notification_policy",
             "invalid notifier policy configuration",
         )
     })?;
-    let channel = EmailChannels::from_environment(get)
-        .map_err(|error| ("smtp_configuration", error.reason()))?;
     let database_url =
         get("DATABASE_URL").ok_or(("database_configuration", "DATABASE_URL is required"))?;
     let db = Database::new(
@@ -61,21 +84,13 @@ async fn run() -> Result<(), Failure> {
     )
     .map_err(|_| ("database_configuration", "invalid DATABASE_URL"))?;
 
-    let signal_error = |_| {
-        (
-            "shutdown_signals",
-            "notifier could not register shutdown signals",
-        )
-    };
-    let mut term = signal(SignalKind::terminate()).map_err(signal_error)?;
-    let mut int = signal(SignalKind::interrupt()).map_err(signal_error)?;
     let (shutdown, stop) = watch::channel(false);
     let running = worker::run(&db, &policy, &channel, stop);
     let worker_error = |_| ("notification_worker", "notifier worker failed");
     tokio::pin!(running);
     tokio::select! {
         result = &mut running => result.map_err(worker_error)?,
-        _ = async { tokio::select! { _ = term.recv() => {}, _ = int.recv() => {} } } => {
+        _ = stop_signal => {
             shutdown.send_replace(true);
             tracing::info!("draining notifier");
             match time::timeout(channel.drain_timeout(), &mut running).await {

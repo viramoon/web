@@ -81,6 +81,12 @@ processes:
   - name: web-notifier
     command: web-notifier
     requires: [PostgreSQL, "/usr/bin/curl (SMTP/SMTPS)", system_ca, linux_proc]
+    startup:
+      supervisor_enable_env: FERTILE_ENABLE_WEB_NOTIFIER
+      supervisor_default_enabled: false
+      idle_when: 直接启动时显式关闭、无可用 SMTP 主槽且无可用备选槽与快照存储，或所配置的快照存储无效
+      idle_behavior: 单次固定空转诊断，无 PostgreSQL 连接、outbox 变更或 SMTP I/O，收到 SIGTERM 或 SIGINT 时以状态码 0 退出
+      documentation: RUNBOOK.md#告警与邮件进程
     delivery_policy:
       manual_silence: 规则或单条告警匹配时暂停领取，到期或解除后按原策略处理
       documentation: docs/api.md#主动静默

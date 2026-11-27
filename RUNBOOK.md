@@ -157,12 +157,17 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 
 ## 告警与邮件进程
 
-先在同一个 web 数据库上执行 `web migrate`，再交由 fertile 的进程管理器启动 `target/release/web-notifier`。进程读取专用的部署环境并使用同一 `DATABASE_URL`。它不监听端口，依赖 Linux `/proc`、系统 CA 和 `/usr/bin/curl` 的 SMTP/SMTPS 支持。SMTP 使用 TLS 1.2 或更高版本，证书与主机名由系统 CA 验证。SIGINT 或 SIGTERM 停止领取新任务。配置快照目录时，最长发送与结算宽限为 78 秒，随后留两秒关闭连接池。部署管理器设置 85 秒停止宽限。
+默认关闭邮件进程。`FERTILE_ENABLE_WEB_NOTIFIER=0` 时，fertile 守护器不会启动 `web-notifier`。需要启用时，先对与 web 共用的 `DATABASE_URL` 执行 `web migrate`，确认专用部署环境中有完整的 SMTP 主槽，包括中继、发件人、本人收件人和中继所需的认证，再在 fertile 设置 `FERTILE_ENABLE_WEB_NOTIFIER=1`。启用后用隔离队列核对一次投递结果。进程不监听端口，依赖 Linux `/proc`、系统 CA 和 `/usr/bin/curl` 的 SMTP/SMTPS 支持。SMTP 使用 TLS 1.2 或更高版本，证书与主机名由系统 CA 验证。
 
-web-notifier 与 web 共用日志过滤器。启动失败时，标准错误的 JSON 事件记录固定的 `stage` 和 `reason`，进程以状态码 1 退出。提高 RUST_LOG 级别仍会过滤第三方追踪。
+如果直接启动二进制时传入 `FERTILE_ENABLE_WEB_NOTIFIER=0`，或缺少可用 SMTP 配置，进程进入安全空转。空转时不连接 PostgreSQL、不领取、结算或延迟任何 outbox 任务、不访问 SMTP。进程在启动时记录一次 `notifier idle`，日志只包含固定阶段和原因。修复 SMTP 配置后重启 notifier 才会重新读取环境并恢复领取，原队列继续应用投递策略。
+
+直接启动需要有效 SMTP 主槽，或有效备选槽和可用快照存储。主、备槽分别要求有效的 `HOST`、`FROM`、`TO` 以及配置的可选字段。只配置快照目录、两个槽都不可用或已配置的快照存储无效时会空转。主槽可用时，备选槽配置不完整只产生固定的槽位不可用日志。已启用的 W4 SMTP 版本继续使用绑定的快照。
+
+SIGINT 或 SIGTERM 让空转进程以状态码 0 退出。正常投递的进程收到同样信号后停止领取新任务，并结算已领取的任务。配置快照目录时，最长发送与结算宽限为 78 秒，随后留两秒关闭连接池。部署管理器设置 85 秒停止宽限。有效 SMTP 已配置时，其他启动失败仍以状态码 1 退出。notifier 与 web 共用日志过滤器，标准错误的 JSON 事件使用固定 `stage` 和 `reason`。提高 `RUST_LOG` 级别仍会过滤第三方追踪。
 
 | notifier 环境变量 | 含义及默认值 |
 | --- | --- |
+| `FERTILE_ENABLE_WEB_NOTIFIER` | fertile 守护器的进程开关，默认 `0`。直接执行且显式传入 `0` 时进入空转 |
 | `DATABASE_URL` | 由部署注入，与 web API 共用 PostgreSQL |
 | `WEB_SMTP_HOST`、`WEB_SMTP_PORT` | 固定中继的主机名或 IP。隐式 TLS 默认端口 465，STARTTLS 默认 587 |
 | `WEB_SMTP_TLS` | `implicit`（默认）或 `starttls` |
@@ -178,13 +183,13 @@ web-notifier 与 web 共用日志过滤器。启动失败时，标准错误的 J
 | `WEB_NOTIFIER_NORMAL_HOURLY_LIMIT`、`WEB_NOTIFIER_URGENT_HOURLY_LIMIT` | 滚动一小时各自允许的投递尝试数，默认普通 6、紧急 2，各允许 1–1000 |
 | `WEB_NOTIFIER_URGENT_BYPASS_QUIET` | 默认 `true`，紧急投递可绕过静默，仍计入紧急额度 |
 
-notifier 在打开或创建快照密钥前核对快照目录与部署给 Web 的静态根及其解析目标。静态根缺失、无效或不可用时，notifier 启动失败。快照路径必须逐级为实际目录，包含符号链接或父目录穿越的路径会被拒绝。静态根可使用部署的 `current` 链接。
+notifier 在打开或创建快照密钥前核对快照目录与部署给 Web 的静态根及其解析目标。配置了快照存储且静态根缺失、无效或不可用时，notifier 空转。快照路径必须逐级为实际目录，包含符号链接或父目录穿越的路径会被拒绝。静态根可使用部署的 `current` 链接。
 
 更新 SMTP 部署槽位后重启 notifier，再创建并测试候选版本。现有活动版本仍使用绑定的加密快照。目录中的 `snapshot.key` 和快照均为 0600 文件。备份与恢复时保留数据库、全部仍被引用的快照和对应密钥，限制密钥访问。升级时，早期 W4 未绑定快照的测试需要重新运行，未绑定的旧活动配置需在补测通过后重新启用才会投递。运维验证可由管理员通过 W4 集成测试，或用新 UUID 通过邮件渠道发起测试，按各接口返回的路径查询。测试邮件占用普通额度，可在静默窗口执行。[API](docs/api.md#告警规则与邮件通知)
 
 | 现象 | 诊断与恢复 |
 | --- | --- |
-| 测试一直 `pending` | 在测试记录中核对 `available_at` 和 `deferrals`，确认进程正在运行且可读取已迁移的目标库 |
+| 测试一直 `pending` | 确认 fertile 已启用 notifier，查看是否有 `notifier idle` 启动日志。投递进程运行时，在测试记录中核对 `available_at` 和 `deferrals`，确认可读取已迁移的目标库 |
 | 投递 `pending` 且最近结果为 `timeout`、`transient` 或 `interrupted` | 查看尝试表、静默和额度，进程按 30 秒起的指数退避自动重试，最多 5 次尝试 |
 | 投递 `failed` | 核对有限错误分类、TLS 证书、部署地址和本机凭据文件权限，修复后使用新 UUID 发测试邮件 |
 | system/status 的 `notifications.state` 为 `degraded` | 管理员可在 `/alerts` 查看一次 SMTP 失效事件与后续恢复。每轮故障后的首次 SMTP 接受都会记录恢复并排入该轮失败尝试汇总，包括上一轮汇总重试成功的情况 |

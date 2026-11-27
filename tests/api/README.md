@@ -6,6 +6,8 @@
 
 告警集成测试使用独立 PostgreSQL Unix socket、固定 UTC 时间和合成不透明 UUID，覆盖事件/outbox 原子性、重放去重、管理员 API、发送结果与策略。发送端用进程内替身。SMTP 参数及超时测试用临时进程替身，覆盖传输结果归类、稳定 Message-ID、凭据文件和固定模板，执行 `cargo test --locked --lib notifications` 可在不启动 PostgreSQL 的情况下运行。
 
+执行 `cargo test --locked --offline --test api notifier_startup` 验证邮件进程的安全空转。测试运行实际二进制，在私有 PostgreSQL Unix socket 中用固定 UUID 和相对数据库时钟构造待处理与遗留发送任务，比较启动前后的 outbox、尝试、延迟和健康记录。合成 SMTP 凭据由测试现场生成的 UUID 构造，回环监听器只检测连接。测试还检查固定日志、无合成私密值回显及 SIGTERM、SIGINT 的退出码。可用 `notifier_idles_before_reading_database_or_worker_policy` 单独验证无需 PostgreSQL 的启动分支。
+
 执行 `cargo test --locked --test api notifications_worker::silence` 验证主动静默。测试现场构造规则、告警和投递，使用相对于数据库测试当天的截止时间、固定的主题 UUID 和进程内 SMTP 替身。覆盖规则静默期间的记录与去重、实例作用范围、时限边界、重叠作用范围、汇总重试、管理员鉴权和静默审计。OpenAPI 路径和权限检查可用 `cargo test --locked --test api openapi_registers_private_silence_operations` 单独运行。
 
 W4 的 SMTP 集成测试使用进程内主、备槽位和临时 PostgreSQL 验证候选失败、显式启用与回滚后选用的投递槽位。行情探测使用固定标的、生成的 UUID、测试时钟和随机回环端口，验证只读证据、禁用 Binance 的零请求和超时后只查原测试。备份与采集缺口测试以合成的 T2b 状态及 F3 计数写入临时目录。文件适配和 rclone 合成往返命令见[本机探测文档](../../docs/local-integration-probes.md#本地验证)。
