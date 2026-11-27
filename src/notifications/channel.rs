@@ -49,6 +49,8 @@ pub enum DeliveryOutcome {
     Transient,
     Rejected,
     ConfigurationError,
+    /// A test could not load its already-bound SMTP configuration.
+    SnapshotUnavailable,
 }
 
 #[derive(Clone, Copy, sqlx::Type)]
@@ -631,7 +633,7 @@ impl NotificationChannel for EmailChannels {
     async fn test_snapshot(&self, snapshot: Uuid, id: Uuid) -> DeliveryOutcome {
         match self.open_snapshot(snapshot).await {
             Some(channel) => channel.test(id).await,
-            None => DeliveryOutcome::ConfigurationError,
+            None => DeliveryOutcome::SnapshotUnavailable,
         }
     }
 
@@ -732,5 +734,7 @@ fn classify(output: &Output) -> DeliveryOutcome {
     }
 }
 
+#[cfg(test)]
+mod snapshot_tests;
 #[cfg(test)]
 mod tests;

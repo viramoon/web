@@ -12,6 +12,8 @@
 
 `notifier_startup::queue` 使用同一套合成任务和两个回环中继。启动前移走候选绑定文件后，测试等待独立 W3 投递和下一条 W3 额度延迟落库，再核对候选完整记录。恢复原文件并重启后检查原中继收到第二次尝试。另一用例用注入时钟验证缺快照目录时遗留候选在第 69、70 秒的处理。`smtp_disable_committed_before_reservation_preserves_the_ordinary_job` 通过 PostgreSQL 锁确认 worker 已到达领取前的额度检查，再由另一个连接提交实际的 SMTP 停用事务。
 
+`cargo test --locked --offline --test api runtime_loss` 覆盖运行中已经绑定及刚绑定的候选。用固定 outbox UUID、数据库时钟和 UUID 生成的 SMTP 合成凭据，在数据库确认绑定后、传输读取前移走加密文件。测试核对待定状态、尝试审计、脱敏日志和退避边界，恢复文件后观察原回环中继连接。中继只接受并关闭连接。
+
 执行 `cargo test --locked --test api notifications_worker::silence` 验证主动静默。测试现场构造规则、告警和投递，使用相对于数据库测试当天的截止时间、固定的主题 UUID 和进程内 SMTP 替身。覆盖规则静默期间的记录与去重、实例作用范围、时限边界、重叠作用范围、汇总重试、管理员鉴权和静默审计。OpenAPI 路径和权限检查可用 `cargo test --locked --test api openapi_registers_private_silence_operations` 单独运行。
 
 W4 的 SMTP 集成测试使用进程内主、备槽位和临时 PostgreSQL 验证候选失败、显式启用与回滚后选用的投递槽位。行情探测使用固定标的、生成的 UUID、测试时钟和随机回环端口，验证只读证据、禁用 Binance 的零请求和超时后只查原测试。备份与采集缺口测试以合成的 T2b 状态及 F3 计数写入临时目录。文件适配和 rclone 合成往返命令见[本机探测文档](../../docs/local-integration-probes.md#本地验证)。
