@@ -96,7 +96,7 @@ async fn assert_idle_startup(
     .await
     .unwrap_or_else(|error| {
         panic!(
-            "notifier did not announce idle startup ({reason}) within {startup_budget:?}: +             {error}\n{}",
+            "notifier did not announce idle startup ({reason}) within {startup_budget:?}: {error}\n{}",
             read_log()
         )
     });
@@ -296,6 +296,15 @@ impl ActiveSnapshotFixture {
             pg,
         }
     }
+
+    fn database(&self) -> Database {
+        Database::new(
+            &self.pg.url(),
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap()
+    }
 }
 
 #[tokio::test]
@@ -367,6 +376,14 @@ async fn notifier_with_active_w4_and_unavailable_snapshot_keeps_outbox_intact() 
     let mut fixture = ActiveSnapshotFixture::create().await;
     let before = delivery_state(&fixture.pool).await;
     fixture.command.env_remove("WEB_SMTP_SNAPSHOT_DIR");
+    let channel =
+        EmailChannels::for_notifier(|key| command_setting(&fixture.command, key)).unwrap();
+    assert_eq!(
+        worker::smtp_idle_reason(&fixture.database(), &channel)
+            .await
+            .unwrap(),
+        Some(SNAPSHOT_REQUIRED)
+    );
     assert_idle_startup(
         &mut fixture.command,
         SNAPSHOT_REQUIRED,
@@ -388,15 +405,14 @@ async fn notifier_with_deleted_active_snapshot_idles_and_keeps_outbox_intact() {
     let before = delivery_state(&fixture.pool).await;
     let channel =
         EmailChannels::for_notifier(|key| command_setting(&fixture.command, key)).unwrap();
-    let db = Database::new(
-        &fixture.pg.url(),
-        Duration::from_secs(2),
-        Duration::from_secs(2),
-    )
-    .unwrap();
+    let db = fixture.database();
     assert_eq!(worker::smtp_idle_reason(&db, &channel).await.unwrap(), None);
     // Check both a running worker's next reservation and a newly started process.
     fs::remove_file(&fixture.snapshot_path).unwrap();
+    assert_eq!(
+        worker::smtp_idle_reason(&db, &channel).await.unwrap(),
+        Some(SNAPSHOT_REQUIRED)
+    );
     assert!(
         !worker::dispatch_one(
             &db,

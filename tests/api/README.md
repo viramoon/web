@@ -8,7 +8,7 @@
 
 执行 `cargo test --locked --offline --test api notifier_startup` 验证邮件进程的安全空转。测试运行实际二进制，在私有 PostgreSQL Unix socket 中用固定 UUID 和相对数据库时钟构造待处理与遗留发送任务，比较启动前后的 outbox、尝试、延迟和健康记录。回归用例覆盖无活动 W4 版本、主槽缺收件人、备选槽与快照存储可用时的队列保留。合成 SMTP 凭据由测试现场生成的 UUID 构造，回环监听器只检测连接。测试还检查固定日志、无合成私密值回显及 SIGTERM、SIGINT 的退出码。`notifier_idles_before_reading_database_or_worker_policy` 和 `notifier_with_only_secondary_smtp_idles_before_opening_snapshot_storage` 无需 PostgreSQL 即可验证启动判定。
 
-活动 W4 测试用 notifier 的快照代码在临时目录生成绑定，再在临时数据库标记为活动版本。移除快照目录设置与删除绑定文件分别使用独立的数据库和子进程，核对队列保留并验证领取前重新检查。需查询数据库的用例为启动日志预留进程启动和只读预检的各五秒预算，退出码和队列断言沿用原条件。移除主槽后，实际二进制应连接原绑定的回环监听器，更新后的备选槽监听器应保持零连接。可单独运行 `active_smtp_route_requires_and_loads_the_bound_snapshot` 离线验证传输选择和解密。
+活动 W4 测试用 notifier 的快照代码在临时目录生成绑定，再在临时数据库标记为活动版本。移除快照目录设置与删除绑定文件分别使用独立的数据库和子进程。测试先核对只读预检的固定空转原因，再验证进程日志、退出码和队列保留。需查询数据库的用例为进程启动和只读预检各预留五秒。移除主槽后，实际二进制应连接原绑定的回环监听器，更新后的备选槽监听器应保持零连接。可单独运行 `active_smtp_route_requires_and_loads_the_bound_snapshot` 离线验证传输选择和解密，用 `cargo test --locked --offline --bin web-notifier` 验证异步预检返回空转后发布日志并等待关停。
 
 执行 `cargo test --locked --test api notifications_worker::silence` 验证主动静默。测试现场构造规则、告警和投递，使用相对于数据库测试当天的截止时间、固定的主题 UUID 和进程内 SMTP 替身。覆盖规则静默期间的记录与去重、实例作用范围、时限边界、重叠作用范围、汇总重试、管理员鉴权和静默审计。OpenAPI 路径和权限检查可用 `cargo test --locked --test api openapi_registers_private_silence_operations` 单独运行。
 

@@ -159,7 +159,7 @@ web 将新凭据封装为 JWE Compact，使用 `RSA-OAEP-256` 和 `A256GCM`。06
 
 默认关闭邮件进程。`FERTILE_ENABLE_WEB_NOTIFIER=0` 时，fertile 守护器不会启动 `web-notifier`。需要启用时，先对与 web 共用的 `DATABASE_URL` 执行 `web migrate`，确认专用部署环境中有完整的 SMTP 主槽，包括中继、发件人、本人收件人和中继所需的认证，再在 fertile 设置 `FERTILE_ENABLE_WEB_NOTIFIER=1`。启用后用隔离队列核对一次投递结果。进程不监听端口，依赖 Linux `/proc`、系统 CA 和 `/usr/bin/curl` 的 SMTP/SMTPS 支持。SMTP 使用 TLS 1.2 或更高版本，证书与主机名由系统 CA 验证。
 
-如果直接启动二进制时传入 `FERTILE_ENABLE_WEB_NOTIFIER=0`，或本机缺少任何可能可用的 SMTP 配置，进程在连接 PostgreSQL 前进入安全空转。否则启动时只读检查数据库选择的 SMTP 配置。所需配置不可用时，进程记录一次 `notifier idle`，诊断使用固定阶段和原因。空转保留 outbox、尝试、延迟和投递健康记录，无 SMTP 请求。修复配置后重启，原队列继续应用投递策略。
+如果直接启动二进制时传入 `FERTILE_ENABLE_WEB_NOTIFIER=0`，或本机缺少任何可能可用的 SMTP 配置，进程在连接 PostgreSQL 前进入安全空转。否则启动时只读检查数据库选择的 SMTP 配置。本机配置和数据库预检判定空转时都先记录一次 `notifier idle`，再等待停止信号。诊断使用固定阶段和原因。空转保留 outbox、尝试、延迟和投递健康记录，无 SMTP 请求。修复配置后重启，原队列继续应用投递策略。
 
 尚未启用 W4 SMTP 版本时，普通任务和独立渠道测试依赖主槽。主槽要求有效的 `WEB_SMTP_HOST`、`WEB_SMTP_FROM`、`WEB_SMTP_TO` 以及配置的可选字段。此时仅配置备选槽和快照目录会空转。启用 W4 后，普通任务与独立渠道测试使用活动版本绑定的快照。保留 `WEB_SMTP_SNAPSHOT_DIR`、对应密钥和可读取解密的绑定文件后，移除主槽并重启仍可投递。缺目录、缺文件或快照无法解密时，保留原队列并等待恢复。备选槽用于创建 W4 候选快照，空目录在主槽缺失时不会生成新密钥。
 
