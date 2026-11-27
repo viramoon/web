@@ -110,11 +110,13 @@ curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 
 在 HTTPS 入口的 web 进程环境设置 `WEB_PUBLIC_ORIGIN`，如 `https://fertile.viramoon.com`。Origin 包含协议、主机和非默认端口，省略尾部斜杠。保留 `WEB_ADMIN_TOKEN_FILE` 供会话登录和脚本鉴权。可用 `WEB_ADMIN_SESSION_TTL_SECONDS` 设置 1 至 900 秒的会话期限，默认 900 秒。
 
+本地运行时可省略 `WEB_PUBLIC_ORIGIN`，使用 `http://127.0.0.1:8090` 或 `http://localhost:8090` 打开终端，并沿用所选主机与端口登录、调用 REST 和接收 SSE、WebSocket。请使用支持回环 HTTP 上 Secure Cookie 的浏览器，入口代理应保留原始 `Host` 和 `Origin`。写入仍需同源 `Origin` 与 `X-CSRF-Token`。同源 REST GET 和 EventSource 在省略 `Origin` 时依靠浏览器的 `Sec-Fetch-Site: same-origin`。
+
 浏览器以 Bearer 登录并接收 HttpOnly Cookie。页面使用返回的 CSRF token 执行同源写入，可从能力接口恢复 CSRF token。退出立即撤销该会话。管理 Bearer 轮换或进程重启后，浏览器重新登录。W1 的会话状态保存在单个 web 进程中。
 
 ## 行情网关与运维事件
 
-升级前按既有方式备份 PostgreSQL，再执行 `web migrate` 或启用默认自动迁移。迁移 `20261127040000` 创建自选表，备份和恢复应包含该表。只使用受控的 `FINANCE_BASE_URL` 及管理员会话或 bearer。浏览器经 `WEB_PUBLIC_ORIGIN` 同源访问。WAL 和投影事件正文须同时具备 finance 本机记录与显示许可。保留部署侧的 IBKR paper 只读配置，行情网关读取既有 finance 契约。
+升级前按既有方式备份 PostgreSQL，再执行 `web migrate` 或启用默认自动迁移。迁移 `20261127040000` 创建自选表，备份和恢复应包含该表。只使用受控的 `FINANCE_BASE_URL` 及管理员会话或 bearer。浏览器通过已配置的 HTTPS 入口或本地回环地址同源访问。WAL 和投影事件正文须同时具备 finance 本机记录与显示许可。保留部署侧的 IBKR paper 只读配置，行情网关读取既有 finance 契约。
 
 `/api/v1/events` 使用现有 web 端口。入口代理应关闭 SSE 响应缓冲并允许 15 秒心跳，转发 `Last-Event-ID`。收到 `reset` 时从受保护的 REST 路径重取快照，断线后 EventSource 会携带最近游标重连。进程重启清空 SSE 回放，进程退出时主动关闭流。无效或过期的会话需重新登录。避免采集流正文、查询参数、身份头和付费数据。
 

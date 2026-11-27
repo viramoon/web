@@ -14,10 +14,10 @@
       "source": "运行 cargo test --locked --offline market_stream::replay。用固定时钟、十进制和超出 JavaScript 安全整数的序号构造合成快照、增量、重置和永续合约上下文。"
     },
     "src/market_stream/transport_tests.rs": {
-      "sha256": "081cbb4a16ef523f766e26c799b37b1466c8ebe5335c0c5e67706ef1400be538",
+      "sha256": "2345298af5ca21ff6a600618947d5437eab0d963e55136bc88112c3d652d5627",
       "generator": "src/market_stream/fixture.rs",
       "seed": "fixed",
-      "source": "运行 cargo test --lib --locked --offline websocket_。通过随机数字回环端口投递固定 F1 快照和 WAL 位置，验证浏览器升级、许可、续接、重置与额度。"
+      "source": "运行 cargo test --lib --locked --offline websocket_。通过随机数字回环端口投递固定 F1 快照和 WAL 位置，验证两种回环 Host 的浏览器会话升级、许可、续接、重置与额度。"
     },
     "tests/api/database.rs": {
       "sha256": "ae247ff845a2bf689d49afe4b0544167f0b1943fc6ca3c9ef7033996cb33f37f",
