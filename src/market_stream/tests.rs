@@ -9,6 +9,7 @@ use axum::{
     body::{Body, to_bytes},
     extract::Query,
     http::{HeaderMap, HeaderValue, Request, StatusCode, header, request::Builder},
+    response::Response,
     routing::get,
 };
 use chrono::Utc;
@@ -474,5 +475,7 @@ async fn market_stream_application_connects_to_synthetic_finance_and_filters_dis
     server.abort();
 }
 
+#[path = "transport_rejection_tests.rs"]
+mod transport_rejection_tests;
 #[path = "transport_tests.rs"]
 mod transport_tests;
