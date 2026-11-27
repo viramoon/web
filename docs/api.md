@@ -81,10 +81,10 @@ GET /api/v1/backtests/datasets 返回标的日历、来源和首尾日期。SmaC
 
 | 方法与路径 | 请求及响应 |
 | --- | --- |
-| `POST /strategies/validate` | 接受 `StrategyDocument`，即 `{format: "yaml" 或 "json", content: "<UTF-8 文件正文>"}`。200 返回 `StrategyPreview`，包含策略 ID、版本、内容哈希和 `CompiledPlan` |
+| `POST /strategies/validate` | 接受 `StrategyDocument`，即 `{format: "yaml" 或 "json", content: "<UTF-8 文件正文>"}`。200 返回 `StrategyBundlePreview`，包含策略 ID、版本、内容哈希和 `CompiledPlan` |
 | `POST /strategies` | 接受同一文档，200 返回 `RegisteredStrategy`。同一 ID 和版本可重交同一规范化内容，异内容为 409 |
 | `GET /strategies` | 可按 `id` 筛选，`limit` 为 1 至 100，默认 20，`after` 使用上页的 `next_cursor`。返回 `StrategyVersionPage` |
-| `GET /strategies/{id}/versions/{version}` | 返回 `StrategyPreview`，按该版本固定的输入元数据编译。未登记时返回 404 |
+| `GET /strategies/{id}/versions/{version}` | 返回 `StrategyBundlePreview`，按该版本固定的输入元数据编译。未登记时返回 404 |
 | `GET /factors` | 读取 `FactorReadPage`。可按 `factor_id`、`version` 筛选，使用 `limit` 和 `after` 翻页 |
 | `GET /factors/{id}/evaluations` | 读取 `FactorEvaluationPage`。可按 `version` 筛选，使用 `limit` 和 `after` 翻页 |
 | `GET /factors/{id}/evaluations/{evaluation_id}` | 必填查询参数 `version`，返回 `FactorEvaluationDetail`。未发布该版本评价时返回 404 |

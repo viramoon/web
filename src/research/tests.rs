@@ -720,6 +720,26 @@ fn research_openapi_has_private_routes_and_no_dangling_schema_references() {
         spec["paths"][JOBS]["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/SubmitRequest"
     );
+    for (path, method) in [(VALIDATE, "post"), (VERSION, "get")] {
+        assert_eq!(
+            spec["paths"][path][method]["responses"]["200"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            "#/components/schemas/StrategyBundlePreview"
+        );
+    }
+    let schemas = &spec["components"]["schemas"];
+    assert_eq!(
+        schemas["StrategyBundlePreview"]["properties"]["plan"]["$ref"],
+        "#/components/schemas/CompiledPlan"
+    );
+    assert_eq!(
+        schemas["LocalEvidence"]["properties"]["strategy"]["oneOf"][1]["$ref"],
+        "#/components/schemas/StrategyPreview"
+    );
+    assert_eq!(
+        schemas["StrategyPreview"]["properties"]["execution_model"]["$ref"],
+        "#/components/schemas/ExecutionModel"
+    );
     let paths = spec["paths"].as_object().unwrap();
     for path in [
         "/api/v1/decisions/signals",

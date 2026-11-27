@@ -5398,6 +5398,21 @@
 ],
 "type": "object"
 },
+"StrategyBundlePreview": {
+"properties": {
+"plan": {
+"$ref": "#/components/schemas/CompiledPlan"
+},
+"strategy": {
+"$ref": "#/components/schemas/RegisteredStrategy"
+}
+},
+"required": [
+"strategy",
+"plan"
+],
+"type": "object"
+},
 "StrategyDocument": {
 "additionalProperties": false,
 "properties": {
@@ -5453,17 +5468,43 @@
 "type": "object"
 },
 "StrategyPreview": {
+"additionalProperties": false,
 "properties": {
-"plan": {
-"$ref": "#/components/schemas/CompiledPlan"
+"content_sha256": {
+"pattern": "^[0-9a-f]{64}$",
+"type": "string"
 },
-"strategy": {
-"$ref": "#/components/schemas/RegisteredStrategy"
+"execution_model": {
+"$ref": "#/components/schemas/ExecutionModel"
+},
+"factors": {
+"minimum": 0,
+"type": "integer"
+},
+"modules": {
+"minimum": 0,
+"type": "integer"
+},
+"plan_version": {
+"$ref": "#/components/schemas/PlanVersion"
+},
+"sleeves": {
+"minimum": 0,
+"type": "integer"
+},
+"source_sha256": {
+"pattern": "^[0-9a-f]{64}$",
+"type": "string"
 }
 },
 "required": [
-"strategy",
-"plan"
+"plan_version",
+"execution_model",
+"source_sha256",
+"content_sha256",
+"factors",
+"modules",
+"sleeves"
 ],
 "type": "object"
 },
@@ -14216,7 +14257,7 @@
 "content": {
 "application/json": {
 "schema": {
-"$ref": "#/components/schemas/StrategyPreview"
+"$ref": "#/components/schemas/StrategyBundlePreview"
 }
 }
 },
@@ -14343,7 +14384,7 @@
 "content": {
 "application/json": {
 "schema": {
-"$ref": "#/components/schemas/StrategyPreview"
+"$ref": "#/components/schemas/StrategyBundlePreview"
 }
 }
 },

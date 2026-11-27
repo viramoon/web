@@ -346,7 +346,16 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
         spec["paths"][path] = item;
     }
 
-    let schemas = &mut spec["components"]["schemas"];
+    // W4 integration evidence already uses the name StrategyPreview.
+    for (path, method) in [(VALIDATE, "post"), (VERSION, "get")] {
+        let reference = &mut spec["paths"][path][method]["responses"]["200"]["content"]["application/json"]
+            ["schema"]["$ref"];
+        assert_eq!(*reference, "#/components/schemas/StrategyPreview");
+        *reference = json!("#/components/schemas/StrategyBundlePreview");
+    }
+    let schemas = spec["components"]["schemas"]
+        .as_object_mut()
+        .expect("web schemas");
     let upstream_schemas = &upstream["components"]["schemas"];
     for name in [
         "Availability",
@@ -379,7 +388,6 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
         "SharpeComparison",
         "StrategyDocument",
         "StrategyFormat",
-        "StrategyPreview",
         "StrategySource",
         "StrategyVersionPage",
         "SubmitRequest",
@@ -388,9 +396,19 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
     ] {
         let schema = &upstream_schemas[name];
         assert!(schema.is_object(), "finance research schema {name}");
-        schemas[name] = schema.clone();
+        let previous = schemas.insert(name.to_owned(), schema.clone());
+        assert!(
+            previous.is_none(),
+            "web already defines research schema {name}"
+        );
     }
-    for source in schemas["StrategySource"]["oneOf"]
+    schemas.insert(
+        "StrategyBundlePreview".into(),
+        upstream_schemas["StrategyPreview"].clone(),
+    );
+    for source in schemas
+        .get_mut("StrategySource")
+        .expect("copied strategy source schema")["oneOf"]
         .as_array_mut()
         .expect("strategy source variants")
     {
