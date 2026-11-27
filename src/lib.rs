@@ -17,6 +17,7 @@ pub mod market_stream;
 mod market_types;
 pub mod notifications;
 mod ops;
+mod research;
 mod spa;
 pub mod telemetry;
 #[cfg(test)]
@@ -75,16 +76,37 @@ pub struct ErrorBody {
 pub struct ErrorDetail {
     pub code: String,
     pub message: String,
+    /// JSON Pointer from the strategy compiler.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<ErrorLocation>,
+}
+
+impl ErrorDetail {
+    fn new(code: &str, message: &str) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            path: None,
+            location: None,
+        }
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ErrorLocation {
+    /// One-based line in the uploaded document.
+    pub line: u64,
+    /// One-based column in the uploaded document.
+    pub column: u64,
 }
 
 pub fn api_error(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
         Json(ErrorBody {
-            error: ErrorDetail {
-                code: code.into(),
-                message: message.into(),
-            },
+            error: ErrorDetail::new(code, message),
         }),
     )
         .into_response()
@@ -287,10 +309,16 @@ async fn check_access(State(s): State<AppState>, req: Request, next: Next) -> Re
         (&Method::GET | &Method::HEAD, path) if is_market_rest(path) => {
             s.write_access.authorize_market_read(headers)
         }
+        (&Method::GET | &Method::HEAD, path) if research::is_private(path) => {
+            s.write_access.authorize_stream(headers, false)
+        }
         (&Method::GET | &Method::HEAD, path) => read_product(path).map_or(Ok(()), |product| {
             s.write_access.check_read(headers, product)
         }),
         (&Method::POST, "/api/v1/backtests") => s.write_access.authorize(headers),
+        (&Method::POST, research::STRATEGIES | research::VALIDATE) => {
+            s.write_access.authorize_same_origin(headers)
+        }
         (&Method::POST, "/api/v1/admin/session") => s.write_access.check_session_creation(headers),
         (&Method::DELETE, "/api/v1/admin/session") => {
             s.write_access.check_session_deletion(headers)
@@ -330,6 +358,7 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         .unwrap_or_else(Uuid::new_v4);
     let path = matched_path(&req).unwrap_or("<unmatched>");
     let write_timeout_hint = match (req.method(), path) {
+        (&Method::POST, research::STRATEGIES) => Some(research::REGISTER_TIMEOUT_HINT),
         (&Method::PUT, watchlists::WATCHLIST) => {
             Some("Watchlist update outcome unknown. Read the current revision before retrying")
         }
@@ -372,9 +401,14 @@ async fn request_controls(State(s): State<AppState>, mut req: Request, next: Nex
         || notification_http::is_private(path)
         || is_market_rest(path)
         || is_stream(path)
+        || research::is_private(path)
         || matches!(
             path,
-            "/api/v1/backtests/by-key" | "/api/v1/admin/session" | "/api/v1/me/capabilities"
+            "/api/v1/backtests"
+                | "/api/v1/backtests/{id}"
+                | "/api/v1/backtests/by-key"
+                | "/api/v1/admin/session"
+                | "/api/v1/me/capabilities"
         );
     let method = match *req.method() {
         Method::GET
@@ -455,6 +489,7 @@ fn router_with_market_preferences(
         .route("/api/v1/backtests/{id}", get(backtests::detail))
         .route("/api/v1/backtests/by-key", get(backtests::by_key))
         .route("/api/v1/backtests/datasets", get(backtests::datasets))
+        .merge(research::routes())
         .route("/api/v1/market/status", get(market::status))
         .route(
             "/api/v1/admin/session",
@@ -542,6 +577,7 @@ fn with_controls(routes: Router<AppState>, s: AppState) -> Router {
     components(schemas(
         ErrorBody,
         ErrorDetail,
+        ErrorLocation,
         Check,
         Health,
         WebStatus,
@@ -589,6 +625,7 @@ pub fn openapi() -> serde_json::Value {
             .expect("checked-in finance OpenAPI is valid");
     market_reads::register_openapi(&mut spec, &upstream);
     market_options::register_openapi(&mut spec, &upstream);
+    research::register_openapi(&mut spec, &upstream);
     let schemas = upstream["components"]["schemas"]
         .as_object()
         .expect("finance schemas");

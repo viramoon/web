@@ -136,6 +136,12 @@
         ],
         "type": "object"
       },
+      "BacktestVisibility": {
+        "enum": [
+          "legacy"
+        ],
+        "type": "string"
+      },
       "BarProvenance": {
         "additionalProperties": false,
         "properties": {
@@ -6490,6 +6496,15 @@
             "schema": {
               "format": "int64",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Use legacy for public DemoStrategy and SmaCrossover jobs. Omit for the full queue.",
+            "in": "query",
+            "name": "visibility",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/BacktestVisibility"
             }
           }
         ],

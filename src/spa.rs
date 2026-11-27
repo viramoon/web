@@ -19,6 +19,20 @@ enum PathKind {
     Page,
 }
 
+fn is_strategy_id(id: &[u8]) -> bool {
+    // F2 StrategyBundle IDs allow up to eight lowercase components.
+    id.split(|&byte| byte == b'.').count() <= 8
+        && id.split(|&byte| byte == b'.').all(|part| {
+            (1..=63).contains(&part.len())
+                && part[0].is_ascii_lowercase()
+                && part[1..].iter().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                })
+        })
+}
+
 fn classify_path(path: &str) -> PathKind {
     let decoded: Cow<'_, [u8]> = percent_decode_str(path).into();
     let mut segments = decoded
@@ -34,6 +48,14 @@ fn classify_path(path: &str) -> PathKind {
     }
     if first == b"NOTICE" && segments.clone().nth(1).is_none() {
         return PathKind::RootNotice;
+    }
+    if first == b"strategies" {
+        let mut parts = segments.clone().skip(1);
+        if let (Some(id), None) = (parts.next(), parts.next())
+            && is_strategy_id(id)
+        {
+            return PathKind::Page;
+        }
     }
     let filename = segments.next_back().unwrap_or_default();
     if matches!(first, b"assets" | b"static" | b"third-party")

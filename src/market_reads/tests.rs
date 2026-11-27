@@ -389,6 +389,22 @@ fn public_openapi_preserves_f1_composition_and_declares_restricted_reads() {
 }
 
 #[test]
+fn option_history_evidence_is_rejected_at_the_display_boundary() {
+    let payload = json!({
+        "batch":{"requested_start_ts":"1","page":"1","occurrence":"1","request_id":null},
+        "price":PRICE,"quantity":SIZE,"contract_multiplier":"100","exchange":"XTEST",
+        "special_conditions":"","condition_mapping_version":"fixture-v1","past_limit":false,"unreported":false
+    });
+    let mut wire = event("option_history_trade", payload);
+    wire["asset_kind"] = json!("option");
+    for version in ["1.0", "2.0", "3.0"] {
+        wire["schema_version"] = json!(version);
+        let event: models::Event = serde_json::from_value(wire.clone()).unwrap();
+        assert!(!event_version_matches(&event), "{version}");
+    }
+}
+
+#[test]
 fn public_openapi_keeps_new_event_components_and_existing_chart_routes() {
     let spec = crate::openapi();
     let finance: Value =

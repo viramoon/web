@@ -31,6 +31,12 @@ JOB = {
     "id": JOB_ID, "request": INPUT, "status": "succeeded", "attempt": 1,
     "created_at": INPUT["start"], "summary": SUMMARY,
 }
+LATER_JOB = {**JOB, "id": JOB_ID + 1}
+PRIVATE_JOB = {**JOB, "id": JOB_ID - 1, "request": {
+    "strategy": "StrategyBundle", "start": INPUT["start"], "end": INPUT["end"],
+    "source": {"kind": "registered", "id": "synthetic.momentum", "version": "1.0.0"},
+    "content_sha256": "1" * 64,
+}}
 
 
 def request(port, path, method="GET", headers=None, data=None):
@@ -107,8 +113,18 @@ class Finance(BaseHTTPRequestHandler):
             else:
                 self.respond(404, {"error": {"code": "job_not_found", "message": "No job for this key"}})
         elif url.path == JOBS:
-            self.server.pagination = parse_qs(url.query)
-            self.respond(200, {"items": [JOB], "next_cursor": JOB_ID})
+            query = parse_qs(url.query)
+            self.server.list_queries.append(query)
+            self.server.pagination = {key: value for key, value in query.items() if key in ("limit", "cursor")}
+            limit = int(query.get("limit", [20])[0])
+            cursor = int(query.get("cursor", [0])[0])
+            jobs = (PRIVATE_JOB, JOB, LATER_JOB)
+            if query.get("visibility") == ["legacy"]:
+                jobs = tuple(job for job in jobs if job["request"]["strategy"] in ("DemoStrategy", "SmaCrossover"))
+            items = [job for job in jobs if job["id"] > cursor]
+            page = items[:limit]
+            next_cursor = page[-1]["id"] if len(items) > limit else None
+            self.respond(200, {"items": page, "next_cursor": next_cursor})
         elif url.path == f"{JOBS}/{JOB_ID}":
             self.respond(200, JOB)
         else:
@@ -129,8 +145,22 @@ def read_routes(port, mock):
     assert request(port, f"{JOBS}/datasets")[::2] == (200, {"items": []})
     assert request(port, f"{JOBS}/{JOB_ID}")[2] == JOB
     code, _, page = request(port, JOBS + "?limit=7&cursor=19")
-    assert code == 200 and page == {"items": [JOB], "next_cursor": JOB_ID}
+    assert code == 200 and page == {"items": [JOB, LATER_JOB], "next_cursor": None}
     assert mock.pagination == {"limit": ["7"], "cursor": ["19"]}
+    assert mock.list_queries == [{"limit": ["7"], "cursor": ["19"], "visibility": ["legacy"]}]
+    code, _, page = request(port, JOBS + "?limit=1&cursor=19")
+    assert code == 200 and page == {"items": [JOB], "next_cursor": JOB_ID}
+    cursor = page["next_cursor"]
+    assert type(cursor) is int and 0 <= cursor <= 2**53 - 1
+    assert len(mock.list_queries) == 2
+    assert mock.list_queries[-1] == {"limit": ["1"], "cursor": ["19"], "visibility": ["legacy"]}
+    code, _, page = request(port, f"{JOBS}?limit=1&cursor={cursor}")
+    assert code == 200 and page == {"items": [LATER_JOB], "next_cursor": None}
+    code, _, page = request(port, f"{JOBS}?limit=1&cursor={JOB_ID}")
+    assert code == 200 and page == {"items": [LATER_JOB], "next_cursor": None}
+    assert mock.pagination == {"limit": ["1"], "cursor": [str(JOB_ID)]}
+    assert len(mock.list_queries) == 4
+    assert mock.list_queries[2:] == [{"limit": ["1"], "cursor": [str(JOB_ID)], "visibility": ["legacy"]}] * 2
     error(request(port, f"{JOBS}/99"), 404)
     code, _, market = request(port, MARKET)
     assert code == 200 and market == mock.market
@@ -251,6 +281,7 @@ if __name__ == "__main__":
         mock.env_decoy = secrets.token_urlsafe(32)
         mock.resume = threading.Event()
         mock.submissions = []
+        mock.list_queries = []
         mock.lock = threading.Lock()
         mock.auth_forwarded = threading.Event()
         mock.market = {"state": "degraded", "source": "replay", "max_age_seconds": 120,

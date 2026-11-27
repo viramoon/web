@@ -1,4 +1,4 @@
-use crate::{AppState, ErrorBody, api_error};
+use crate::{AppState, ErrorBody, api_error, finance::Fault, research};
 use axum::{
     Json,
     extract::{
@@ -15,9 +15,19 @@ use finance_client::{
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+const DEFAULT_PAGE_LIMIT: u32 = 20;
+const MAX_PAGE_LIMIT: u32 = 100;
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Submission {
+    Legacy(LegacySubmission),
+    Bundle(BundleSubmission),
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Submission {
+pub(crate) struct LegacySubmission {
     strategy: String,
     instrument: String,
     start: String,
@@ -25,7 +35,7 @@ pub(crate) struct Submission {
     params: Map<String, Value>,
 }
 
-impl Submission {
+impl LegacySubmission {
     fn into_request(self) -> Option<models::JobRequest> {
         if self
             .params
@@ -48,9 +58,71 @@ impl Submission {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Pagination {
+pub(crate) struct BundleSubmission {
+    strategy: models::BundleStrategy,
+    start: String,
+    end: String,
+    source: Source,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum Source {
+    Inline {
+        format: models::StrategyFormat,
+        content: String,
+    },
+    Registered {
+        id: String,
+        version: String,
+    },
+}
+
+impl BundleSubmission {
+    fn into_request(self) -> Option<models::BundleSubmission> {
+        let source = match self.source {
+            Source::Inline { format, content } => {
+                if content.len() > research::MAX_DOCUMENT_BYTES {
+                    return None;
+                }
+                let source = models::StrategySourceOneOf::new(
+                    content,
+                    format,
+                    models::strategy_source_one_of::Kind::Inline,
+                );
+                models::StrategySource::StrategySourceOneOf(Box::new(source))
+            }
+            Source::Registered { id, version } => {
+                let source = models::StrategySourceOneOf1::new(
+                    id,
+                    models::strategy_source_one_of_1::Kind::Registered,
+                    version,
+                );
+                models::StrategySource::StrategySourceOneOf1(Box::new(source))
+            }
+        };
+        Some(models::BundleSubmission::new(
+            self.end,
+            source,
+            self.start,
+            self.strategy,
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ListQuery {
     limit: Option<u32>,
     cursor: Option<i64>,
+}
+
+impl ListQuery {
+    fn valid(self) -> bool {
+        self.limit
+            .is_none_or(|limit| (1..=MAX_PAGE_LIMIT).contains(&limit))
+            && self.cursor.is_none_or(|id| id >= 0)
+    }
 }
 
 fn invalid(message: &str) -> Response {
@@ -66,13 +138,21 @@ fn lookup_key(headers: &HeaderMap) -> Option<&str> {
     })
 }
 
+fn accepted_job(accepted: models::Accepted) -> Result<Json<models::Accepted>, Fault> {
+    if accepted.id > 0 {
+        Ok(Json(accepted))
+    } else {
+        Err(Fault::invalid_response())
+    }
+}
+
 #[utoipa::path(post, path = "/api/v1/backtests", security(("adminBearer" = []), ("adminSession" = [])),
     params(("Idempotency-Key" = String, Header, description="Stable key, 1..128 visible ASCII characters"),
         ("Origin" = Option<String>, Header, description="Required with the session cookie: configured HTTPS origin or matching HTTP loopback origin"),
         ("X-CSRF-Token" = Option<String>, Header, description="Required with the session cookie")),
-    request_body = ref("#/components/schemas/JobRequest"),
+    request_body = ref("#/components/schemas/SubmitRequest"),
     responses((status=202,body=ref("#/components/schemas/Accepted")), (status=401,body=ErrorBody),
-    (status=403,body=ErrorBody),(status=409,body=ErrorBody),(status=413,body=ErrorBody),
+    (status=403,body=ErrorBody),(status=404,body=ErrorBody),(status=409,body=ErrorBody),(status=413,body=ErrorBody),
     (status=422,body=ErrorBody),(status=429,body=ErrorBody),(status=502,body=ErrorBody),
     (status=503,body=ErrorBody),(status=504,body=ErrorBody)))]
 pub(crate) async fn submit(
@@ -84,25 +164,30 @@ pub(crate) async fn submit(
         return invalid("One Idempotency-Key with 1..128 visible ASCII characters is required");
     };
     let input = match body {
-        Ok(Json(input)) => input.into_request(),
+        Ok(Json(Submission::Legacy(input))) => {
+            let Some(input) = input.into_request() else {
+                return invalid("Invalid backtest submission");
+            };
+            models::SubmitRequest::JobRequest(Box::new(input))
+        }
+        Ok(Json(Submission::Bundle(input))) => {
+            let Some(input) = input.into_request() else {
+                return research::document_too_large();
+            };
+            models::SubmitRequest::BundleSubmission(Box::new(input))
+        }
         Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => return e.into_response(),
-        _ => None,
+        Err(_) => return invalid("Invalid backtest submission"),
     };
-    let Some(input) = input else {
-        return invalid("Invalid backtest submission");
-    };
-    let input = models::SubmitRequest::JobRequest(Box::new(input));
-    match s
-        .finance
+    s.finance
         .write(|cfg| {
             let request = input.clone();
             async move { jobs_api::submit(&cfg, key, request).await }
         })
         .await
-    {
-        Ok(accepted) => (StatusCode::ACCEPTED, Json(accepted)).into_response(),
-        Err(e) => e.into_response(),
-    }
+        .and_then(accepted_job)
+        .map(|job| (StatusCode::ACCEPTED, job))
+        .into_response()
 }
 
 #[utoipa::path(get, path = "/api/v1/backtests/by-key", security(("adminBearer" = []), ("adminSession" = [])),
@@ -117,7 +202,7 @@ pub(crate) async fn by_key(State(s): State<AppState>, headers: HeaderMap) -> Res
     s.finance
         .read(|cfg| async move { jobs_api::by_key(&cfg, key).await })
         .await
-        .map(Json)
+        .and_then(accepted_job)
         .into_response()
 }
 
@@ -132,11 +217,19 @@ pub(crate) async fn datasets(State(s): State<AppState>) -> Response {
         .into_response()
 }
 
+fn is_legacy(job: &models::Job) -> bool {
+    matches!(job.request.as_ref(), models::JobRequestView::JobRequest(request)
+        if matches!(request.strategy.as_str(), "DemoStrategy" | "SmaCrossover"))
+}
+
 #[utoipa::path(get, path = "/api/v1/backtests/{id}", params(("id" = i64, Path)),
+    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators.",
+    security((), ("adminBearer" = []), ("adminSession" = [])),
     responses((status=200,body=ref("#/components/schemas/Job")),(status=404,body=ErrorBody),
     (status=422,body=ErrorBody),(status=502,body=ErrorBody),(status=503,body=ErrorBody),(status=504,body=ErrorBody)))]
 pub(crate) async fn detail(
     State(s): State<AppState>,
+    headers: HeaderMap,
     path: Result<Path<i64>, PathRejection>,
 ) -> Response {
     let Ok(Path(id)) = path else {
@@ -145,25 +238,87 @@ pub(crate) async fn detail(
     s.finance
         .read(|cfg| async move { jobs_api::detail(&cfg, id).await })
         .await
-        .map(Json)
+        .map(|job| {
+            detail_response(
+                job,
+                s.write_access.authorize_stream(&headers, false).is_ok(),
+            )
+        })
         .into_response()
 }
 
+fn detail_response(job: models::Job, administrator: bool) -> Response {
+    if !administrator && !is_legacy(&job) {
+        return api_error(StatusCode::NOT_FOUND, "job_not_found", "No such job");
+    }
+    if job.id <= 0 {
+        return Fault::invalid_response().into_response();
+    }
+    Json(job).into_response()
+}
+
 #[utoipa::path(get, path = "/api/v1/backtests",
+    description = "Anonymous readers see DemoStrategy and SmaCrossover jobs. Administrators can read the full queue. A non-null next_cursor is the last returned job id and indicates another visible job.",
+    security((), ("adminBearer" = []), ("adminSession" = [])),
     params(("limit" = Option<u32>, Query, description="1..100, default 20"),
         ("cursor" = Option<i64>, Query, description="Exclusive last id in ascending order")),
     responses((status=200,body=ref("#/components/schemas/Page")),(status=422,body=ErrorBody),
     (status=502,body=ErrorBody),(status=503,body=ErrorBody),(status=504,body=ErrorBody)))]
 pub(crate) async fn list(
     State(s): State<AppState>,
-    query: Result<Query<Pagination>, QueryRejection>,
+    headers: HeaderMap,
+    query: Result<Query<ListQuery>, QueryRejection>,
 ) -> Response {
-    let Ok(Query(p)) = query else {
-        return invalid("Invalid pagination parameters");
+    let query = match query {
+        Ok(Query(query)) if query.valid() => query,
+        _ => return invalid("Invalid pagination"),
     };
-    s.finance
-        .read(|cfg| async move { jobs_api::list(&cfg, p.limit, p.cursor).await })
-        .await
-        .map(Json)
-        .into_response()
+    let administrator = s.write_access.authorize_stream(&headers, false).is_ok();
+    list_page(query, administrator, |query, visibility| async move {
+        s.finance
+            .read(|cfg| async move {
+                jobs_api::list(&cfg, query.limit, query.cursor, visibility).await
+            })
+            .await
+    })
+    .await
+    .map(Json)
+    .into_response()
 }
+
+async fn list_page<Fut>(
+    query: ListQuery,
+    administrator: bool,
+    fetch: impl FnOnce(ListQuery, Option<models::BacktestVisibility>) -> Fut,
+) -> Result<models::Page, Fault>
+where
+    Fut: Future<Output = Result<models::Page, Fault>>,
+{
+    let visibility = (!administrator).then_some(models::BacktestVisibility::Legacy);
+    let page = fetch(query, visibility).await?;
+    if page.items.len() > query.limit.unwrap_or(DEFAULT_PAGE_LIMIT) as usize {
+        return Err(Fault::invalid_response());
+    }
+    let mut previous = query.cursor.unwrap_or(0);
+    for job in &page.items {
+        if job.id <= previous || (!administrator && !is_legacy(job)) {
+            return Err(Fault::invalid_response());
+        }
+        previous = job.id;
+    }
+    // A cursor must identify a job actually visible on this page.
+    let next_cursor = page.next_cursor.flatten();
+    if let Some(next) = next_cursor
+        && page.items.last().map(|job| job.id) != Some(next)
+    {
+        return Err(Fault::invalid_response());
+    }
+    // The generated field is optional and nullable. Return an explicit null on the last page.
+    Ok(models::Page {
+        items: page.items,
+        next_cursor: Some(next_cursor),
+    })
+}
+
+#[cfg(test)]
+mod tests;

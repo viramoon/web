@@ -4,4 +4,6 @@
 
 回测作业的提交、详情和分页在 [backtests.rs](../backtests.rs)，市场状态和新鲜度摘要在 [market.rs](../market.rs)。
 
+策略上传校验、注册与版本查询、因子查询和报告在 [research.rs](../research.rs)。StrategyBundle 回测通过原作业入口按键提交。[策略与研究接口](../../docs/api.md#策略与研究)
+
 [auth.rs](../auth.rs) 提供会话与能力查询，[integrations.rs](../integrations.rs) 提供 catalog、配置、凭据与连接测试接口。

@@ -256,10 +256,12 @@ pub async fn list(
     configuration: &configuration::Configuration,
     limit: Option<u32>,
     cursor: Option<i64>,
+    visibility: Option<models::BacktestVisibility>,
 ) -> Result<models::Page, Error<ListError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_query_limit = limit;
     let p_query_cursor = cursor;
+    let p_query_visibility = visibility;
 
     let uri_str = format!("{}/api/v1/backtests", configuration.base_path);
     let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
@@ -269,6 +271,9 @@ pub async fn list(
     }
     if let Some(ref param_value) = p_query_cursor {
         req_builder = req_builder.query(&[("cursor", &param_value.to_string())]);
+    }
+    if let Some(ref param_value) = p_query_visibility {
+        req_builder = req_builder.query(&[("visibility", &param_value.to_string())]);
     }
     if let Some(ref user_agent) = configuration.user_agent {
         req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());

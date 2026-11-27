@@ -2,10 +2,10 @@
   "version": 1,
   "fixtures": {
     "src/market_reads/tests.rs": {
-      "sha256": "70c0084d060ce0d8d104befb0c4446a3f814ca175c2fc934bb4cba54d24095fb",
+      "sha256": "96d59c83bfe18eaed7d5939700ef115798d51f79f70c2a4b421bcf899fac18c6",
       "generator": "src/market_reads/tests/synthetic.rs",
       "seed": "fixed",
-      "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。 W6 用相同固定值构造混合版本 WAL，包含资金费率、持仓量和控制帧。"
+      "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。 W6 用相同固定值构造混合版本 WAL，包含资金费率、持仓量和控制帧。 使用同一组固定十进制与缺省交易所时间验证历史期权事件在旧展示边界的拒绝。"
     },
     "src/market_stream/replay/tests.rs": {
       "sha256": "9854b024eb2cdd8a4154cfa385836021945ef215a532fb1d0d7fb7dd054a074a",
@@ -44,10 +44,10 @@
       "source": "运行 cargo test --locked --offline --lib f10c_。期权、深度、敞口、历史、预算、覆盖和版本 3.0 的证据都在测试运行时构造。"
     },
     "openapi/finance.openapi.json": {
-      "sha256": "0c16e01ecdcc7057d0453b857c3c06ba1889a049efa99625404ece7a34f962ad",
+      "sha256": "a4f855fb35f9883e0ea5de314eec7524459677bb8d9c0dd478ac0a718add69d0",
       "generator": "scripts/gen-finance-client.sh",
-      "seed": "finance main 19eb173751487befc504c78f60bfbb6be68f97e6",
-      "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE 19eb173751487befc504c78f60bfbb6be68f97e6。快照由 finance-api export-openapi 根据 handler 和类型导出，含期权和期权流价量字段的 schema 声明，无行情行或示例。"
+      "seed": "finance main 86dcc8604b6881d648418a25e6cd13c24d4a9b01",
+      "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE 86dcc8604b6881d648418a25e6cd13c24d4a9b01。finance-api 从 handler 和类型导出 F14 的回测可见性筛选以及 F10c、F10d 的期权和期权流 schema，不含行情样本。"
     },
     "src/market_reads/tests/flow.rs": {
       "sha256": "8cdb4c75f61b4cffc5e4acbf4ed1c1e735cd13be67571c61a813e5f469b4dd29",

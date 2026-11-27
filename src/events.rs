@@ -264,8 +264,17 @@ impl Hub {
         }
     }
 
-    async fn run_poller(self: Arc<Self>, state: AppState, mut shutdown: Option<StreamShutdown>) {
+    async fn run_poller(self: Arc<Self>, state: AppState, shutdown: Option<StreamShutdown>) {
         let mut sources = self.sources.lock().await;
+        self.poll_readers(&mut sources.readers(&state), shutdown)
+            .await;
+    }
+
+    async fn poll_readers(
+        &self,
+        readers: &mut [sources::Updates<'_>],
+        mut shutdown: Option<StreamShutdown>,
+    ) {
         loop {
             let next_poll = self.journal().next_poll;
             tokio::select! {
@@ -282,16 +291,17 @@ impl Hub {
                     }
                 }
                 () = tokio::time::sleep_until(next_poll) => {
+                    let deadline = Instant::now() + POLL_INTERVAL;
                     let payloads = tokio::select! {
                         biased;
                         () = wait_for_shutdown(&mut shutdown) => {
                             self.journal().poller_running = false;
                             return;
                         }
-                        payloads = sources.refresh(&state) => payloads,
+                        payloads = sources::ready_batch(readers, deadline) => payloads,
                     };
                     self.publish(payloads);
-                    self.journal().next_poll = Instant::now() + POLL_INTERVAL;
+                    self.journal().next_poll = deadline;
                 }
             }
         }

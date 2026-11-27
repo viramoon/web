@@ -32,6 +32,7 @@ environment:
 finance_http:
   config_section: finance
   contract_notes: docs/api.md#finance-契约版本
+  numeric_loopback_proxy: direct
   cloudbox: {connect_timeout_ms: 3000, request_timeout_ms: 3000, backoff_ms: 150, circuit_failure_threshold: 3, circuit_open_ms: 10000}
   stable: {connect_timeout_ms: 1000, request_timeout_ms: 2000, backoff_ms: 100, circuit_failure_threshold: 5, circuit_open_ms: 5000}
   max_read_retries: 2
@@ -78,6 +79,19 @@ market_gateway:
     max_connections: 16
     max_command_bytes: 4096
   interface: docs/api.md
+strategy_research:
+  finance_contract: openapi/finance.commit
+  access: administrator
+  cache_control: no-store
+  document_max_bytes: 262144
+  strategy_state_owner: finance
+  backtests:
+    submission: /api/v1/backtests
+    lookup: /api/v1/backtests/by-key
+    write_retries: 0
+    anonymous_finance_visibility: legacy
+    anonymous_cursor: last_visible_job_id_int64
+  interface: docs/api.md#策略与研究
 maintenance:
   publish_quality:
     command: web publish-quality INPUTS

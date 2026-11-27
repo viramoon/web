@@ -124,7 +124,11 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 网页出现 502、503、504 时，先查 /api/v1/system/status 中的 finance.ok、latency_ms、circuit，再查 finance 的监听和 ready。熔断打开后等待对应 profile 的 circuit_open_ms，下一次访问会试探，成功后自动恢复。若请求为写操作，超时后先查作业状态，重交时沿用同一幂等键。
 
-finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W9 使用包含 F10d 的锁定契约。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约版本](docs/api.md#finance-契约版本)
+finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W9 使用 F10d 的期权流读取，W2b 的公开回测分页依赖 F14。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约版本](docs/api.md#finance-契约版本)
+
+策略版本、因子快照和幂等队列由 finance 管理。W2b 复用 web 现有配置、数据库、监听端口和进程。
+
+`FINANCE_BASE_URL` 指向数字回环地址（如 `127.0.0.1` 或 `[::1]`）时，web 直接连接 finance，忽略环境代理。
 
 ## 管理员写权限
 
@@ -280,3 +284,16 @@ W5 升级时，停下旧 notifier，保留迁移前快照，在共用 PostgreSQL
 ## 历史回测与提交确认
 
 回测页从 /api/v1/backtests/datasets 读取已审核的历史标的。配置数据后提交 SmaCrossover，并在工作台查看作业状态和历史结果。POST 超时或连接中断后，使用管理员身份和原 Idempotency-Key 请求 GET /api/v1/backtests/by-key。若查到 ID，继续轮询该作业。只有明确返回 404 后才允许带原请求及原键重试。
+
+先上线含 F14 的 finance。在切换 Web 前，用 finance 的内部 `GET /api/v1/backtests?visibility=legacy&limit=1` 确认返回 200。新版 finance API 首次打开已有队列或新版 worker 启动时，会在原 SQLite 队列建立 `jobs_legacy_id` 部分索引。大队列应在此步骤完成建索引。若回滚至 F14 之前的 finance，应配套回滚 Web。
+
+提交与恢复返回的作业 ID 可达 `9223372036854775807`。排查时保留原十进制文本。匿名分页沿用最后一个可见作业的 ID。试用过旧分支临时句柄的客户端可从首页或最后已知公开 ID 重新读取。[分页语义](docs/api.md#作业与行情)
+
+### 策略上传与因子报告
+
+1. 管理员把 UTF-8 文件正文以 `{format, content}` 发送到 `POST /api/v1/strategies/validate`。一次上传最多 256 KiB，413 返回 `body_too_large`。收到编译器 422 时，用 `error.path` 与从 1 起算的 `error.location.line`、`error.location.column` 定位修改。
+2. 校验后用相同正文调用 `POST /api/v1/strategies`。注册超时或连接中断后，先用预览中的 ID 和版本查询 `GET /api/v1/strategies/{id}/versions/{version}`。查询成功时核对 `strategy.content_sha256`，明确 404 后才用原文件注册。409 时读取已有版本，内容变更应使用新版本。
+3. 以 `strategy: "StrategyBundle"`、UTC 午夜起止时间和 `source` 调用原回测提交入口。已登记版本使用 `kind: "registered"`、`id`、`version`，上传使用 `kind: "inline"`、`format`、`content`。若 finance 提示没有回放数据，在 finance 核对编译计划引用的获准数据集和成分版本。
+4. 因子目录和报告来自 finance 已发布的 F8 本机快照。目录为空且 `as_of: null` 时，核对对应快照是否已发布。浏览器按报告的版本、许可、可用时间、覆盖和 `research_only` 等状态展示。旧 `/backtests?job=<id>` 仍加载终端页面，再从作业详情 API 读取结果。
+
+[策略与研究接口](docs/api.md#策略与研究)

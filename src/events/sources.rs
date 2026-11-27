@@ -12,9 +12,14 @@ use finance_client::{
     apis::jobs_api,
     models::{Job, JobStatus},
 };
-use futures_util::future::join_all;
+use futures_util::{
+    StreamExt,
+    future::join_all,
+    stream::{self, BoxStream},
+};
 use serde::Serialize;
 use std::{collections::VecDeque, time::Duration};
+use tokio::time::{Instant, timeout, timeout_at};
 use utoipa::ToSchema;
 
 const ALERT_WINDOW: i64 = 32;
@@ -77,29 +82,57 @@ pub(super) struct Sources {
     backup: Option<BackupUpdate>,
 }
 
+pub(super) type Updates<'a> = BoxStream<'a, Vec<EventPayload>>;
+
 impl Sources {
-    pub(super) async fn refresh(&mut self, state: &AppState) -> Vec<EventPayload> {
-        let timeout = OBSERVATION_TIMEOUT.min(Duration::from_millis(
+    pub(super) fn readers<'a>(&'a mut self, state: &'a AppState) -> [Updates<'a>; 3] {
+        let budget = OBSERVATION_TIMEOUT.min(Duration::from_millis(
             state.config.server.request_timeout_ms,
         ));
-        let (jobs, alerts, backup) = tokio::join!(
-            self.jobs.refresh(state, timeout),
-            tokio::time::timeout(timeout, read_alerts(&state.db)),
-            tokio::time::timeout(timeout, backup_status(State(state.clone()))),
-        );
-        let mut events = jobs;
-        if let Ok(Ok(rows)) = alerts {
-            self.alerts.record(rows, &mut events);
-        }
-        if let Ok(backup) = backup {
-            let observed = BackupUpdate::from(backup.0);
-            if self.backup.as_ref() != Some(&observed) {
-                self.backup = Some(observed.clone());
-                events.push(EventPayload::Backup { backup: observed });
+        let jobs = stream::unfold(&mut self.jobs, move |jobs| async move {
+            Some((jobs.refresh(state, budget).await, jobs))
+        });
+        let alerts = stream::unfold(&mut self.alerts, move |alerts| async move {
+            let mut events = Vec::new();
+            if let Ok(Ok(rows)) = timeout(budget, read_alerts(&state.db)).await {
+                alerts.record(rows, &mut events);
             }
-        }
-        events
+            Some((events, alerts))
+        });
+        let backup = stream::unfold(&mut self.backup, move |last| async move {
+            let mut events = Vec::new();
+            if let Ok(status) = timeout(budget, backup_status(State(state.clone()))).await {
+                let observed = BackupUpdate::from(status.0);
+                if last.as_ref() != Some(&observed) {
+                    *last = Some(observed.clone());
+                    events.push(EventPayload::Backup { backup: observed });
+                }
+            }
+            Some((events, last))
+        });
+        [jobs.boxed(), alerts.boxed(), backup.boxed()]
     }
+}
+
+// Each stream owns its in-flight read. A slow source retains that read across
+// ticks while completed sources publish in job, alert, backup order.
+pub(super) async fn ready_batch(
+    readers: &mut [Updates<'_>],
+    deadline: Instant,
+) -> Vec<EventPayload> {
+    let batches = join_all(
+        readers
+            .iter_mut()
+            .map(|reader| timeout_at(deadline, reader.next())),
+    )
+    .await;
+    let mut events = Vec::new();
+    for batch in batches {
+        if let Ok(Some(updates)) = batch {
+            events.extend(updates);
+        }
+    }
+    events
 }
 
 #[derive(Default)]
@@ -143,7 +176,7 @@ impl Jobs {
                 tokio::time::timeout(
                     timeout,
                     state.finance.read(|cfg| async move {
-                        jobs_api::list(&cfg, Some(discovery_limit), cursor).await
+                        jobs_api::list(&cfg, Some(discovery_limit), cursor, None).await
                     }),
                 )
                 .await

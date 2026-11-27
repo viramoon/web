@@ -22,11 +22,13 @@ CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.opena
 
 ## finance 契约版本
 
-[finance 来源提交](../openapi/finance.commit) 锁定为 finance main 的 `19eb173751487befc504c78f60bfbb6be68f97e6`，包含 F10d 期权流读契约。[finance OpenAPI](../openapi/finance.openapi.json) 还包含策略、作业、研究、决策和 Binance 状态端点。W8 公开 F10c 的[期权和行情所有者读取](#w8-期权场所深度与券商线路)，W9 公开 F10d 的[观察和核验读取](#w9-期权流观察与历史核验)。浏览器的 bars 和指标仍使用 W2a 的 WAL 视图。
+Web 从 finance main 的 `86dcc8604b6881d648418a25e6cd13c24d4a9b01` 生成客户端。W8 接入 F10c 的期权和行情所有者读取，W9 接入 F10d 的期权流观察与核验，W2b 使用 F14 的回测列表可见性筛选。浏览器的 bars 和指标沿用 W2a 的 WAL 视图。[来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json) · [W8 接口](#w8-期权场所深度与券商线路) · [W9 接口](#w9-期权流观察与历史核验)
 
 WAL 与投影 REST 保留 W6 的 1.0 与 2.0 `Event`、`Message` 和 `SchemaVersion`。上游返回 3.0 的 `option_history_trade` 或 `option_history_quote` 时，整条请求返回 `502 finance_invalid_response`，以保留原分页和旧客户端解码行为。原始记录仍须通过本机记录与显示许可检查。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制与大整数文本。市场 WebSocket 只发 1.0 数据帧。web 运维 SSE 使用下文的 `/events` 契约。
 
 同一 finance 提交导出的三个 1.0 读流产物与 W6 逐字节一致。[市场 WS schema](../openapi/finance.market-ws.schema.json) · [行情状态 SSE schema](../openapi/finance.market-status-sse.schema.json) · [合成回放样本](../openapi/finance.read-stream-examples.json)
+
+W2b 使用 F10b 提供的策略校验、版本注册与选择、因子评价和回测接口。作业取消、worker 状态和决策信号保留在 finance 的内部契约中。
 
 web 合并后，frontend 用已合并的 web SHA 更新 `openapi/web.commit`、快照及生成客户端。frontend 合并后，fertile 更新相应 gitlinks 和契约快照，用配套的 finance、web 和 frontend 提交运行 T3 契约比对与隔离复测。[生成及校验流程](../src/finance_client/README.md)
 
@@ -34,7 +36,7 @@ web 合并后，frontend 用已合并的 web SHA 更新 `openapi/web.commit`、�
 
 路由未命中时，解码后首段为 `api` 或 `healthz` 的路径返回 JSON 404，判断时忽略空段和 `.` 段。错误结构为 `error.code`、`error.message`，日志由 `X-Request-Id` 关联。
 
-静态文件以 `WEB_STATIC_ROOT` 为根提供，许可证和声明的 URL 为 `/third-party/lightweight-charts/LICENSE` 和 `/third-party/lightweight-charts/NOTICE`。解码并忽略空段和 `.` 段后，恰为 `/NOTICE` 的 GET 返回同一声明文件的原始正文，声明文件缺失时返回 404。对静态资源和页面，解码后含 `..` 段的 GET、HEAD 在读取文件前返回 404。缺失的 `/assets`、`/static`、`/third-party` 及其子路径返回 404。解码后末段含 `.` 或恰为 `LICENSE`、`NOTICE` 的缺失路径也返回 404。其他有效路径的页面 GET（如 `/dashboard`）在未命中时回退到 `index.html`。完整判定和缓存行为见 [静态托管](../src/static/README.md)。
+静态文件以 `WEB_STATIC_ROOT` 为根提供，许可证和声明的 URL 为 `/third-party/lightweight-charts/LICENSE` 和 `/third-party/lightweight-charts/NOTICE`。解码并忽略空段和 `.` 段后，恰为 `/NOTICE` 的 GET 返回同一声明文件的原始正文，声明文件缺失时返回 404。对静态资源和页面，解码后含 `..` 段的 GET、HEAD 在读取文件前返回 404。缺失的 `/assets`、`/static`、`/third-party` 及其子路径返回 404。有效的 `/strategies/{id}` 允许策略 ID 含点，按页面处理。其他末段含 `.` 或恰为 `LICENSE`、`NOTICE` 的缺失路径返回 404。页面 GET 在未命中时回退到 `index.html`，包括 `/backtests?job=<id>`。[静态托管](../src/static/README.md)
 
 GET /api/v1/backtests/sample 使用锁定版本的 finance 客户端转发回测摘要。pnl 始终是十进制字符串，原始精度与尾零保留。已有示例返回 200，缺失示例保留 finance 的 404 与错误结构。finance 连接失败或熔断打开时返回 503 / finance_unavailable，超时返回 504 / finance_timeout，无效响应或其他上游故障返回 502。所有错误均使用 error.code、error.message。
 
@@ -44,12 +46,20 @@ system/status 的 finance.circuit 为 closed、open 或 half_open。finance 不�
 
 | 方法与路径 | 请求及响应 |
 | --- | --- |
-| POST /api/v1/backtests | 管理员 Bearer 或同源会话。Idempotency-Key 必填，1 至 128 个可见 ASCII 字符。JSON 请求遵循 finance 的 JobRequest。返回 202 与 id。每次最多向 finance 发送一次 |
-| GET /api/v1/backtests/{id} | 公开读取作业，返回状态、请求、结果摘要及错误。不存在时返回 404 |
-| GET /api/v1/backtests | 按 id 递增分页。limit 默认 20，范围 1 至 100，cursor 为上页的 next_cursor。返回 items、next_cursor |
+| POST /api/v1/backtests | 管理员 Bearer 或同源会话。Idempotency-Key 必填，1 至 128 个可见 ASCII 字符。JSON 请求接受原 `JobRequest` 或 `BundleSubmission`。返回 202 与 id。每次最多向 finance 发送一次 |
+| GET /api/v1/backtests/{id} | 返回状态、请求、结果摘要及错误。原有作业可公开读取，StrategyBundle 作业仅管理员可见。找不到或不可见时返回 404 |
+| GET /api/v1/backtests | 按 id 递增分页。limit 默认 20，范围 1 至 100。将上页的 next_cursor 原样传给 cursor。请求和响应游标沿用 JSON 整数，终页的 next_cursor 为 null |
 | GET /api/v1/market/status | 公开读取行情来源、状态、快照时间、最大年龄及逐合约的 stale 与 age_seconds |
 
 POST 写入关闭返回 403，鉴权失败返回 401，超过 token 的滑动窗口限额返回 429 并提供 Retry-After。幂等键冲突保留 409，参数错误返回 422。504 的提交结果未知，同一请求可用原始键重交，已知 id 可直接查询。GET、POST 仅调用内部 finance，不将管理员 token 传给 finance。
+
+作业列表、详情、提交和按键查询返回 `Cache-Control: no-store`。
+
+Web 从当前请求的管理员身份决定列表范围。匿名请求和无效凭据使用 finance 的 `visibility=legacy`，只列出 `DemoStrategy`、`SmaCrossover`。管理员读取完整队列。浏览器可传的分页参数为 `limit` 和 `cursor`。
+
+`cursor` 接受从 0 到 `9223372036854775807` 的任意整数。finance 在可见作业中按 `id > cursor` 升序查询。还有可见作业时，`next_cursor` 等于本页最后一个作业的 ID，末页为 `null`。相同公开作业之间、之前或之后的私有记录均不改变匿名页的内容与游标。
+
+提交、按键恢复、详情和列表均保留完整的 `int64`。JavaScript 客户端读取大于 `2^53−1` 的 JSON 整数时应使用无损整数解析，并将原十进制值传回。[分页实现](architecture.md#finance-http-调用)
 
 system/status 的 market 字段包含 state、fresh、source、updated_at、instrument_count 与 stale_count。仅在状态为 ready、存在合约且均未过期时 fresh 才为 true。finance 可回复但尚未 ready 时，web 仍可读取行情以展示过期原因。应用层不可达时，state 为 unavailable，fresh 为 false。
 
@@ -60,6 +70,26 @@ GET /api/v1/backtests/datasets 返回标的日历、来源和首尾日期。SmaC
 `research.windows` 透传 finance 的 `50y`、`10y`、`5y` 和 `longest_sample` 窗口。`Window` 仅要求 `coverage`。窗口标识、标签、日历边界和诊断、覆盖原因、请求年限及会话计数等字段可省略或为 `null`，web 保留上游写法。`coverage: insufficient` 时，上游缺少有效指标，响应中的 `metrics: null` 表示不可用。
 
 `Window.metrics` 引用 `WindowMetrics`。收益率和最大回撤是精确十进制字符串，年化收益率、夏普比率、波动率和换手率也使用十进制字符串，并允许省略或为 `null`。报告级 `research.metrics` 仍使用 `Metrics`。fertile 更新 web 契约快照后，frontend 应重新生成客户端，处理窗口和指标字段的省略及 `null`，并将不可用指标显示为「不可用」。
+
+## 策略与研究
+
+下表路径使用 `/api/v1` 前缀。所有请求使用 W1 管理员身份，响应带 `Cache-Control: no-store`。会话 POST 需要同源 Origin 和 CSRF token，脚本可使用 Bearer。POST 共用 W1 写入限额，每个请求向 finance 发送一次。正文由 web 直接转发给 finance 编译或注册。
+
+| 方法与路径 | 请求及响应 |
+| --- | --- |
+| `POST /strategies/validate` | 接受 `StrategyDocument`，即 `{format: "yaml" 或 "json", content: "<UTF-8 文件正文>"}`。200 返回 `StrategyBundlePreview`，包含策略 ID、版本、内容哈希和 `CompiledPlan` |
+| `POST /strategies` | 接受同一文档，200 返回 `RegisteredStrategy`。同一 ID 和版本可重交同一规范化内容，异内容为 409 |
+| `GET /strategies` | 可按 `id` 筛选，`limit` 为 1 至 100，默认 20，`after` 使用上页的 `next_cursor`。返回 `StrategyVersionPage` |
+| `GET /strategies/{id}/versions/{version}` | 返回 `StrategyBundlePreview`，按该版本固定的输入元数据编译。未登记时返回 404 |
+| `GET /factors` | 读取 `FactorReadPage`。可按 `factor_id`、`version` 筛选，使用 `limit` 和 `after` 翻页 |
+| `GET /factors/{id}/evaluations` | 读取 `FactorEvaluationPage`。可按 `version` 筛选，使用 `limit` 和 `after` 翻页 |
+| `GET /factors/{id}/evaluations/{evaluation_id}` | 必填查询参数 `version`，返回 `FactorEvaluationDetail`。未发布该版本评价时返回 404 |
+
+文件正文上限为解码后的 256 KiB，以 UTF-8 字节数计。整个 JSON 请求另受 `server.max_body_bytes` 限制，默认 1 MiB。超过任一上限返回 413 `body_too_large`。finance 编译器的 422 响应携带诊断码、消息、JSON Pointer `error.path` 和从 1 起算的 `error.location.line`、`error.location.column`。带定位的注册冲突也保留诊断。校验只生成预览，注册绑定版本，finance 按固定版本和输入元数据读取计划。同一文件的预览与已登记版本在相同输入下返回相同的计划和内容哈希。
+
+`BundleSubmission` 以 `strategy: "StrategyBundle"` 标识。用 `source: {kind: "inline", format, content}` 发送本次文件，或用 `source: {kind: "registered", id, version}` 选择版本。`start` 与 `end` 为 UTC 午夜的半开区间。数据集、成分和口径来自计划中的版本引用。finance 统一编译两种来源并固定回放，同一幂等键、计划内容及时间窗返回同一作业，不同内容或时间窗返回 409。作业详情中的 `BundleRequestView` 返回登记引用和内容哈希。
+
+因子页的 `limit` 为 1 至 100，默认 50，`after` 使用上页的 `next_cursor`。发布快照提供 `as_of`、版本、覆盖、许可、成分范围和可用时间规则。没有已发布快照时，列表返回空 `items` 与 `as_of: null`。报告的成本、收益、IC 等精确数值保留十进制字符串，缺失指标保留 `null`。目录按原值返回 `state`、`tradable` 和 `selectable_for_backtest`，`research_only` 只用于研究展示。[web OpenAPI](../openapi/web.openapi.json)
 
 ## 管理会话与产品权限
 
@@ -73,7 +103,7 @@ Cookie 使用 `HttpOnly; Secure; SameSite=Strict; Path=/`，作用域为当前�
 
 若设置了 `WEB_PUBLIC_ORIGIN`，会话登录和需要 Origin 的请求按该 HTTPS 值精确匹配。省略配置时，用于登录和 Cookie 会话的 Origin 仅允许 `http://127.0.0.1:<port>` 或 `http://localhost:<port>`，主机与显式端口须和唯一的 `Host` 头完全一致。代理转发头不参与判定。受保护的 REST 与 SSE 读取若省略 Origin，须有合法的回环 Host 和唯一的 `Sec-Fetch-Site: same-origin`。若请求携带 `Sec-Fetch-Site`，其值也须是 `same-origin`。WebSocket 握手、登录与写入均要求明确的 Origin。Origin 校验失败返回 403 `origin_rejected`，能力查询按匿名处理。
 
-匿名可见 `system`、`backtests`、`market_status`。管理员额外可见 `backtest_submission`、`integrations`、`restricted_market_data` 和 `notifications`。回测按原键查询、集成读取、通知读取和 W2a 行情网关使用 W1 管理员身份。
+匿名可见 `system`、`backtests`、`market_status`。管理员额外可见 `backtest_submission`、`integrations`、`restricted_market_data`、`notifications` 和 `strategy_research`。回测按原键查询、策略与因子、集成读取、通知读取和 W2a 行情网关使用 W1 管理员身份。
 
 ## 行情、自选与推送
 
@@ -102,6 +132,8 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 `GET /market/subscriptions` 返回进程内单管理员额度 `web.limit`、`web.active` 与 `web.available`。浏览器会话与 bearer 共用 8 个 web 订阅槽。旧客户端可继续按原 schema 读取 `finance_lines: "finance_contract_pending"` 兼容字段。实际券商预算由 W8 的独立接口返回。
 
 `GET /events` 返回 `text/event-stream`。事件数据为含 `schema_version: "1.0"` 和 `kind` 的 JSON，事件名称为 `job`、`alert`、`backup`、`permissions`、`reset`。作业、告警和备份来自现有只读来源，流只给最小状态字段。首次订阅收到权限状态与 `snapshot_required`；客户端通过 REST 取得初始快照。使用 `Last-Event-ID` 接续最近 128 个保留事件，ID 格式为 `<UUID>:<十进制序号>`。游标超出保留窗、进程代际变化、慢端掉队时返回 `cursor_unavailable`，告警窗口溢出返回 `alert_window_overrun`。收到重置后重取快照。流每秒检查空闲会话且在发送数据前重新鉴权，最多同时 16 条连接。
+
+有订阅者时，Web 按三秒周期并发观察作业、告警和备份。已完成的来源在本轮结束时发布，尚在读取的来源跨周期继续，并保留自己的超时。同一轮的事件依次为作业、告警和备份。
 
 `GET /stream/market` 对有效的 WebSocket 升级返回 101。无效升级返回 400，身份或 Origin 校验失败返回 401 或 403，16 条连接已满时返回 429，finance 不可达时返回 503 `finance_unavailable`。finance 的就绪端点实际返回 HTTP 503 且正文符合健康检查契约时，web 将其视为可达但未就绪，仍允许客户端尝试订阅。升级完成后用文本帧发送 `subscribe`，选择源、产品、频道和标的，或显式设置 `use_depth_focus`。每条连接可持有一个订阅。八个共享槽位占满时，后续订阅收到 `subscription_quota_exceeded`。退订、断开、重置或授权失效均释放槽位。
 

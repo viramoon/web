@@ -26,6 +26,8 @@ W4 的 SMTP 集成测试使用进程内主、备槽位和临时 PostgreSQL 验�
 
 W2a 的路由测试使用合成标的、临时管理员凭据和内存路由，检查匿名拒绝、禁止缓存、跨源、focus 设置与清除、共享订阅额度和超大正文。自选测试用临时 PostgreSQL 检查并发 revision、排序和持久性。WAL 测试用固定十进制、时钟与序号验证展示许可、盘口连续性、精度、接续和慢端重置。SSE 测试用内存事件与临时会话验证重连、授权丢失、游标和空窗口告警突发。
 
+`pending_alert_query_does_not_delay_available_sse_observations` 在暂停时钟下挂起告警查询，验证已就绪的备份状态在一个轮询周期内送达。`poller_delivers_queued_backup_and_running_while_a_slow_read_continues` 使用合成作业和耗时七秒的告警读取，检查 SSE 依次交付排队、备份、运行状态，随后交付该次告警读取的结果。
+
 `cargo test --locked --offline --lib f10c_` 用固定时钟、虚构标的和合成十进制数构造期权、深度、敞口、历史、预算及覆盖响应。回环 finance 替身核对查询转发、禁止转发身份头、显示许可和上游错误。进程内用例覆盖匿名、共享节流、边界参数、旧链的 pending、敞口未知情景的本地 503、非法情景的 400 和请求 schema，以及 3.0 事件的时间戳校验。回环用例覆盖混合版本 WAL 和投影的 502 拒绝，以及 5xx 响应的完整错误结构。完整替身测试使用随机本地端口。
 
 `cargo test --locked --offline --lib f10d_` 用固定时钟、合成合约 ID 和精确字符串验证期权流。随机回环端口上的 finance 替身核对两条专用路径和旧入口的窗口、分页、错误及响应原样转发。`f10d_verification_fixtures_match_contract_and_pagination` 在进程内用生成的 F10d 模型校验核验样本，覆盖条件解释对象、正常续页及超大偏移返回空页。其他进程内用例覆盖共享授权与节流、兼容错误、产品许可和 OpenAPI。所有数据来自测试代码中的确定性字面量。
@@ -33,6 +35,10 @@ W2a 的路由测试使用合成标的、临时管理员凭据和内存路由，�
 另执行 `cargo test --locked --offline --lib public_openapi_preserves_f1_composition_and_declares_restricted_reads`，核对旧 WAL 和投影的响应引用，以及 `Event`、`Message`、`SchemaVersion` 与基线 OpenAPI 的哈希。
 
 `cargo test --lib --locked websocket_` 的端到端用例使用两个随机回环端口运行 WebSocket 客户端、web 路由和合成 finance 替身，验证 101 升级、许可拒绝、注销后重连、额度占满、释放和慢端重置。fixture 用固定 F1 记录和临时管理员会话，finance 替身检查浏览器认证头和 Cookie 留在 web。`websocket_wire_handshake_rejects_unauthenticated_and_cross_origin_clients` 还通过进程内双向流发送真实握手请求，验证匿名和跨源请求在升级前分别收到 401 和 403，无需监听 socket。
+
+执行 `cargo test --lib --locked research::tests` 检查 W2b。测试从固定 YAML、UTC 日期、版本、十进制文本和临时随机管理员凭据构造合成请求与报告。选版桩用策略 ID 和版本读取预览，覆盖同一文件的计划一致性、两个不同版本和未登记引用。回环测试还覆盖行列错误、幂等键恢复、旧深链、因子精度和身份边界。路由限额、深链、生成模型、匿名游标及 OpenAPI 引用也有无需 socket 的测试。代理隔离测试在子进程中显式配置临时回环代理并验证 finance 直连。
+
+执行 `cargo test --lib --locked backtests::` 验证 F14 公开分页。合成队列覆盖两个公开作业之间的 301 条私有作业、1,000 条私有前缀，以及最长 10,000 条私有尾段。在固定上游延迟 520 ms 的暂停时钟下，相同公开页始终只读一次。测试还覆盖不合规上游游标、读取失败后的续页、负数输入、跨读者继续分页，以及 `2^52`、`2^53+1` 和 `i64::MAX`。HTTP 替身核对公开请求及续页都传 `visibility=legacy`，管理员读取完整队列。research 回环用例另以这三个 ID 验证提交超时、按键找回、原键重交、详情以及管理员和匿名读取。
 
 从仓库根目录构建并运行三个本地 HTTP 验证脚本。WEB_BIN 指向本次构建产物，PATH 包含 PostgreSQL 工具。
 

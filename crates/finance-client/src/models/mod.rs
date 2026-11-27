@@ -8,6 +8,8 @@ pub mod availability;
 pub use self::availability::Availability;
 pub mod backtest_summary;
 pub use self::backtest_summary::BacktestSummary;
+pub mod backtest_visibility;
+pub use self::backtest_visibility::BacktestVisibility;
 pub mod bar_provenance;
 pub use self::bar_provenance::BarProvenance;
 pub mod bar_series_key;

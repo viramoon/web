@@ -68,10 +68,11 @@ pub enum Product {
     Integrations,
     RestrictedMarketData,
     Notifications,
+    StrategyResearch,
 }
 
 impl Product {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::System,
         Self::Backtests,
         Self::MarketStatus,
@@ -79,6 +80,7 @@ impl Product {
         Self::Integrations,
         Self::RestrictedMarketData,
         Self::Notifications,
+        Self::StrategyResearch,
     ];
 
     fn readable_by(self, subject: Subject) -> bool {
@@ -87,7 +89,8 @@ impl Product {
             Self::BacktestSubmission
             | Self::Integrations
             | Self::RestrictedMarketData
-            | Self::Notifications => matches!(subject, Subject::Admin),
+            | Self::Notifications
+            | Self::StrategyResearch => matches!(subject, Subject::Admin),
         }
     }
 }
