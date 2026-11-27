@@ -6860,8 +6860,7 @@
         "properties": {
           "reason": {
             "type": "string",
-            "description": "Short, single-line operational reason.",
-            "maxLength": 256,
+            "description": "Single-line operational reason. The server trims surrounding whitespace,\nthen requires 1–256 Unicode characters.",
             "minLength": 1
           },
           "until": {

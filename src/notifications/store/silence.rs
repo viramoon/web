@@ -39,9 +39,28 @@ impl Target {
 pub(crate) struct SilenceRequest {
     /// Future deadline in RFC 3339 format.
     until: DateTime<Utc>,
-    /// Short, single-line operational reason.
-    #[schema(min_length = 1, max_length = 256)]
+    /// Single-line operational reason. The server trims surrounding whitespace,
+    /// then requires 1–256 Unicode characters.
+    #[schema(min_length = 1)]
     reason: String,
+}
+
+impl SilenceRequest {
+    fn validate(&self, now: DateTime<Utc>) -> Result<(DateTime<Utc>, &str), StoreError> {
+        let reason = self.reason.trim();
+        let until = DateTime::from_timestamp_micros(self.until.timestamp_micros())
+            .ok_or(StoreError::Invalid)?;
+        if until <= now
+            || !(1..=256).contains(&reason.chars().count())
+            || self
+                .reason
+                .chars()
+                .any(|ch| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'))
+        {
+            return Err(StoreError::Invalid);
+        }
+        Ok((until, reason))
+    }
 }
 
 #[derive(Serialize, ToSchema)]
@@ -132,21 +151,8 @@ pub(crate) async fn change(
     let now = db_now(&mut tx).await?;
     let current = latest(&mut tx, target, now).await?;
     let request = request
-        .map(|req| {
-            let reason = req.reason.trim();
-            let until = DateTime::from_timestamp_micros(req.until.timestamp_micros())
-                .ok_or(StoreError::Invalid)?;
-            if until <= now
-                || !(1..=256).contains(&reason.chars().count())
-                || req
-                    .reason
-                    .chars()
-                    .any(|ch| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'))
-            {
-                return Err(StoreError::Invalid);
-            }
-            Ok((until, reason.to_owned()))
-        })
+        .as_ref()
+        .map(|request| request.validate(now))
         .transpose()?;
     if let Some(active) = current.silence.as_ref().filter(|_| current.active) {
         if request
@@ -189,4 +195,36 @@ pub(crate) async fn change(
     let result = latest(&mut tx, target, now).await?;
     tx.commit().await?;
     Ok(Some(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn silence_request_reason_limit_applies_after_trimming() {
+        let now = DateTime::from_timestamp(0, 0).unwrap();
+        let until = now + chrono::TimeDelta::hours(1);
+        let reason = "a".repeat(256);
+        let request: SilenceRequest = serde_json::from_value(serde_json::json!({
+            "until": until,
+            "reason": format!(" {reason}"),
+        }))
+        .unwrap();
+        assert_eq!(request.reason.chars().count(), 257);
+        assert_eq!(request.validate(now).unwrap(), (until, reason.as_str()));
+        let spec = serde_json::to_value(crate::openapi()).unwrap();
+        let schema = &spec["components"]["schemas"]["SilenceRequest"]["properties"]["reason"];
+        assert_eq!(schema["type"], "string");
+        assert!(
+            schema.get("maxLength").is_none(),
+            "a raw length limit would reject a valid padded reason"
+        );
+
+        let over_limit = SilenceRequest {
+            until,
+            reason: format!(" {reason}a "),
+        };
+        assert!(matches!(over_limit.validate(now), Err(StoreError::Invalid)));
+    }
 }
