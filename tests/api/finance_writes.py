@@ -139,9 +139,9 @@ def read_routes(port, mock):
     assert code == 200 and page == {"items": [JOB, LATER_JOB], "next_cursor": None}
     assert mock.pagination == {"limit": ["7"], "cursor": ["19"]}
     code, _, page = request(port, JOBS + "?limit=1&cursor=19")
+    assert code == 200 and page == {"items": [JOB], "next_cursor": JOB_ID}
     cursor = page["next_cursor"]
-    assert code == 200 and page == {"items": [JOB], "next_cursor": cursor}
-    assert isinstance(cursor, str) and cursor.startswith("v1.") and len(cursor) == 51
+    assert type(cursor) is int and 0 <= cursor <= 2**53 - 1
     assert mock.pagination == {"limit": ["1"], "cursor": [str(JOB_ID)]}
     code, _, page = request(port, f"{JOBS}?limit=1&cursor={cursor}")
     assert code == 200 and page == {"items": [LATER_JOB], "next_cursor": None}

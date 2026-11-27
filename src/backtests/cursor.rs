@@ -1,85 +1,58 @@
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use openssl::{
-    error::ErrorStack,
-    rand::rand_bytes,
-    symm::{Cipher, decrypt_aead, encrypt_aead},
+use openssl::rand::rand_bytes;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{LazyLock, Mutex},
 };
-use std::sync::LazyLock;
-use zeroize::Zeroizing;
 
-const PREFIX: &str = "v1.";
-pub(super) const PATTERN: &str = r"^v1\.[A-Za-z0-9_-]{48}$";
-const CONTEXT: &[u8] = b"web.backtests.public-cursor.v1";
-const NONCE_LEN: usize = 12;
-const POSITION_LEN: usize = 8;
-const TAG_LEN: usize = 16;
-const SEALED_LEN: usize = NONCE_LEN + POSITION_LEN + TAG_LEN;
+pub(super) const FIRST_HANDLE: i64 = 1 << 52;
+pub(super) const MAX_SAFE_CURSOR: i64 = (1 << 53) - 1;
+const MAX_HANDLES: usize = 4096;
 
-// Public continuations are scoped to this web process. It holds no cursor table.
-static CODEC: LazyLock<Result<Codec, ErrorStack>> = LazyLock::new(Codec::generate);
+// Membership authenticates the handle. Its bits are independent of the scan position.
+static HANDLES: LazyLock<Mutex<Handles>> = LazyLock::new(Mutex::default);
 
-pub(super) fn seal(position: i64) -> Result<String, ()> {
-    CODEC
-        .as_ref()
-        .map_err(|_| ())?
-        .seal(position)
-        .map_err(|_| ())
-}
-
-pub(super) fn parse(value: &str) -> Option<i64> {
-    if value.starts_with(PREFIX) {
-        return CODEC.as_ref().ok()?.open(value);
-    }
-    value.parse::<i64>().ok().filter(|id| *id >= 0)
-}
-
-struct Codec(Zeroizing<[u8; 32]>);
-
-impl Codec {
-    fn generate() -> Result<Self, ErrorStack> {
-        let mut key = Zeroizing::new([0; 32]);
-        rand_bytes(&mut *key)?;
-        Ok(Self(key))
-    }
-
-    fn seal(&self, position: i64) -> Result<String, ErrorStack> {
-        let mut nonce = [0; NONCE_LEN];
-        let mut tag = [0; TAG_LEN];
-        rand_bytes(&mut nonce)?;
-        let position = encrypt_aead(
-            Cipher::aes_256_gcm(),
-            &*self.0,
-            Some(&nonce),
-            CONTEXT,
-            &position.to_be_bytes(),
-            &mut tag,
-        )?;
-        let mut sealed = Vec::with_capacity(SEALED_LEN);
-        sealed.extend_from_slice(&nonce);
-        sealed.extend_from_slice(&position);
-        sealed.extend_from_slice(&tag);
-        Ok(format!("{PREFIX}{}", URL_SAFE_NO_PAD.encode(sealed)))
-    }
-
-    fn open(&self, value: &str) -> Option<i64> {
-        let encoded = value.strip_prefix(PREFIX)?;
-        if encoded.len() != SEALED_LEN * 4 / 3 {
-            return None;
+pub(super) fn issue(position: i64) -> Result<i64, ()> {
+    for _ in 0..8 {
+        let mut bytes = [0; 8];
+        rand_bytes(&mut bytes).map_err(|_| ())?;
+        let handle = FIRST_HANDLE | (i64::from_be_bytes(bytes) & (FIRST_HANDLE - 1));
+        if HANDLES.lock().map_err(|_| ())?.insert(handle, position) {
+            return Ok(handle);
         }
-        let sealed: [u8; SEALED_LEN] = URL_SAFE_NO_PAD.decode(encoded).ok()?.try_into().ok()?;
-        let (nonce, rest) = sealed.split_at(NONCE_LEN);
-        let (position, tag) = rest.split_at(POSITION_LEN);
-        let position = decrypt_aead(
-            Cipher::aes_256_gcm(),
-            &*self.0,
-            Some(nonce),
-            CONTEXT,
-            position,
-            tag,
-        )
-        .ok()?;
-        let position = i64::from_be_bytes(position.try_into().ok()?);
-        (position > 0).then_some(position)
+    }
+    Err(())
+}
+
+pub(super) fn resolve(value: i64) -> Option<i64> {
+    match value {
+        0..FIRST_HANDLE => Some(value),
+        FIRST_HANDLE..=MAX_SAFE_CURSOR => HANDLES.lock().ok()?.positions.get(&value).copied(),
+        _ => None,
+    }
+}
+
+pub(super) fn is_job_id(value: i64) -> bool {
+    (1..FIRST_HANDLE).contains(&value)
+}
+
+#[derive(Default)]
+struct Handles {
+    positions: HashMap<i64, i64>,
+    issued: VecDeque<i64>,
+}
+
+impl Handles {
+    fn insert(&mut self, handle: i64, position: i64) -> bool {
+        if self.positions.contains_key(&handle) {
+            return false;
+        }
+        if self.issued.len() == MAX_HANDLES {
+            let oldest = self.issued.pop_front().expect("full handle queue");
+            self.positions.remove(&oldest);
+        }
+        self.positions.insert(handle, position);
+        self.issued.push_back(handle);
+        true
     }
 }
 
@@ -88,36 +61,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn opaque_cursor_is_randomized_and_authenticated() {
-        let codec = Codec::generate().unwrap();
-        let token = codec.seal(208).unwrap();
-        assert_eq!(codec.open(&token), Some(208));
-        assert_ne!(token, codec.seal(208).unwrap());
-        assert_eq!(Codec::generate().unwrap().open(&token), None);
-        assert_eq!(codec.open(&format!("{token}A")), None);
-
-        let wire = token.strip_prefix(PREFIX).unwrap();
-        let mut bytes = URL_SAFE_NO_PAD.decode(wire).unwrap();
-        assert_eq!(bytes.len(), SEALED_LEN);
-        for index in [0, NONCE_LEN, NONCE_LEN + POSITION_LEN] {
-            bytes[index] ^= 1;
-            assert_eq!(
-                codec.open(&format!("{PREFIX}{}", URL_SAFE_NO_PAD.encode(&bytes))),
-                None
-            );
-            bytes[index] ^= 1;
-        }
+    fn opaque_cursor_is_randomized_and_rejects_an_unissued_neighbor() {
+        let handle = issue(208).unwrap();
+        assert!((FIRST_HANDLE..=MAX_SAFE_CURSOR).contains(&handle));
+        assert_eq!(resolve(handle), Some(208));
+        assert_ne!(handle, issue(208).unwrap());
+        assert_eq!(resolve(handle ^ 1), None);
+        assert!(!Handles::default().positions.contains_key(&handle));
     }
 
     #[test]
     fn cursor_parser_keeps_legacy_nonnegative_decimal_input() {
-        assert_eq!(parse("0"), Some(0));
-        assert_eq!(parse("7"), Some(7));
-        assert_eq!(parse("9223372036854775807"), Some(i64::MAX));
-        assert_eq!(parse("-1"), None);
-        assert_eq!(parse("9223372036854775808"), None);
-        assert_eq!(parse("v1."), None);
-        assert_eq!(parse("v1.invalid"), None);
-        assert_eq!(parse(&seal(208).unwrap()), Some(208));
+        assert_eq!(resolve(0), Some(0));
+        assert_eq!(resolve(7), Some(7));
+        assert_eq!(resolve(FIRST_HANDLE - 1), Some(FIRST_HANDLE - 1));
+        assert_eq!(resolve(-1), None);
+        assert_eq!(resolve(MAX_SAFE_CURSOR + 1), None);
+        assert_eq!(resolve(i64::MAX), None);
+        assert!(!is_job_id(FIRST_HANDLE));
+        assert!(!is_job_id(MAX_SAFE_CURSOR));
+        assert!(is_job_id(FIRST_HANDLE - 1));
+    }
+
+    #[test]
+    fn handle_store_is_bounded_and_does_not_rebind_a_live_handle() {
+        let mut store = Handles::default();
+        for offset in 0..MAX_HANDLES as i64 {
+            assert!(store.insert(FIRST_HANDLE + offset, offset + 1));
+        }
+        assert!(!store.insert(FIRST_HANDLE, 9999));
+        assert_eq!(store.positions[&FIRST_HANDLE], 1);
+        assert!(store.insert(FIRST_HANDLE + MAX_HANDLES as i64, 9999));
+        assert!(!store.positions.contains_key(&FIRST_HANDLE));
+        assert_eq!(store.positions.len(), MAX_HANDLES);
+        assert_eq!(store.issued.len(), MAX_HANDLES);
     }
 }

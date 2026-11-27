@@ -976,15 +976,19 @@ fn generated_research_models_round_trip_precise_plans_and_evaluations() {
 #[tokio::test]
 async fn anonymous_backtest_rejects_unverifiable_cursor_before_finance() {
     let web = Gateway::with_finance_url("http://127.0.0.1:1".into());
-    for raw in ["-1".to_owned(), format!("v1.{}", "A".repeat(48))] {
+    for (raw, status) in [
+        ("-1", StatusCode::UNPROCESSABLE_ENTITY),
+        ("4503599627370496", StatusCode::BAD_REQUEST),
+        ("9007199254740992", StatusCode::BAD_REQUEST),
+    ] {
         let rejected = web
             .json(
                 Request::get(format!("{JOBS}?limit=1&cursor={raw}")),
                 Value::Null,
-                StatusCode::UNPROCESSABLE_ENTITY,
+                status,
             )
             .await;
         assert_eq!(rejected["error"]["code"], "invalid_request");
-        assert!(!rejected.to_string().contains(&raw));
+        assert!(!rejected.to_string().contains(raw));
     }
 }

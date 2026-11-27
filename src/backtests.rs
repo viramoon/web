@@ -12,8 +12,8 @@ use finance_client::{
     apis::{jobs_api, research_api},
     models,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde::Deserialize;
+use serde_json::{Map, Value};
 use std::time::Duration;
 use tokio::time::{Instant, timeout_at};
 
@@ -119,7 +119,7 @@ impl BundleSubmission {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ListQuery {
     limit: Option<u32>,
-    cursor: Option<String>,
+    cursor: Option<i64>,
 }
 
 struct Pagination {
@@ -127,14 +127,36 @@ struct Pagination {
     cursor: Option<i64>,
 }
 
+#[derive(Debug)]
+enum InvalidPagination {
+    Parameters,
+    Cursor,
+}
+
+impl IntoResponse for InvalidPagination {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Parameters => invalid("Invalid pagination"),
+            Self::Cursor => api_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Invalid or expired backtest cursor",
+            ),
+        }
+    }
+}
+
 impl ListQuery {
-    fn pagination(self) -> Option<Pagination> {
-        let cursor = match self.cursor.as_deref() {
-            Some(value) => Some(cursor::parse(value)?),
+    fn pagination(self) -> Result<Pagination, InvalidPagination> {
+        let limit = self.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+        if !(1..=MAX_PAGE_LIMIT).contains(&limit) || self.cursor.is_some_and(|id| id < 0) {
+            return Err(InvalidPagination::Parameters);
+        }
+        let cursor = match self.cursor {
+            Some(value) => Some(cursor::resolve(value).ok_or(InvalidPagination::Cursor)?),
             None => None,
         };
-        let limit = self.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
-        (1..=MAX_PAGE_LIMIT).contains(&limit).then_some(Pagination {
+        Ok(Pagination {
             limit: self.limit,
             cursor,
         })
@@ -195,7 +217,10 @@ pub(crate) async fn submit(
         })
         .await
     {
-        Ok(accepted) => (StatusCode::ACCEPTED, Json(accepted)).into_response(),
+        Ok(accepted) if cursor::is_job_id(accepted.id) => {
+            (StatusCode::ACCEPTED, Json(accepted)).into_response()
+        }
+        Ok(_) => Fault::invalid_response().into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -212,7 +237,13 @@ pub(crate) async fn by_key(State(s): State<AppState>, headers: HeaderMap) -> Res
     s.finance
         .read(|cfg| async move { jobs_api::by_key(&cfg, key).await })
         .await
-        .map(Json)
+        .and_then(|accepted| {
+            if cursor::is_job_id(accepted.id) {
+                Ok(Json(accepted))
+            } else {
+                Err(Fault::invalid_response())
+            }
+        })
         .into_response()
 }
 
@@ -250,7 +281,11 @@ pub(crate) async fn detail(
         .await
     {
         Ok(job) if is_legacy(&job) || s.write_access.authorize_stream(&headers, false).is_ok() => {
-            Json(job).into_response()
+            if cursor::is_job_id(job.id) {
+                Json(job).into_response()
+            } else {
+                Fault::invalid_response().into_response()
+            }
         }
         Ok(_) => api_error(StatusCode::NOT_FOUND, "job_not_found", "No such job"),
         Err(fault) => fault.into_response(),
@@ -258,11 +293,11 @@ pub(crate) async fn detail(
 }
 
 #[utoipa::path(get, path = "/api/v1/backtests",
-    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous results use opaque cursors and may have empty items while a continuation exists. Continue until next_cursor is null. Administrators receive numeric finance cursors.",
+    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pages use public job ids or opaque safe integers as cursors. Continue until next_cursor is null, even if items is empty.",
     security((), ("adminBearer" = []), ("adminSession" = [])),
     params(("limit" = Option<u32>, Query, description="1..100, default 20"),
-        ("cursor" = Option<String>, Query, description="Previous next_cursor or a legacy nonnegative decimal job id")),
-    responses((status=200,body=ref("#/components/schemas/Page")),(status=422,body=ErrorBody),
+        ("cursor" = Option<i64>, Query, description="Previous numeric next_cursor or a legacy nonnegative job id below 2^52")),
+    responses((status=200,body=ref("#/components/schemas/Page")),(status=400,body=ErrorBody),(status=422,body=ErrorBody),
     (status=500,body=ErrorBody),(status=502,body=ErrorBody),(status=503,body=ErrorBody),(status=504,body=ErrorBody)))]
 pub(crate) async fn list(
     State(s): State<AppState>,
@@ -272,15 +307,19 @@ pub(crate) async fn list(
     let Ok(Query(query)) = query else {
         return invalid("Invalid pagination parameters");
     };
-    let Some(p) = query.pagination() else {
-        return invalid("Invalid pagination or expired cursor");
+    let p = match query.pagination() {
+        Ok(p) => p,
+        Err(error) => return error.into_response(),
     };
     if s.write_access.authorize_stream(&headers, false).is_ok() {
         return s
             .finance
             .read(|cfg| async move { jobs_api::list(&cfg, p.limit, p.cursor).await })
             .await
-            .map(Json)
+            .and_then(|page| {
+                validate_page_ids(&page)?;
+                Ok(Json(page))
+            })
             .into_response();
     }
 
@@ -300,21 +339,26 @@ pub(crate) async fn list(
 
 struct ScannedPage {
     items: Vec<models::Job>,
-    next_position: Option<i64>,
+    next: Continuation,
 }
 
-#[derive(Serialize)]
-struct PublicPage {
-    items: Vec<models::Job>,
-    next_cursor: Option<String>,
+enum Continuation {
+    End,
+    PublicId(i64),
+    Pending(i64),
 }
 
 impl ScannedPage {
     fn into_response(self) -> Response {
-        match self.next_position.map(cursor::seal).transpose() {
-            Ok(next_cursor) => Json(PublicPage {
+        let next_cursor = match self.next {
+            Continuation::End => Ok(None),
+            Continuation::PublicId(id) => Ok(Some(id)),
+            Continuation::Pending(position) => cursor::issue(position).map(Some),
+        };
+        match next_cursor {
+            Ok(next_cursor) => Json(models::Page {
                 items: self.items,
-                next_cursor,
+                next_cursor: Some(next_cursor),
             })
             .into_response(),
             Err(()) => api_error(
@@ -323,6 +367,16 @@ impl ScannedPage {
                 "Could not issue a backtest cursor",
             ),
         }
+    }
+}
+
+fn validate_page_ids(page: &models::Page) -> Result<(), Fault> {
+    if page.items.iter().all(|job| cursor::is_job_id(job.id))
+        && page.next_cursor.flatten().is_none_or(cursor::is_job_id)
+    {
+        Ok(())
+    } else {
+        Err(Fault::invalid_response())
     }
 }
 
@@ -352,6 +406,9 @@ where
             };
             page
         };
+        // Out-of-range ids overlap the web cursor namespace and are invalid even
+        // on optional continuation pages.
+        validate_page_ids(&page)?;
         let next = page.next_cursor.flatten();
         let last = page.items.last().map(|job| job.id);
         let ordered = page
@@ -373,8 +430,8 @@ where
             let public = is_legacy(&job);
             if public && items.len() == limit {
                 return Ok(ScannedPage {
+                    next: Continuation::PublicId(items.last().expect("nonempty public page").id),
                     items,
-                    next_position: cursor,
                 });
             }
             cursor = Some(job.id);
@@ -387,31 +444,14 @@ where
         if next.is_none() {
             return Ok(ScannedPage {
                 items,
-                next_position: None,
+                next: Continuation::End,
             });
         }
     }
     Ok(ScannedPage {
         items,
-        next_position: cursor,
+        next: Continuation::Pending(cursor.ok_or_else(Fault::invalid_response)?),
     })
-}
-
-pub(crate) fn register_openapi(spec: &mut Value) {
-    let decimal = json!({"type":"integer", "format":"int64", "minimum":0});
-    let opaque = json!({"type":"string", "pattern":cursor::PATTERN});
-    let params = spec["paths"]["/api/v1/backtests"]["get"]["parameters"]
-        .as_array_mut()
-        .expect("backtest list parameters");
-    let cursor = params
-        .iter_mut()
-        .find(|p| p["name"] == "cursor")
-        .expect("backtest cursor parameter");
-    cursor["schema"] = json!({"oneOf":[decimal, opaque]});
-    spec["components"]["schemas"]["Page"]["properties"]["next_cursor"] = json!({
-        "oneOf":[decimal, opaque, {"type":"null"}],
-        "description":"Opaque for anonymous pages, numeric for administrator pages. Null means the underlying scan has ended."
-    });
 }
 
 #[cfg(test)]

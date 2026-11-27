@@ -4241,20 +4241,10 @@
 "type": "array"
 },
 "next_cursor": {
-"description": "Opaque for anonymous pages, numeric for administrator pages. Null means the underlying scan has ended.",
-"oneOf": [
-{
 "format": "int64",
-"minimum": 0,
-"type": "integer"
-},
-{
-"pattern": "^v1\\.[A-Za-z0-9_-]{48}$",
-"type": "string"
-},
-{
-"type": "null"
-}
+"type": [
+"integer",
+"null"
 ]
 }
 },
@@ -7253,7 +7243,7 @@
 },
 "/api/v1/backtests": {
 "get": {
-"description": "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous results use opaque cursors and may have empty items while a continuation exists. Continue until next_cursor is null. Administrators receive numeric finance cursors.",
+"description": "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pages use public job ids or opaque safe integers as cursors. Continue until next_cursor is null, even if items is empty.",
 "operationId": "list",
 "parameters": [
 {
@@ -7268,22 +7258,13 @@
 }
 },
 {
-"description": "Previous next_cursor or a legacy nonnegative decimal job id",
+"description": "Previous numeric next_cursor or a legacy nonnegative job id below 2^52",
 "in": "query",
 "name": "cursor",
 "required": false,
 "schema": {
-"oneOf": [
-{
 "format": "int64",
-"minimum": 0,
 "type": "integer"
-},
-{
-"pattern": "^v1\\.[A-Za-z0-9_-]{48}$",
-"type": "string"
-}
-]
 }
 }
 ],
@@ -7293,6 +7274,16 @@
 "application/json": {
 "schema": {
 "$ref": "#/components/schemas/Page"
+}
+}
+},
+"description": ""
+},
+"400": {
+"content": {
+"application/json": {
+"schema": {
+"$ref": "#/components/schemas/ErrorBody"
 }
 }
 },
