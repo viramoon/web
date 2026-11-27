@@ -1,9 +1,10 @@
 use crate::{
-    api_error,
+    ErrorBody, ErrorDetail, ErrorLocation,
     circuit::Circuit,
     config::{ConfigError, FinanceConfig},
 };
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -32,8 +33,7 @@ pub struct FinanceStatus {
 
 pub struct Fault {
     pub status: StatusCode,
-    code: String,
-    message: String,
+    detail: ErrorDetail,
     transient: bool,
 }
 
@@ -41,8 +41,7 @@ impl Fault {
     fn new(status: StatusCode, code: &str, message: &str, transient: bool) -> Self {
         Self {
             status,
-            code: code.into(),
-            message: message.into(),
+            detail: ErrorDetail::new(code, message),
             transient,
         }
     }
@@ -72,7 +71,20 @@ impl Fault {
             Error::ResponseError(r) if r.status.is_client_error() => {
                 let parsed = serde_json::from_str::<models::ErrorBody>(&r.content).ok();
                 if let Some(error) = parsed {
-                    Self::new(r.status, &error.error.code, &error.error.message, false)
+                    let error = error.error;
+                    Self {
+                        status: r.status,
+                        detail: ErrorDetail {
+                            code: error.code,
+                            message: error.message,
+                            path: error.path.flatten(),
+                            location: error.location.flatten().map(|location| ErrorLocation {
+                                line: location.line,
+                                column: location.column,
+                            }),
+                        },
+                        transient: false,
+                    }
                 } else {
                     Self::new(
                         r.status,
@@ -102,12 +114,14 @@ impl Fault {
     }
 
     pub fn write_error(self) -> Self {
+        self.with_timeout_hint(
+            "Submission outcome unknown; query by Idempotency-Key before retrying",
+        )
+    }
+
+    pub(crate) fn with_timeout_hint(mut self, hint: &str) -> Self {
         if self.status == StatusCode::GATEWAY_TIMEOUT {
-            return Self {
-                message: "Submission outcome unknown; query by Idempotency-Key before retrying"
-                    .into(),
-                ..self
-            };
+            self.detail.message = hint.into();
         }
         self
     }
@@ -115,7 +129,7 @@ impl Fault {
 
 impl IntoResponse for Fault {
     fn into_response(self) -> Response {
-        api_error(self.status, &self.code, &self.message)
+        (self.status, Json(ErrorBody { error: self.detail })).into_response()
     }
 }
 
@@ -182,9 +196,15 @@ impl Finance {
         F: Fn(Arc<Configuration>) -> Fut,
         Fut: Future<Output = Result<T, Error<E>>>,
     {
-        self.execute(call, 0, self.policy.request_timeout_ms)
-            .await
-            .map_err(Fault::write_error)
+        self.post_once(call).await.map_err(Fault::write_error)
+    }
+
+    pub(crate) async fn post_once<T, E, F, Fut>(&self, call: F) -> Result<T, Fault>
+    where
+        F: Fn(Arc<Configuration>) -> Fut,
+        Fut: Future<Output = Result<T, Error<E>>>,
+    {
+        self.execute(call, 0, self.policy.request_timeout_ms).await
     }
 
     async fn execute<T, E, F, Fut>(
@@ -283,7 +303,29 @@ fn loopback_endpoint(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::to_bytes;
     use finance_client::apis::ResponseContent;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn strategy_diagnostics_keep_redacted_path_and_source_coordinates() {
+        let diagnostic = json!({"error": {
+            "code": "UNKNOWN_FIELD", "message": "Unknown field", "path": "/spec/<key>",
+            "location": {"line": 3, "column": 5}
+        }});
+        let response = Fault::upstream(Error::<()>::ResponseError(ResponseContent {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            content: diagnostic.to_string(),
+            entity: None,
+        }))
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            diagnostic
+        );
+    }
 
     #[test]
     fn finance_readiness_requires_http_503_to_accept_a_not_ready_health_body() {

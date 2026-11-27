@@ -10,7 +10,7 @@ web 是 fertile 的后端网关，负责网络入口、frontend 静态托管、�
                                 └─ 通知 outbox → web-notifier → SMTP
 ```
 
-main.rs 组装进程，lib.rs 管理路由、请求边界与健康检查。backtests.rs 转发回测请求，market.rs 转发行情并汇总新鲜度。认证层从本地 0600 文件载入管理员 Bearer，可建立短期同源会话。管理写请求先鉴权并应用共享滑动窗口限额，再读请求体。回测提交检查 Idempotency-Key，并向 finance 发送一次，由 finance 保存幂等结果。系统、回测和行情状态保留公开读取，按键查询和集成配置限管理员读取。生成的 finance-client crate 独立于手写适配层，金融数值按契约保留精度。目录入口见 [src](../src/README.md)。
+main.rs 组装进程，lib.rs 管理路由、请求边界与健康检查。backtests.rs 转发回测请求，market.rs 转发行情并汇总新鲜度。认证层从本地 0600 文件载入管理员 Bearer，可建立短期同源会话。管理写请求先鉴权并应用共享滑动窗口限额，再读请求体。回测提交检查 Idempotency-Key，并向 finance 发送一次，由 finance 保存幂等结果。系统状态、原有回测作业和行情状态允许公开读取。StrategyBundle 作业、按键查询和集成配置限管理员读取。生成的 finance-client crate 独立于手写适配层，金融数值按契约保留精度。目录入口见 [src](../src/README.md)。
 
 web 故障不影响 finance 交易核心，finance 不依赖 Tunnel。规划中的 Webhook 需先落盘再幂等处理。回测写请求超时后的查询与重试见 [运行手册](../RUNBOOK.md)。
 
@@ -20,7 +20,7 @@ frontend 不独立运行，由配置指定的静态目录提供资源，按 fert
 
 ## W2 契约来源
 
-W2a 使用从 [finance 来源提交](../openapi/finance.commit) 生成的客户端，浏览器可访问管理员专用的 WAL、投影、产品和质量读取。现有系统与行情状态保持原权限，F10a 生成物中的因子研究查询由 W2b 集成。W6 更新了客户端和读流快照，沿用现有浏览器路由。[契约差异](api.md#finance-契约版本)
+W2a 使用从锁定的 finance 提交生成的客户端，浏览器可访问管理员专用的 WAL、投影、产品和质量读取。W6 增加 2.0 永续事件支持。W2b 接入 F10b 的策略文档校验、版本注册与读取、因子目录和报告。策略源文、版本绑定、因子快照及幂等队列由 finance 持有。[finance 来源提交](../openapi/finance.commit) · [契约差异](api.md#finance-契约版本)
 
 - F1 行情协议 `1.0`。标的、事件与能力的 JSON Schema 及样本 `examples.json` 来自 [`protocol/v1/`](https://github.com/viramoon/finance/tree/b21f24150dae968a147b57eefbe4ffde0f3b4809/protocol/v1)。
 - F10a 的市场 WS 数据帧使用 finance 导出的 [1.0 schema](../openapi/finance.market-ws.schema.json)。浏览器订阅命令和 web 控制帧由网关契约定义。

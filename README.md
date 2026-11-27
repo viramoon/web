@@ -6,7 +6,9 @@ fertile 的后端网关与 submodule。使用 axum 提供浏览器 API、通过 
 
 W2a 提供管理员专用的 F10a 行情读取与 WAL 视图、PostgreSQL 自选、盘口 focus 和运维 SSE。市场 WebSocket 在同一服务端口提供授权的有界 WAL 回放、共享订阅额度和重置帧。期权查询和券商线路额度等待 finance 后续契约。见 [行情、自选与推送](docs/api.md#行情自选与推送)。
 
-W6 将内部 finance 契约锁定到 `fc5e153`。WAL 与投影 REST 读取兼容新增的 2.0 永续事件。浏览器行情和指标查询继续使用 W2a 的 WAL 视图，市场 WebSocket 仍使用 1.0 数据帧。[契约差异](docs/api.md#finance-契约版本)
+W6 在内部 finance 契约中加入 2.0 永续事件。浏览器行情和指标查询继续使用 W2a 的 WAL 视图，市场 WebSocket 仍使用 1.0 数据帧。[契约差异](docs/api.md#finance-契约版本)
+
+W2b 提供管理员专用的 StrategyBundle 上传校验、编译预览、版本注册与选择、因子目录和报告。回测可以用上传文件或已登记版本提交，并可按原幂等键恢复作业。旧回测页面深链继续可用。[策略与研究](docs/api.md#策略与研究)
 
 ## 系统中的位置
 

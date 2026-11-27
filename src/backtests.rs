@@ -1,4 +1,4 @@
-use crate::{AppState, ErrorBody, api_error};
+use crate::{AppState, ErrorBody, api_error, research};
 use axum::{
     Json,
     extract::{
@@ -16,8 +16,15 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 #[derive(Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Submission {
+    Legacy(LegacySubmission),
+    Bundle(BundleSubmission),
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Submission {
+pub(crate) struct LegacySubmission {
     strategy: String,
     instrument: String,
     start: String,
@@ -25,7 +32,7 @@ pub(crate) struct Submission {
     params: Map<String, Value>,
 }
 
-impl Submission {
+impl LegacySubmission {
     fn into_request(self) -> Option<models::JobRequest> {
         if self
             .params
@@ -40,6 +47,60 @@ impl Submission {
             self.end,
             self.instrument,
             params,
+            self.start,
+            self.strategy,
+        ))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BundleSubmission {
+    strategy: models::BundleStrategy,
+    start: String,
+    end: String,
+    source: Source,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum Source {
+    Inline {
+        format: models::StrategyFormat,
+        content: String,
+    },
+    Registered {
+        id: String,
+        version: String,
+    },
+}
+
+impl BundleSubmission {
+    fn into_request(self) -> Option<models::BundleSubmission> {
+        let source = match self.source {
+            Source::Inline { format, content } => {
+                if content.len() > research::MAX_DOCUMENT_BYTES {
+                    return None;
+                }
+                let source = models::StrategySourceOneOf::new(
+                    content,
+                    format,
+                    models::strategy_source_one_of::Kind::Inline,
+                );
+                models::StrategySource::StrategySourceOneOf(Box::new(source))
+            }
+            Source::Registered { id, version } => {
+                let source = models::StrategySourceOneOf1::new(
+                    id,
+                    models::strategy_source_one_of_1::Kind::Registered,
+                    version,
+                );
+                models::StrategySource::StrategySourceOneOf1(Box::new(source))
+            }
+        };
+        Some(models::BundleSubmission::new(
+            self.end,
+            source,
             self.start,
             self.strategy,
         ))
@@ -70,9 +131,9 @@ fn lookup_key(headers: &HeaderMap) -> Option<&str> {
     params(("Idempotency-Key" = String, Header, description="Stable key, 1..128 visible ASCII characters"),
         ("Origin" = Option<String>, Header, description="Configured HTTPS origin with the session cookie"),
         ("X-CSRF-Token" = Option<String>, Header, description="Required with the session cookie")),
-    request_body = ref("#/components/schemas/JobRequest"),
+    request_body = ref("#/components/schemas/SubmitRequest"),
     responses((status=202,body=ref("#/components/schemas/Accepted")), (status=401,body=ErrorBody),
-    (status=403,body=ErrorBody),(status=409,body=ErrorBody),(status=413,body=ErrorBody),
+    (status=403,body=ErrorBody),(status=404,body=ErrorBody),(status=409,body=ErrorBody),(status=413,body=ErrorBody),
     (status=422,body=ErrorBody),(status=429,body=ErrorBody),(status=502,body=ErrorBody),
     (status=503,body=ErrorBody),(status=504,body=ErrorBody)))]
 pub(crate) async fn submit(
@@ -84,14 +145,21 @@ pub(crate) async fn submit(
         return invalid("One Idempotency-Key with 1..128 visible ASCII characters is required");
     };
     let input = match body {
-        Ok(Json(input)) => input.into_request(),
+        Ok(Json(Submission::Legacy(input))) => {
+            let Some(input) = input.into_request() else {
+                return invalid("Invalid backtest submission");
+            };
+            models::SubmitRequest::JobRequest(Box::new(input))
+        }
+        Ok(Json(Submission::Bundle(input))) => {
+            let Some(input) = input.into_request() else {
+                return research::document_too_large();
+            };
+            models::SubmitRequest::BundleSubmission(Box::new(input))
+        }
         Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => return e.into_response(),
-        _ => None,
+        Err(_) => return invalid("Invalid backtest submission"),
     };
-    let Some(input) = input else {
-        return invalid("Invalid backtest submission");
-    };
-    let input = models::SubmitRequest::JobRequest(Box::new(input));
     match s
         .finance
         .write(|cfg| {
@@ -132,30 +200,46 @@ pub(crate) async fn datasets(State(s): State<AppState>) -> Response {
         .into_response()
 }
 
+fn is_legacy(job: &models::Job) -> bool {
+    matches!(job.request.as_ref(), models::JobRequestView::JobRequest(_))
+}
+
 #[utoipa::path(get, path = "/api/v1/backtests/{id}", params(("id" = i64, Path)),
+    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators.",
+    security((), ("adminBearer" = []), ("adminSession" = [])),
     responses((status=200,body=ref("#/components/schemas/Job")),(status=404,body=ErrorBody),
     (status=422,body=ErrorBody),(status=502,body=ErrorBody),(status=503,body=ErrorBody),(status=504,body=ErrorBody)))]
 pub(crate) async fn detail(
     State(s): State<AppState>,
+    headers: HeaderMap,
     path: Result<Path<i64>, PathRejection>,
 ) -> Response {
     let Ok(Path(id)) = path else {
         return invalid("Invalid backtest id");
     };
-    s.finance
+    match s
+        .finance
         .read(|cfg| async move { jobs_api::detail(&cfg, id).await })
         .await
-        .map(Json)
-        .into_response()
+    {
+        Ok(job) if is_legacy(&job) || s.write_access.authorize_stream(&headers, false).is_ok() => {
+            Json(job).into_response()
+        }
+        Ok(_) => api_error(StatusCode::NOT_FOUND, "job_not_found", "No such job"),
+        Err(fault) => fault.into_response(),
+    }
 }
 
 #[utoipa::path(get, path = "/api/v1/backtests",
+    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Continue with next_cursor even when items is empty.",
+    security((), ("adminBearer" = []), ("adminSession" = [])),
     params(("limit" = Option<u32>, Query, description="1..100, default 20"),
         ("cursor" = Option<i64>, Query, description="Exclusive last id in ascending order")),
     responses((status=200,body=ref("#/components/schemas/Page")),(status=422,body=ErrorBody),
     (status=502,body=ErrorBody),(status=503,body=ErrorBody),(status=504,body=ErrorBody)))]
 pub(crate) async fn list(
     State(s): State<AppState>,
+    headers: HeaderMap,
     query: Result<Query<Pagination>, QueryRejection>,
 ) -> Response {
     let Ok(Query(p)) = query else {
@@ -164,6 +248,11 @@ pub(crate) async fn list(
     s.finance
         .read(|cfg| async move { jobs_api::list(&cfg, p.limit, p.cursor).await })
         .await
-        .map(Json)
+        .map(|mut page| {
+            if s.write_access.authorize_stream(&headers, false).is_err() {
+                page.items.retain(is_legacy);
+            }
+            Json(page)
+        })
         .into_response()
 }
