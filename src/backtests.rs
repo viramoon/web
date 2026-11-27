@@ -149,16 +149,12 @@ impl IntoResponse for InvalidPagination {
 impl ListQuery {
     fn pagination(self) -> Result<Pagination, InvalidPagination> {
         let limit = self.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
-        if !(1..=MAX_PAGE_LIMIT).contains(&limit) || self.cursor.is_some_and(|id| id < 0) {
+        if !(1..=MAX_PAGE_LIMIT).contains(&limit) {
             return Err(InvalidPagination::Parameters);
         }
-        let cursor = match self.cursor {
-            Some(value) => Some(cursor::resolve(value).ok_or(InvalidPagination::Cursor)?),
-            None => None,
-        };
         Ok(Pagination {
             limit: self.limit,
-            cursor,
+            cursor: self.cursor.map(cursor::resolve).transpose()?,
         })
     }
 }
@@ -174,6 +170,14 @@ fn lookup_key(headers: &HeaderMap) -> Option<&str> {
             && v.bytes().all(|c| c.is_ascii_graphic())
             && keys.next().is_none()
     })
+}
+
+fn accepted_job(accepted: models::Accepted) -> Result<Json<models::Accepted>, Fault> {
+    if accepted.id > 0 {
+        Ok(Json(accepted))
+    } else {
+        Err(Fault::invalid_response())
+    }
 }
 
 #[utoipa::path(post, path = "/api/v1/backtests", security(("adminBearer" = []), ("adminSession" = [])),
@@ -209,20 +213,15 @@ pub(crate) async fn submit(
         Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => return e.into_response(),
         Err(_) => return invalid("Invalid backtest submission"),
     };
-    match s
-        .finance
+    s.finance
         .write(|cfg| {
             let request = input.clone();
             async move { jobs_api::submit(&cfg, key, request).await }
         })
         .await
-    {
-        Ok(accepted) if cursor::is_job_id(accepted.id) => {
-            (StatusCode::ACCEPTED, Json(accepted)).into_response()
-        }
-        Ok(_) => Fault::invalid_response().into_response(),
-        Err(e) => e.into_response(),
-    }
+        .and_then(accepted_job)
+        .map(|job| (StatusCode::ACCEPTED, job))
+        .into_response()
 }
 
 #[utoipa::path(get, path = "/api/v1/backtests/by-key", security(("adminBearer" = []), ("adminSession" = [])),
@@ -237,13 +236,7 @@ pub(crate) async fn by_key(State(s): State<AppState>, headers: HeaderMap) -> Res
     s.finance
         .read(|cfg| async move { jobs_api::by_key(&cfg, key).await })
         .await
-        .and_then(|accepted| {
-            if cursor::is_job_id(accepted.id) {
-                Ok(Json(accepted))
-            } else {
-                Err(Fault::invalid_response())
-            }
-        })
+        .and_then(accepted_job)
         .into_response()
 }
 
@@ -275,28 +268,33 @@ pub(crate) async fn detail(
     let Ok(Path(id)) = path else {
         return invalid("Invalid backtest id");
     };
-    match s
-        .finance
+    s.finance
         .read(|cfg| async move { jobs_api::detail(&cfg, id).await })
         .await
-    {
-        Ok(job) if is_legacy(&job) || s.write_access.authorize_stream(&headers, false).is_ok() => {
-            if cursor::is_job_id(job.id) {
-                Json(job).into_response()
-            } else {
-                Fault::invalid_response().into_response()
-            }
-        }
-        Ok(_) => api_error(StatusCode::NOT_FOUND, "job_not_found", "No such job"),
-        Err(fault) => fault.into_response(),
+        .map(|job| {
+            detail_response(
+                job,
+                s.write_access.authorize_stream(&headers, false).is_ok(),
+            )
+        })
+        .into_response()
+}
+
+fn detail_response(job: models::Job, administrator: bool) -> Response {
+    if !administrator && !is_legacy(&job) {
+        return api_error(StatusCode::NOT_FOUND, "job_not_found", "No such job");
     }
+    if job.id <= 0 {
+        return Fault::invalid_response().into_response();
+    }
+    Json(job).into_response()
 }
 
 #[utoipa::path(get, path = "/api/v1/backtests",
-    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pages use public job ids or opaque safe integers as cursors. Continue until next_cursor is null, even if items is empty.",
+    description = "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pages can also return a negative continuation when the visibility of the remaining jobs is unknown. Continue until next_cursor is null, even if items is empty.",
     security((), ("adminBearer" = []), ("adminSession" = [])),
     params(("limit" = Option<u32>, Query, description="1..100, default 20"),
-        ("cursor" = Option<i64>, Query, description="Previous numeric next_cursor or a legacy nonnegative job id below 2^52")),
+        ("cursor" = Option<i64>, Query, description="Exclusive nonnegative int64 job position, or a continuation returned by an anonymous list")),
     responses((status=200,body=ref("#/components/schemas/Page")),(status=400,body=ErrorBody),(status=422,body=ErrorBody),
     (status=500,body=ErrorBody),(status=502,body=ErrorBody),(status=503,body=ErrorBody),(status=504,body=ErrorBody)))]
 pub(crate) async fn list(
@@ -307,11 +305,15 @@ pub(crate) async fn list(
     let Ok(Query(query)) = query else {
         return invalid("Invalid pagination parameters");
     };
+    let administrator = s.write_access.authorize_stream(&headers, false).is_ok();
+    if administrator && query.cursor.is_some_and(|id| id < 0) {
+        return InvalidPagination::Parameters.into_response();
+    }
     let p = match query.pagination() {
         Ok(p) => p,
         Err(error) => return error.into_response(),
     };
-    if s.write_access.authorize_stream(&headers, false).is_ok() {
+    if administrator {
         return s
             .finance
             .read(|cfg| async move { jobs_api::list(&cfg, p.limit, p.cursor).await })
@@ -371,8 +373,7 @@ impl ScannedPage {
 }
 
 fn validate_page_ids(page: &models::Page) -> Result<(), Fault> {
-    if page.items.iter().all(|job| cursor::is_job_id(job.id))
-        && page.next_cursor.flatten().is_none_or(cursor::is_job_id)
+    if page.items.iter().all(|job| job.id > 0) && page.next_cursor.flatten().is_none_or(|id| id > 0)
     {
         Ok(())
     } else {
@@ -406,8 +407,6 @@ where
             };
             page
         };
-        // Out-of-range ids overlap the web cursor namespace and are invalid even
-        // on optional continuation pages.
         validate_page_ids(&page)?;
         let next = page.next_cursor.flatten();
         let last = page.items.last().map(|job| job.id);

@@ -50,7 +50,6 @@ async fn public_body(result: ScannedPage) -> Value {
 
 fn continuation(body: &Value) -> Pagination {
     let token = body["next_cursor"].as_i64().expect("integer cursor");
-    assert!((0..=cursor::MAX_SAFE_CURSOR).contains(&token));
     let uri = format!("/api/v1/backtests?limit=1&cursor={token}")
         .parse()
         .unwrap();
@@ -63,7 +62,8 @@ fn continuation(body: &Value) -> Pagination {
 
 fn opaque_continuation(body: &Value) -> Pagination {
     let token = body["next_cursor"].as_i64().expect("integer cursor");
-    assert!((cursor::FIRST_HANDLE..=cursor::MAX_SAFE_CURSOR).contains(&token));
+    assert!(cursor::HANDLE_RANGE.contains(&token));
+    assert!(token.unsigned_abs() < (1 << 53));
     continuation(body)
 }
 
@@ -355,15 +355,29 @@ fn openapi_preserves_the_baseline_numeric_cursor_contract() {
         page["properties"]["next_cursor"],
         json!({"type":["integer","null"],"format":"int64"})
     );
+    let int64 = json!({"type":"integer","format":"int64"});
+    for schema in ["Accepted", "Job"] {
+        assert_eq!(
+            spec["components"]["schemas"][schema]["properties"]["id"],
+            int64
+        );
+    }
+    let detail = &spec["paths"]["/api/v1/backtests/{id}"]["get"];
+    let id = detail["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "id")
+        .unwrap();
+    assert_eq!(id["schema"], int64);
 }
 
 #[tokio::test]
-async fn upstream_ids_in_the_reserved_namespace_fail_on_first_and_followup_pages() {
-    let invalid_id = cursor::FIRST_HANDLE;
+async fn invalid_finance_ids_fail_on_first_and_followup_pages() {
     for bad_page in [
-        page(vec![legacy(invalid_id)], None),
-        page(vec![bundle(invalid_id)], None),
-        page(vec![legacy(7)], Some(invalid_id)),
+        page(vec![legacy(0)], None),
+        page(vec![bundle(i64::MIN)], None),
+        page(vec![legacy(7)], Some(-1)),
     ] {
         assert_eq!(
             validate_page_ids(&bad_page).err().unwrap().status,
@@ -385,4 +399,123 @@ async fn upstream_ids_in_the_reserved_namespace_fail_on_first_and_followup_pages
         .await;
         assert_eq!(followup.err().unwrap().status, StatusCode::BAD_GATEWAY);
     }
+}
+
+#[tokio::test]
+async fn accepted_ids_and_visible_details_keep_every_positive_int64_bit() {
+    for id in [1_i64 << 52, (1_i64 << 53) + 1, i64::MAX] {
+        let accepted = accepted_job(models::Accepted::new(id)).into_response();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(accepted.into_body(), 64)
+            .await
+            .unwrap();
+        assert_eq!(body, format!(r#"{{"id":{id}}}"#));
+        for (job, admin) in [(legacy(id), false), (legacy(id), true), (bundle(id), true)] {
+            let expected = json!(job);
+            let detail = detail_response(job, admin);
+            assert_eq!(detail.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(detail.into_body(), 4096)
+                .await
+                .unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), expected);
+        }
+        let hidden = detail_response(bundle(id), false);
+        assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+        let bytes = axum::body::to_bytes(hidden.into_body(), 256).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!({"error":{"code":"job_not_found", "message":"No such job"}})
+        );
+    }
+    for invalid in [0, -1] {
+        assert_eq!(
+            accepted_job(models::Accepted::new(invalid))
+                .into_response()
+                .status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            detail_response(legacy(invalid), true).status(),
+            StatusCode::BAD_GATEWAY
+        );
+    }
+}
+
+#[tokio::test]
+async fn full_width_cursors_return_the_same_public_pages_with_or_without_private_jobs() {
+    let first = 1_i64 << 52;
+    let second = (1_i64 << 53) + 1;
+    let last = i64::MAX;
+    let visible = [legacy(first), legacy(second), legacy(last)];
+    let mixed = [
+        bundle(first - 1),
+        legacy(first),
+        bundle(first + 1),
+        legacy(second),
+        bundle(last - 1),
+        legacy(last),
+    ];
+    for jobs in [visible.as_slice(), mixed.as_slice()] {
+        for (cursor, expected) in [
+            (None, json!({"items":[legacy(first)], "next_cursor":first})),
+            (
+                Some(first),
+                json!({"items":[legacy(second)], "next_cursor":second}),
+            ),
+            (
+                Some(second),
+                json!({"items":[legacy(last)], "next_cursor":null}),
+            ),
+            (Some(last), json!({"items":[], "next_cursor":null})),
+        ] {
+            let query = ListQuery {
+                limit: Some(1),
+                cursor,
+            }
+            .pagination()
+            .unwrap();
+            assert_eq!(query.cursor, cursor);
+            let result = public_page(query, LOOKAHEAD_BUDGET, |limit, cursor| {
+                std::future::ready(Ok(finance_page(jobs, limit, cursor)))
+            })
+            .await
+            .ok()
+            .unwrap();
+            assert_eq!(public_body(result).await, expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn bounded_mixed_pages_cannot_distinguish_a_private_tail_from_a_later_public_job() {
+    // Both producers answer every read in the budget identically, including their cursors.
+    // Their correct *public* next_cursor after job 7 would be null and 7, respectively.
+    let mut jobs = vec![legacy(7)];
+    jobs.extend((8..309).map(bundle));
+    let hidden_tail = jobs.clone();
+    jobs.push(legacy(309));
+    let mut observations = Vec::new();
+    for (history, expected_public_cursor) in [(&hidden_tail, None), (&jobs, Some(7))] {
+        let visible: Vec<_> = history
+            .iter()
+            .filter(|job| is_legacy(job))
+            .cloned()
+            .collect();
+        let public = finance_page(&visible, Some(1), None);
+        assert_eq!(public.next_cursor.flatten(), expected_public_cursor);
+        let mut observed = Vec::new();
+        let first = public_page(one_job_query(None), LOOKAHEAD_BUDGET, |limit, cursor| {
+            let reply = finance_page(history, limit, cursor);
+            observed.push((limit, cursor, reply.clone()));
+            std::future::ready(Ok(reply))
+        })
+        .await
+        .ok()
+        .unwrap();
+        let first = public_body(first).await;
+        assert_eq!(first["items"], json!([legacy(7)]));
+        assert_eq!(observed.len(), MAX_PUBLIC_PAGE_READS);
+        observations.push(observed);
+    }
+    assert_eq!(observations[0], observations[1]);
 }

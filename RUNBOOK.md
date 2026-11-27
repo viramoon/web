@@ -206,6 +206,8 @@ W5 升级时，停下旧 notifier，在共用 PostgreSQL 上执行 `web migrate`
 
 回测页从 /api/v1/backtests/datasets 读取已审核的历史标的。配置数据后提交 SmaCrossover，并在工作台查看作业状态和历史结果。POST 超时或连接中断后，使用管理员身份和原 Idempotency-Key 请求 GET /api/v1/backtests/by-key。若查到 ID，继续轮询该作业。只有明确返回 404 后才允许带原请求及原键重试。
 
+提交与恢复返回的 ID 可达 `9223372036854775807`。排查时保留原十进制文本。试用过本分支早期正数句柄的客户端需从首页或最后已知的公开作业 ID 重新读取。当前 F10b 混合列表的私有尾段会影响匿名续页。严格隔离部署须等待 finance 提供按公开作业筛选的分页，再升级 Web 契约指针。[分页语义](docs/api.md#作业与行情)
+
 ### 策略上传与因子报告
 
 1. 管理员把 UTF-8 文件正文以 `{format, content}` 发送到 `POST /api/v1/strategies/validate`。一次上传最多 256 KiB，413 返回 `body_too_large`。收到编译器 422 时，用 `error.path` 与从 1 起算的 `error.location.line`、`error.location.column` 定位修改。

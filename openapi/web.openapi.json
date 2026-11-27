@@ -7243,7 +7243,7 @@
 },
 "/api/v1/backtests": {
 "get": {
-"description": "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pages use public job ids or opaque safe integers as cursors. Continue until next_cursor is null, even if items is empty.",
+"description": "Legacy jobs are public. StrategyBundle jobs are visible to administrators. Anonymous pages can also return a negative continuation when the visibility of the remaining jobs is unknown. Continue until next_cursor is null, even if items is empty.",
 "operationId": "list",
 "parameters": [
 {
@@ -7258,7 +7258,7 @@
 }
 },
 {
-"description": "Previous numeric next_cursor or a legacy nonnegative job id below 2^52",
+"description": "Exclusive nonnegative int64 job position, or a continuation returned by an anonymous list",
 "in": "query",
 "name": "cursor",
 "required": false,

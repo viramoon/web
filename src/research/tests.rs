@@ -596,7 +596,7 @@ async fn submit_stub(
                 )
             };
         }
-        let id = 11 + queue.len() as i64;
+        let id = queue.values().map(|(id, _)| *id).max().unwrap_or(10) + 1;
         queue.insert(key.into(), (id, job));
         id
     };
@@ -609,6 +609,16 @@ async fn submit_stub(
 fn job(id: i64, request: Value) -> Value {
     json!({"id":id, "status":"queued", "request":request, "attempt":0,
         "created_at":START, "summary":null, "error":null})
+}
+
+async fn lookup_stub(State(queue): State<Queue>, headers: HeaderMap) -> Response {
+    assert_finance_headers(&headers);
+    let queue = queue.lock().unwrap();
+    let key = headers["idempotency-key"].to_str().unwrap();
+    queue.get(key).map_or_else(
+        || api_error(StatusCode::NOT_FOUND, "job_not_found", "No such job"),
+        |(id, _)| Json(json!({"id":id})).into_response(),
+    )
 }
 
 #[tokio::test]
@@ -667,20 +677,7 @@ async fn backtest_proxy_reuses_keys_recovers_timeout_and_keeps_legacy_deep_link(
                 }
             }),
         )
-        .route(
-            KEY_LOOKUP,
-            get(
-                |State(queue): State<Queue>, headers: HeaderMap| async move {
-                    assert_finance_headers(&headers);
-                    let queue = queue.lock().unwrap();
-                    let key = headers["idempotency-key"].to_str().unwrap();
-                    queue.get(key).map_or_else(
-                        || api_error(StatusCode::NOT_FOUND, "job_not_found", "No such job"),
-                        |(id, _)| Json(json!({"id":id})).into_response(),
-                    )
-                },
-            ),
-        )
+        .route(KEY_LOOKUP, get(lookup_stub))
         .with_state(Arc::clone(&queue));
     let web = Gateway::new(stub).await;
     let submit = |key| {
@@ -773,6 +770,127 @@ async fn backtest_proxy_reuses_keys_recovers_timeout_and_keeps_legacy_deep_link(
         web.get(JOBS).await,
         json!({"items":[legacy,configured], "next_cursor":11})
     );
+}
+
+#[tokio::test]
+async fn full_width_job_ids_survive_submit_timeout_key_recovery_detail_and_both_lists() {
+    for (id, private) in [
+        (1_i64 << 52, false),
+        ((1_i64 << 53) + 1, false),
+        (i64::MAX, true),
+    ] {
+        let legacy = json!({
+            "strategy":"DemoStrategy", "instrument":"6EH4.XCME", "params":{},
+            "start":"2024-01-01T23:01:00Z", "end":"2024-01-01T23:09:00Z"
+        });
+        let input = if private {
+            submission(selection())
+        } else {
+            legacy.clone()
+        };
+        let mut view = input.clone();
+        if private {
+            view["content_sha256"] = registered()["content_sha256"].clone();
+        }
+        let expected = job(id, view);
+        let queue = Queue::default();
+        queue
+            .lock()
+            .unwrap()
+            .insert("predecessor".into(), (id - 1, legacy));
+        let stub = Router::new()
+            .route(
+                JOBS,
+                post(submit_stub).get({
+                    let expected = expected.clone();
+                    move |Query(params): Query<HashMap<String, String>>| {
+                        let expected = expected.clone();
+                        async move {
+                            assert_eq!(params["limit"], "1");
+                            let cursor = params["cursor"].parse::<i64>().unwrap();
+                            assert!(cursor == id - 1 || cursor == id);
+                            let items: Vec<_> =
+                                (cursor < id).then_some(expected).into_iter().collect();
+                            Json(json!({"items":items, "next_cursor":null}))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/backtests/{id}",
+                get({
+                    let expected = expected.clone();
+                    move |RoutePath(actual): RoutePath<i64>| {
+                        let expected = expected.clone();
+                        async move {
+                            if actual == id {
+                                Json(expected).into_response()
+                            } else {
+                                api_error(StatusCode::NOT_FOUND, "job_not_found", "No such job")
+                            }
+                        }
+                    }
+                }),
+            )
+            .route(KEY_LOOKUP, get(lookup_stub))
+            .with_state(Arc::clone(&queue));
+        let web = Gateway::new(stub).await;
+        let submit = || {
+            web.admin(Request::post(JOBS))
+                .header("Idempotency-Key", "delayed")
+        };
+        let lookup = || {
+            web.admin(Request::get(KEY_LOOKUP))
+                .header("Idempotency-Key", "delayed")
+        };
+        web.json(lookup(), Value::Null, StatusCode::NOT_FOUND).await;
+        web.json(submit(), input.clone(), StatusCode::GATEWAY_TIMEOUT)
+            .await;
+        assert_eq!(
+            web.json(lookup(), Value::Null, StatusCode::OK).await,
+            json!({"id":id})
+        );
+        assert_eq!(
+            web.json(submit(), input, StatusCode::ACCEPTED).await,
+            json!({"id":id})
+        );
+        assert_eq!(queue.lock().unwrap().len(), 2);
+        let detail = format!("{JOBS}/{id}");
+        assert_eq!(web.get(&detail).await, expected);
+        if private {
+            let hidden = web
+                .json(Request::get(&detail), Value::Null, StatusCode::NOT_FOUND)
+                .await;
+            let absent = web
+                .json(
+                    Request::get(format!("{JOBS}/1")),
+                    Value::Null,
+                    StatusCode::NOT_FOUND,
+                )
+                .await;
+            assert_eq!(hidden, absent);
+        } else {
+            assert_eq!(
+                web.json(Request::get(&detail), Value::Null, StatusCode::OK)
+                    .await,
+                expected
+            );
+        }
+        for cursor in [id - 1, id] {
+            let path = format!("{JOBS}?limit=1&cursor={cursor}");
+            let items: Vec<_> = (cursor < id).then_some(&expected).into_iter().collect();
+            assert_eq!(
+                web.get(&path).await,
+                json!({"items":items, "next_cursor":null})
+            );
+            let public = if private { Vec::new() } else { items };
+            assert_eq!(
+                web.json(Request::get(&path), Value::Null, StatusCode::OK)
+                    .await,
+                json!({"items":public, "next_cursor":null})
+            );
+        }
+    }
 }
 
 fn access() -> Value {
@@ -978,8 +1096,10 @@ async fn anonymous_backtest_rejects_unverifiable_cursor_before_finance() {
     let web = Gateway::with_finance_url("http://127.0.0.1:1".into());
     for (raw, status) in [
         ("-1", StatusCode::UNPROCESSABLE_ENTITY),
-        ("4503599627370496", StatusCode::BAD_REQUEST),
-        ("9007199254740992", StatusCode::BAD_REQUEST),
+        ("-4503599627370496", StatusCode::BAD_REQUEST),
+        ("-2251799813685249", StatusCode::BAD_REQUEST),
+        ("9223372036854775808", StatusCode::UNPROCESSABLE_ENTITY),
+        ("-9223372036854775809", StatusCode::UNPROCESSABLE_ENTITY),
     ] {
         let rejected = web
             .json(
@@ -991,4 +1111,9 @@ async fn anonymous_backtest_rejects_unverifiable_cursor_before_finance() {
         assert_eq!(rejected["error"]["code"], "invalid_request");
         assert!(!rejected.to_string().contains(raw));
     }
+    let admin = web.admin(Request::get(format!("{JOBS}?cursor=-4503599627370496")));
+    let rejected = web
+        .json(admin, Value::Null, StatusCode::UNPROCESSABLE_ENTITY)
+        .await;
+    assert_eq!(rejected["error"]["code"], "invalid_request");
 }

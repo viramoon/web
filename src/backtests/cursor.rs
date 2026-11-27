@@ -1,11 +1,15 @@
+use super::InvalidPagination;
 use openssl::rand::rand_bytes;
 use std::{
     collections::{HashMap, VecDeque},
+    ops::Range,
     sync::{LazyLock, Mutex},
 };
 
-pub(super) const FIRST_HANDLE: i64 = 1 << 52;
-pub(super) const MAX_SAFE_CURSOR: i64 = (1 << 53) - 1;
+// Finance accepts every nonnegative i64 as an exclusive job position. Only a
+// negative value can identify a web continuation without shadowing a real cursor.
+const HANDLE_COUNT: i64 = 1 << 51;
+pub(super) const HANDLE_RANGE: Range<i64> = -2 * HANDLE_COUNT..-HANDLE_COUNT;
 const MAX_HANDLES: usize = 4096;
 
 // Membership authenticates the handle. Its bits are independent of the scan position.
@@ -15,7 +19,7 @@ pub(super) fn issue(position: i64) -> Result<i64, ()> {
     for _ in 0..8 {
         let mut bytes = [0; 8];
         rand_bytes(&mut bytes).map_err(|_| ())?;
-        let handle = FIRST_HANDLE | (i64::from_be_bytes(bytes) & (FIRST_HANDLE - 1));
+        let handle = HANDLE_RANGE.start + (i64::from_be_bytes(bytes) & (HANDLE_COUNT - 1));
         if HANDLES.lock().map_err(|_| ())?.insert(handle, position) {
             return Ok(handle);
         }
@@ -23,16 +27,18 @@ pub(super) fn issue(position: i64) -> Result<i64, ()> {
     Err(())
 }
 
-pub(super) fn resolve(value: i64) -> Option<i64> {
-    match value {
-        0..FIRST_HANDLE => Some(value),
-        FIRST_HANDLE..=MAX_SAFE_CURSOR => HANDLES.lock().ok()?.positions.get(&value).copied(),
-        _ => None,
+pub(super) fn resolve(value: i64) -> Result<i64, InvalidPagination> {
+    if value >= 0 {
+        return Ok(value);
     }
-}
-
-pub(super) fn is_job_id(value: i64) -> bool {
-    (1..FIRST_HANDLE).contains(&value)
+    if !HANDLE_RANGE.contains(&value) {
+        return Err(InvalidPagination::Parameters);
+    }
+    HANDLES
+        .lock()
+        .ok()
+        .and_then(|store| store.positions.get(&value).copied())
+        .ok_or(InvalidPagination::Cursor)
 }
 
 #[derive(Default)]
@@ -63,36 +69,48 @@ mod tests {
     #[test]
     fn opaque_cursor_is_randomized_and_rejects_an_unissued_neighbor() {
         let handle = issue(208).unwrap();
-        assert!((FIRST_HANDLE..=MAX_SAFE_CURSOR).contains(&handle));
-        assert_eq!(resolve(handle), Some(208));
+        assert!(HANDLE_RANGE.contains(&handle));
+        assert_eq!(resolve(handle).unwrap(), 208);
         assert_ne!(handle, issue(208).unwrap());
-        assert_eq!(resolve(handle ^ 1), None);
+        assert!(matches!(
+            resolve(handle ^ 1),
+            Err(InvalidPagination::Cursor)
+        ));
         assert!(!Handles::default().positions.contains_key(&handle));
     }
 
     #[test]
     fn cursor_parser_keeps_legacy_nonnegative_decimal_input() {
-        assert_eq!(resolve(0), Some(0));
-        assert_eq!(resolve(7), Some(7));
-        assert_eq!(resolve(FIRST_HANDLE - 1), Some(FIRST_HANDLE - 1));
-        assert_eq!(resolve(-1), None);
-        assert_eq!(resolve(MAX_SAFE_CURSOR + 1), None);
-        assert_eq!(resolve(i64::MAX), None);
-        assert!(!is_job_id(FIRST_HANDLE));
-        assert!(!is_job_id(MAX_SAFE_CURSOR));
-        assert!(is_job_id(FIRST_HANDLE - 1));
+        let boundaries = [1_i64 << 52, 1_i64 << 53];
+        let neighbors = boundaries.into_iter().flat_map(|n| (n - 1)..=(n + 1));
+        for id in [0, 7, i64::MAX].into_iter().chain(neighbors) {
+            assert_eq!(resolve(id).unwrap(), id);
+            if id > 0 {
+                let handle = issue(id).unwrap();
+                assert!(HANDLE_RANGE.contains(&handle));
+                assert_eq!(resolve(handle).unwrap(), id);
+                assert_eq!(resolve(id).unwrap(), id);
+            }
+        }
+        for invalid in [i64::MIN, HANDLE_RANGE.start - 1, HANDLE_RANGE.end, -1] {
+            assert!(matches!(
+                resolve(invalid),
+                Err(InvalidPagination::Parameters)
+            ));
+        }
     }
 
     #[test]
     fn handle_store_is_bounded_and_does_not_rebind_a_live_handle() {
         let mut store = Handles::default();
+        let first = HANDLE_RANGE.start;
         for offset in 0..MAX_HANDLES as i64 {
-            assert!(store.insert(FIRST_HANDLE + offset, offset + 1));
+            assert!(store.insert(first + offset, offset + 1));
         }
-        assert!(!store.insert(FIRST_HANDLE, 9999));
-        assert_eq!(store.positions[&FIRST_HANDLE], 1);
-        assert!(store.insert(FIRST_HANDLE + MAX_HANDLES as i64, 9999));
-        assert!(!store.positions.contains_key(&FIRST_HANDLE));
+        assert!(!store.insert(first, 9999));
+        assert_eq!(store.positions[&first], 1);
+        assert!(store.insert(first + MAX_HANDLES as i64, 9999));
+        assert!(!store.positions.contains_key(&first));
         assert_eq!(store.positions.len(), MAX_HANDLES);
         assert_eq!(store.issued.len(), MAX_HANDLES);
     }
