@@ -51,6 +51,16 @@
         ],
         "type": "string"
       },
+      "Availability": {
+        "description": "The earliest usable point within or after the identified session.",
+        "enum": [
+          "session_open",
+          "session_close",
+          "after_session_close",
+          "next_session_close"
+        ],
+        "type": "string"
+      },
       "BacktestSummary": {
         "additionalProperties": false,
         "properties": {
@@ -180,6 +190,42 @@
           "product",
           "timeframe",
           "adjustment"
+        ],
+        "type": "object"
+      },
+      "Bars": {
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "available_at": {
+            "$ref": "#/components/schemas/Availability"
+          },
+          "calendar": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "price_basis": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "calendar",
+          "currency",
+          "asset",
+          "timeframe",
+          "price_basis",
+          "available_at"
         ],
         "type": "object"
       },
@@ -322,6 +368,44 @@
           "end",
           "source",
           "content_sha256"
+        ],
+        "type": "object"
+      },
+      "BundleSignal": {
+        "properties": {
+          "instrument_id": {
+            "$ref": "#/components/schemas/InstrumentId"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recipe": {
+            "type": "string"
+          },
+          "replay_offset": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "session": {
+            "format": "date",
+            "type": "string"
+          },
+          "signal_ts": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "target_shares": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "replay_offset",
+          "session",
+          "signal_ts",
+          "recipe",
+          "instrument_id",
+          "target_shares"
         ],
         "type": "object"
       },
@@ -579,6 +663,203 @@
         ],
         "type": "object"
       },
+      "CompiledComponent": {
+        "properties": {
+          "available_at": {
+            "$ref": "#/components/schemas/Availability"
+          },
+          "component": {
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "local_id": {
+            "type": "string"
+          },
+          "output": {
+            "description": "Explicit output selection for an indicator used as a scalar factor.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warmup_sessions": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "local_id",
+          "component",
+          "kind",
+          "depends_on",
+          "warmup_sessions",
+          "available_at"
+        ],
+        "type": "object"
+      },
+      "CompiledPlan": {
+        "properties": {
+          "bundle": {
+            "description": "Canonical document conforming to the separate StrategyBundle v1 schema.",
+            "type": "object"
+          },
+          "conflict_rules": {
+            "$ref": "#/components/schemas/ConflictRules"
+          },
+          "content_sha256": {
+            "description": "SHA-256 of the canonical bundle.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "execution": {
+            "type": "string"
+          },
+          "factors": {
+            "items": {
+              "$ref": "#/components/schemas/CompiledComponent"
+            },
+            "type": "array"
+          },
+          "inputs": {
+            "$ref": "#/components/schemas/ResolvedInputs"
+          },
+          "modules": {
+            "items": {
+              "$ref": "#/components/schemas/CompiledComponent"
+            },
+            "type": "array"
+          },
+          "plan_version": {
+            "type": "string"
+          },
+          "sleeves": {
+            "items": {
+              "$ref": "#/components/schemas/CompiledSleeve"
+            },
+            "type": "array"
+          },
+          "source_sha256": {
+            "description": "SHA-256 of the submitted source bytes.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_version",
+          "content_sha256",
+          "source_sha256",
+          "bundle",
+          "inputs",
+          "factors",
+          "modules",
+          "execution",
+          "sleeves",
+          "conflict_rules"
+        ],
+        "type": "object"
+      },
+      "CompiledSleeve": {
+        "properties": {
+          "budget_weight": {
+            "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+            "type": "string"
+          },
+          "priority": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recipe": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe",
+          "priority",
+          "budget_weight"
+        ],
+        "type": "object"
+      },
+      "ConflictRules": {
+        "properties": {
+          "decision_snapshot": {
+            "type": "string"
+          },
+          "duplicate_intents": {
+            "type": "string"
+          },
+          "equal_priority": {
+            "type": "string"
+          },
+          "missing_input": {
+            "type": "string"
+          },
+          "on_entry_exit_collision": {
+            "type": "string"
+          },
+          "on_missing_execution_price": {
+            "type": "string"
+          },
+          "phase_order": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "position_change_order": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "same_session_reentry": {
+            "type": "boolean"
+          },
+          "sleeve_accounting": {
+            "type": "string"
+          },
+          "target_constraints_order": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "whole_lot_remainder_order": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "decision_snapshot",
+          "phase_order",
+          "on_entry_exit_collision",
+          "same_session_reentry",
+          "on_missing_execution_price",
+          "missing_input",
+          "target_constraints_order",
+          "position_change_order",
+          "priority",
+          "equal_priority",
+          "whole_lot_remainder_order",
+          "duplicate_intents",
+          "sleeve_accounting"
+        ],
+        "type": "object"
+      },
       "ConnectionState": {
         "enum": [
           "connected",
@@ -686,6 +967,106 @@
       "DecimalText": {
         "pattern": "^(?=-?(?:[0-9][.]?){1,28}(?![\\s\\S]))-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?![\\s\\S])",
         "type": "string"
+      },
+      "DecisionAccess": {
+        "additionalProperties": false,
+        "properties": {
+          "derive_non_display": {
+            "type": "boolean"
+          },
+          "license": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "record_local": {
+            "type": "boolean"
+          },
+          "redistribute": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "license",
+          "record_local",
+          "derive_non_display",
+          "redistribute"
+        ],
+        "type": "object"
+      },
+      "DecisionSignal": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "sma_crossover"
+                ],
+                "type": "string"
+              },
+              "signal": {
+                "$ref": "#/components/schemas/SmaSignal"
+              }
+            },
+            "required": [
+              "signal",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "strategy_bundle"
+                ],
+                "type": "string"
+              },
+              "signal": {
+                "$ref": "#/components/schemas/BundleSignal"
+              }
+            },
+            "required": [
+              "signal",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DecisionSignalPage": {
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/DecisionAccess"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionSignal"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "schema_version": {
+            "format": "int32",
+            "maximum": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "plan_sha256",
+          "access",
+          "items"
+        ],
+        "type": "object"
       },
       "DelayTier": {
         "enum": [
@@ -1074,6 +1455,29 @@
         },
         "required": [
           "count"
+        ],
+        "type": "object"
+      },
+      "FactorEvaluationDetail": {
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "item": {
+            "$ref": "#/components/schemas/FactorEvaluationItem"
+          },
+          "schema_version": {
+            "format": "int32",
+            "maximum": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "as_of",
+          "item"
         ],
         "type": "object"
       },
@@ -2858,6 +3262,21 @@
         ],
         "type": "object"
       },
+      "ResolvedInputs": {
+        "properties": {
+          "bars": {
+            "$ref": "#/components/schemas/Bars"
+          },
+          "universe": {
+            "$ref": "#/components/schemas/Universe"
+          }
+        },
+        "required": [
+          "universe",
+          "bars"
+        ],
+        "type": "object"
+      },
       "SchemaVersion": {
         "enum": [
           "1.0",
@@ -2910,6 +3329,65 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "SmaSignal": {
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "cursor": {
+            "$ref": "#/components/schemas/NonEmptyText"
+          },
+          "decision_ts": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "epoch": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "exchange_ts": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "first_available_ts": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "instrument_id": {
+            "$ref": "#/components/schemas/InstrumentId"
+          },
+          "license": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "product": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "replay_offset": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "seq": {
+            "$ref": "#/components/schemas/U64Text"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "target_shares": {
+            "$ref": "#/components/schemas/DecimalText"
+          }
+        },
+        "required": [
+          "replay_offset",
+          "source",
+          "product",
+          "channel",
+          "instrument_id",
+          "epoch",
+          "seq",
+          "cursor",
+          "license",
+          "exchange_ts",
+          "first_available_ts",
+          "decision_ts",
+          "target_shares"
+        ],
         "type": "object"
       },
       "SourceObservation": {
@@ -3017,6 +3495,21 @@
         },
         "type": "object"
       },
+      "StrategyPreview": {
+        "properties": {
+          "plan": {
+            "$ref": "#/components/schemas/CompiledPlan"
+          },
+          "strategy": {
+            "$ref": "#/components/schemas/RegisteredStrategy"
+          }
+        },
+        "required": [
+          "strategy",
+          "plan"
+        ],
+        "type": "object"
+      },
       "StrategySource": {
         "oneOf": [
           {
@@ -3065,6 +3558,26 @@
             "type": "object"
           }
         ]
+      },
+      "StrategyVersionPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RegisteredStrategy"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
       },
       "SubmitRequest": {
         "oneOf": [
@@ -3136,6 +3649,38 @@
       "U64Text": {
         "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)(?![\\s\\S])",
         "type": "string"
+      },
+      "Universe": {
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "available_at": {
+            "$ref": "#/components/schemas/Availability"
+          },
+          "calendar": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "point_in_time": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "calendar",
+          "currency",
+          "asset",
+          "point_in_time",
+          "available_at"
+        ],
+        "type": "object"
       },
       "ValueRow": {
         "properties": {
@@ -3418,6 +3963,49 @@
         "required": [
           "return_pct",
           "max_drawdown_pct"
+        ],
+        "type": "object"
+      },
+      "WorkerStatus": {
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "leased_running": {
+            "description": "Running jobs with a lease whose expiry is after as_of.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "queue_present": {
+            "description": "Whether the queue has been initialized.",
+            "type": "boolean"
+          },
+          "queued": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "running": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unleased_running": {
+            "description": "Running jobs with missing or expired leases. Recovery may still be fenced by a lock.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queue_present",
+          "queued",
+          "running",
+          "leased_running",
+          "unleased_running",
+          "as_of"
         ],
         "type": "object"
       }
@@ -3711,6 +4299,37 @@
         "tags": []
       }
     },
+    "/api/v1/backtests/worker-status": {
+      "get": {
+        "operationId": "backtest_worker_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerStatus"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Read queue and lease counts. These counts do not report process liveness.",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
     "/api/v1/backtests/{id}": {
       "get": {
         "operationId": "detail",
@@ -3769,6 +4388,150 @@
         },
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/api/v1/backtests/{id}/cancel": {
+      "post": {
+        "operationId": "cancel_backtest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Cancel a queued or running backtest. Cancellations use the legacy failed\nstatus with a distinct error code so older clients can still decode jobs.",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/decisions/signals": {
+      "get": {
+        "operationId": "decision_signals",
+        "parameters": [
+          {
+            "description": "Exclusive cursor from the same published plan.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionSignalPage"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "decision_read"
         ]
       }
     },
@@ -3897,6 +4660,83 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FactorEvaluationPage"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "factor_read"
+        ]
+      }
+    },
+    "/api/v1/factors/{id}/evaluations/{evaluation_id}": {
+      "get": {
+        "operationId": "factor_evaluation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "evaluation_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Registered factor version.",
+            "in": "query",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FactorEvaluationDetail"
                 }
               }
             },
@@ -4766,6 +5606,75 @@
       }
     },
     "/api/v1/strategies": {
+      "get": {
+        "operationId": "strategy_versions",
+        "parameters": [
+          {
+            "description": "Show versions for this strategy ID only.",
+            "in": "query",
+            "name": "id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive cursor ordered lexicographically by ID and then by version text.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyVersionPage"
+                }
+              }
+            },
+            "description": ""
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "bundle_jobs"
+        ]
+      },
       "post": {
         "operationId": "register",
         "requestBody": {
@@ -4820,6 +5729,126 @@
             "description": ""
           }
         },
+        "tags": [
+          "bundle_jobs"
+        ]
+      }
+    },
+    "/api/v1/strategies/validate": {
+      "post": {
+        "operationId": "validate_strategy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyDocument"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyPreview"
+                }
+              }
+            },
+            "description": ""
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Compile an upload for preview without registering it or accessing replay data.",
+        "tags": [
+          "bundle_jobs"
+        ]
+      }
+    },
+    "/api/v1/strategies/{id}/versions/{version}": {
+      "get": {
+        "operationId": "strategy_version",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyPreview"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Resolve a registered version using its pinned input metadata.",
         "tags": [
           "bundle_jobs"
         ]
