@@ -1,5 +1,12 @@
 use super::*;
-use crate::{auth::WriteAccess, config::Settings, database::Database, router};
+use crate::{
+    auth::WriteAccess,
+    config::Settings,
+    database::Database,
+    router,
+    test_postgres::Cluster,
+    test_subscription_demand::{PATH as DEMAND, subscription_status},
+};
 use axum::{
     body::{Body, to_bytes},
     extract::OriginalUri,
@@ -160,6 +167,10 @@ struct Fixture {
 
 impl Fixture {
     async fn start(script: Vec<Exchange>) -> Self {
+        Self::start_with_db(script, None).await
+    }
+
+    async fn start_with_db(script: Vec<Exchange>, db: Option<Database>) -> Self {
         let script = Arc::new(Mutex::new(VecDeque::from(script)));
         let upstream = Router::new()
             .fallback(
@@ -181,13 +192,23 @@ impl Fixture {
                 },
             )
             .with_state(script.clone());
+        let upstream = if db.is_some() {
+            upstream.route(
+                DEMAND,
+                axum::routing::put(|Json(body): Json<Value>| async move {
+                    Json(subscription_status(&body, "enabled"))
+                }),
+            )
+        } else {
+            upstream
+        };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
         Self {
             server,
             script,
-            gateway: Gateway::new(format!("http://{address}")),
+            gateway: Gateway::new_with_db(format!("http://{address}"), db),
         }
     }
 
@@ -214,6 +235,10 @@ struct Gateway {
 
 impl Gateway {
     fn new(finance_url: String) -> Self {
+        Self::new_with_db(finance_url, None)
+    }
+
+    fn new_with_db(finance_url: String, db: Option<Database>) -> Self {
         let directory = tempfile::tempdir_in("/tmp").unwrap();
         let token_file = directory.path().join("fixture.env");
         let token = uuid::Uuid::new_v4().to_string();
@@ -240,15 +265,17 @@ impl Gateway {
                 Duration::from_secs(300),
             )
             .unwrap();
-        let db = Database::new(
-            &format!(
-                "postgresql://localhost/test?host={}",
-                directory.path().display()
-            ),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-        )
-        .unwrap();
+        let db = db.unwrap_or_else(|| {
+            Database::new(
+                &format!(
+                    "postgresql://localhost/test?host={}",
+                    directory.path().display()
+                ),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .unwrap()
+        });
         let app = router(AppState {
             db,
             finance: Finance::new(&config.finance).unwrap(),
@@ -612,7 +639,15 @@ async fn browser_market_views_query_real_f10a_data_and_keep_exact_values() {
 async fn depth_focus_selects_a_real_wal_book_then_clear_requires_an_instrument() {
     const FOCUS: &str = "/api/v1/market/depth-focus";
     let path = format!("{WAL}?source={SOURCE}&product={PRODUCT}&after=0&limit=128");
-    let fixture = Fixture::start(vec![Exchange::ok(path, wal_rows(vec![book_snapshot()]))]).await;
+    let cluster = Cluster::create();
+    let timeout = Duration::from_secs(2);
+    let db = Database::new(&cluster.url(), timeout, timeout).unwrap();
+    db.migrate().await.unwrap();
+    let fixture = Fixture::start_with_db(
+        vec![Exchange::ok(path, wal_rows(vec![book_snapshot()]))],
+        Some(db),
+    )
+    .await;
     async fn put(gateway: &Gateway, body: Value) -> Value {
         let request = Request::put(FOCUS)
             .header(header::AUTHORIZATION, gateway.authorization.clone())

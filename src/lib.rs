@@ -25,6 +25,9 @@ pub mod telemetry;
 #[path = "../tests/api/postgres.rs"]
 mod test_postgres;
 #[cfg(test)]
+#[path = "../tests/api/subscription_demand_fixture.rs"]
+mod test_subscription_demand;
+#[cfg(test)]
 mod w1_http_tests;
 mod watchlists;
 

@@ -1,16 +1,19 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, State, rejection::JsonRejection},
     http::StatusCode,
-    response::Response,
+    response::{IntoResponse, Response},
     routing::get,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{OpenApi, ToSchema};
 
-use crate::{AppState, ErrorBody, api_error, market_types::InstrumentId};
+use crate::{
+    AppState, ErrorBody, api_error, database::Database, market_preferences::MarketPreferences,
+    market_types::InstrumentId,
+};
 
 pub(crate) const WATCHLIST: &str = "/api/v1/watchlists/{id}";
 const MAX_ITEMS: usize = 64;
@@ -59,6 +62,18 @@ fn unavailable() -> Response {
     )
 }
 
+pub(crate) async fn demand_ids(db: &Database) -> Result<Vec<String>, Response> {
+    let mut connection = db.connection().await.map_err(|_| unavailable())?;
+    sqlx::query_scalar(
+        "SELECT DISTINCT instrument_id COLLATE \"C\"
+         FROM app.market_watchlists CROSS JOIN LATERAL unnest(instrument_ids) AS ids(instrument_id)
+         ORDER BY 1",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(|_| unavailable())
+}
+
 #[utoipa::path(get, path = "/api/v1/watchlists/{id}", operation_id = "getWatchlist",
     params(("id" = String, Path, pattern = "^[a-z0-9][a-z0-9_-]{0,63}$")),
     security(("adminSession" = []), ("adminBearer" = [])),
@@ -94,19 +109,24 @@ async fn read(
 }
 
 #[utoipa::path(put, path = "/api/v1/watchlists/{id}", operation_id = "putWatchlist",
+    description = "Saves the new watchlist revision before submitting the complete subscription demand to finance. Forwarding errors leave the saved revision in place.",
     params(("id" = String, Path, pattern = "^[a-z0-9][a-z0-9_-]{0,63}$"),
         ("X-CSRF-Token" = Option<String>, Header, description = "Required for browser sessions")),
     request_body = UpdateWatchlist, security(("adminSession" = []), ("adminBearer" = [])),
-    responses((status = 200, body = Watchlist), (status = 400, body = ErrorBody),
+    responses((status = 200, body = Watchlist,
+        headers(("X-Finance-Subscription-State" = String, description = "Finance collection state: enabled or disabled"))),
+        (status = 400, body = ErrorBody),
         (status = 401, body = ErrorBody), (status = 403, body = ErrorBody),
         (status = 409, body = ErrorBody), (status = 413, body = ErrorBody),
         (status = 429, body = ErrorBody),
-        (status = 503, body = ErrorBody), (status = 504, body = ErrorBody)))]
+        (status = 502, body = ErrorBody), (status = 503, body = ErrorBody),
+        (status = 504, body = ErrorBody)))]
 async fn update(
     State(state): State<AppState>,
+    Extension(preferences): Extension<Arc<MarketPreferences>>,
     Path(id): Path<String>,
     body: Result<Json<UpdateWatchlist>, JsonRejection>,
-) -> Result<Json<Watchlist>, Response> {
+) -> Result<impl IntoResponse, Response> {
     if !valid_id(&id) {
         return Err(invalid());
     }
@@ -134,6 +154,7 @@ async fn update(
     if ids.len() > MAX_ITEMS || ids.iter().collect::<HashSet<_>>().len() != ids.len() {
         return Err(invalid());
     }
+    let _update = preferences.demand_updates.lock().await;
     // The v1 site has one administrator principal. Each compare-and-swap is
     // a single PG statement and can be committed at most once per revision.
     let mut connection = state
@@ -164,6 +185,7 @@ async fn update(
         .await
     }
     .map_err(|_| unavailable())?;
+    drop(connection);
     if updated.rows_affected() == 0 {
         return Err(api_error(
             StatusCode::CONFLICT,
@@ -171,11 +193,15 @@ async fn update(
             "Read the current watchlist revision before retrying",
         ));
     }
-    Ok(Json(Watchlist {
-        id,
-        revision,
-        instrument_ids: request.instrument_ids,
-    }))
+    let headers = preferences.forward_demand(&state).await?;
+    Ok((
+        headers,
+        Json(Watchlist {
+            id,
+            revision,
+            instrument_ids: request.instrument_ids,
+        }),
+    ))
 }
 
 pub(crate) fn routes() -> Router<AppState> {

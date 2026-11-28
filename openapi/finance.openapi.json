@@ -1453,6 +1453,35 @@
         ],
         "type": "object"
       },
+      "DepthSubscriptionBudget": {
+        "properties": {
+          "access": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProductPolicy",
+                "description": "Private display policy from the depth owner, when attached."
+              }
+            ]
+          },
+          "page_focus_slots": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pinned_slots": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pinned_slots",
+          "page_focus_slots",
+          "access"
+        ],
+        "type": "object"
+      },
       "DepthSymbol": {
         "enum": [
           "QQQ",
@@ -5734,6 +5763,95 @@
         ],
         "type": "object"
       },
+      "SubscriptionDemand": {
+        "description": "Additional watchlist and page-depth demand. The owner retains its base allocation.",
+        "properties": {
+          "depth_focus": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/InstrumentId"
+              }
+            ]
+          },
+          "watchlist": {
+            "items": {
+              "$ref": "#/components/schemas/InstrumentId"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "watchlist",
+          "depth_focus"
+        ],
+        "type": "object"
+      },
+      "SubscriptionDemandRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "depth_focus": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/InstrumentId",
+                "description": "F1 ID eligible for Nasdaq TotalView. Omission or null clears the page focus."
+              }
+            ]
+          },
+          "watchlist": {
+            "description": "F1 instrument IDs. An omitted or empty array clears additional watchlist demand.",
+            "items": {
+              "$ref": "#/components/schemas/InstrumentId"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SubscriptionDemandState": {
+        "enum": [
+          "disabled",
+          "enabled"
+        ],
+        "type": "string"
+      },
+      "SubscriptionDemandStatus": {
+        "properties": {
+          "budget": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SubscriptionBudget",
+                "description": "Current counts and OPRA display policy from the existing line budget."
+              }
+            ]
+          },
+          "demand": {
+            "$ref": "#/components/schemas/SubscriptionDemand",
+            "description": "Latest demand accepted by the owner, or an empty demand when disabled."
+          },
+          "depth_budget": {
+            "$ref": "#/components/schemas/DepthSubscriptionBudget"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SubscriptionDemandState"
+          }
+        },
+        "required": [
+          "state",
+          "demand",
+          "budget",
+          "depth_budget"
+        ],
+        "type": "object"
+      },
       "SuspectedScale": {
         "properties": {
           "block_contracts_threshold": {
@@ -7992,6 +8110,64 @@
         },
         "tags": [
           "market_options::lines"
+        ]
+      }
+    },
+    "/api/v1/market/subscriptions/demand": {
+      "get": {
+        "operationId": "get_subscription_demand",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionDemandStatus"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "market_options::demand"
+        ]
+      },
+      "put": {
+        "operationId": "put_subscription_demand",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionDemandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionDemandStatus"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "market_options::demand"
         ]
       }
     },

@@ -46,6 +46,13 @@ market_gateway:
   rest_reads: {max_requests: 120, window_seconds: 60, identity: single_admin}
   watchlists: {table: app.market_watchlists, migration: "20261127040000", max_instruments: 64}
   depth_focus: {path: /api/v1/market/depth-focus, state: process_local}
+  subscription_demand:
+    finance_put: /api/v1/market/subscriptions/demand
+    inputs: [saved_watchlists_union, current_depth_focus]
+    response_header: X-Finance-Subscription-State
+    finance_states: [enabled, disabled]
+    write_retries: 0
+    interface: docs/api.md#w15-订阅需求转发
   subscriptions:
     path: /api/v1/market/subscriptions
     web_limit: 8

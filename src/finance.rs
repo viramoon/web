@@ -13,6 +13,7 @@ use finance_client::{
         Error,
         configuration::Configuration,
         default_api::{self, ReadyError},
+        market_options_demand_api::{self, PutSubscriptionDemandError},
         option_flow_stream_api::{self, SnapshotError},
     },
     models,
@@ -137,6 +138,23 @@ impl Fault {
         }
     }
 
+    fn subscription_demand(error: Error<PutSubscriptionDemandError>) -> Self {
+        match error {
+            Error::ResponseError(response) if response.status == StatusCode::BAD_REQUEST => {
+                Self::new(
+                    StatusCode::BAD_REQUEST,
+                    "subscription_demand_invalid",
+                    "Finance rejected the saved subscription demand",
+                    false,
+                )
+            }
+            Error::ResponseError(response) if response.status.is_client_error() => {
+                Self::invalid_response()
+            }
+            error => Self::upstream(error),
+        }
+    }
+
     pub fn write_error(self) -> Self {
         self.with_timeout_hint(
             "Submission outcome unknown; query by Idempotency-Key before retrying",
@@ -248,8 +266,36 @@ impl Finance {
             call,
             self.policy.max_retries,
             self.policy.request_timeout_ms,
+            Fault::upstream,
         )
         .await
+    }
+
+    pub(crate) async fn put_subscription_demand(
+        &self,
+        watchlist: Vec<String>,
+        depth_focus: Option<String>,
+    ) -> Result<models::SubscriptionDemandState, Fault> {
+        let request = models::SubscriptionDemandRequest {
+            watchlist: Some(watchlist),
+            depth_focus: Some(depth_focus),
+        };
+        self.execute(
+            |cfg| {
+                let request = request.clone();
+                async move { market_options_demand_api::put_subscription_demand(&cfg, request).await }
+            },
+            0,
+            self.policy.request_timeout_ms,
+            Fault::subscription_demand,
+        )
+        .await
+        .map(|status| status.state)
+        .map_err(|fault| {
+            fault.with_timeout_hint(
+                "Web market preferences were saved. Check subscription demand before retrying",
+            )
+        })
     }
 
     pub(crate) async fn option_flow_snapshot(
@@ -284,7 +330,8 @@ impl Finance {
         F: Fn(Arc<Configuration>) -> Fut,
         Fut: Future<Output = Result<T, Error<E>>>,
     {
-        self.execute(call, 0, self.policy.request_timeout_ms).await
+        self.execute(call, 0, self.policy.request_timeout_ms, Fault::upstream)
+            .await
     }
 
     async fn execute<T, E, F, Fut>(
@@ -292,6 +339,7 @@ impl Finance {
         call: F,
         retries: u32,
         timeout_ms: u64,
+        map_error: impl Fn(Error<E>) -> Fault,
     ) -> Result<T, Fault>
     where
         F: Fn(Arc<Configuration>) -> Fut,
@@ -307,7 +355,7 @@ impl Finance {
             let request = call(Arc::clone(&self.connection));
             let result =
                 match tokio::time::timeout(Duration::from_millis(timeout_ms), request).await {
-                    Ok(result) => result.map_err(Fault::upstream),
+                    Ok(result) => result.map_err(&map_error),
                     Err(_) => Err(Fault::timeout()),
                 };
             let transient = result.as_ref().is_err_and(|error| error.transient);
@@ -335,6 +383,7 @@ impl Finance {
                 |cfg| async move { classify_readiness(default_api::ready(&cfg).await) },
                 0,
                 self.policy.ready_timeout_ms,
+                Fault::upstream,
             )
             .await;
         let reachable = response.is_ok();
@@ -399,10 +448,33 @@ fn loopback_endpoint(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_subscription_demand::upstream_error_body;
     use axum::body::to_bytes;
     use finance_client::apis::ResponseContent;
     use serde_json::json;
 
+    #[test]
+    fn subscription_demand_errors_never_copy_finance_fields() {
+        for (upstream, status, code, transient) in [
+            (400, 400, "subscription_demand_invalid", false),
+            (404, 502, "finance_invalid_response", true),
+            (500, 502, "finance_upstream_error", true),
+            (503, 503, "finance_unavailable", true),
+            (504, 504, "finance_timeout", true),
+        ] {
+            let error = Fault::subscription_demand(Error::ResponseError(ResponseContent {
+                status: StatusCode::from_u16(upstream).unwrap(),
+                content: upstream_error_body().to_string(),
+                entity: None,
+            }));
+            assert_eq!(error.status.as_u16(), status);
+            assert_eq!(error.detail.code, code);
+            assert!(!error.detail.message.contains("fixture"));
+            assert!(error.detail.path.is_none());
+            assert!(error.detail.location.is_none());
+            assert_eq!(error.transient, transient);
+        }
+    }
     #[tokio::test]
     async fn disabled_f16_snapshot_does_not_retry_or_trip_the_finance_circuit() {
         let mut config = crate::config::Settings::load(std::path::Path::new("config"), |_| None)

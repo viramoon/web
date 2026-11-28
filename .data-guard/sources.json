@@ -2,10 +2,10 @@
   "version": 1,
   "fixtures": {
     "src/market_reads/tests.rs": {
-      "sha256": "96d59c83bfe18eaed7d5939700ef115798d51f79f70c2a4b421bcf899fac18c6",
+      "sha256": "88267702fb0e5bda0d59862bd6ccf25614287426f19ddc0682c30edc9f2d51df",
       "generator": "src/market_reads/tests/synthetic.rs",
       "seed": "fixed",
-      "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。 W6 用相同固定值构造混合版本 WAL，包含资金费率、持仓量和控制帧。 使用同一组固定十进制与缺省交易所时间验证历史期权事件在旧展示边界的拒绝。"
+      "source": "运行 cargo test --locked --offline market_reads。在进程内用固定十进制、F1 信封和虚构标的生成 HTTP 响应，覆盖 WAL、投影、许可、缺口、focus 盘口和未知值。 W6 用相同固定值构造混合版本 WAL，包含资金费率、持仓量和控制帧。 使用同一组固定十进制与缺省交易所时间验证历史期权事件在旧展示边界的拒绝。 W15 的 focus 用固定槽位计数的 F15 替身接收，之后继续验证合成盘口。"
     },
     "src/market_stream/replay/tests.rs": {
       "sha256": "9854b024eb2cdd8a4154cfa385836021945ef215a532fb1d0d7fb7dd054a074a",
@@ -44,10 +44,10 @@
       "source": "运行 cargo test --locked --offline --lib f10c_。期权、深度、敞口、历史、预算、覆盖和版本 3.0 的证据都在测试运行时构造。"
     },
     "openapi/finance.openapi.json": {
-      "sha256": "39276f25dedeed8ddbc22273051e441cdafb6dbd50d1ad8c4acb0747a0f659a2",
+      "sha256": "e325e3fc015fbe5beb8c62d389eae290be1d5d1d139244190465a39f838f8d19",
       "generator": "scripts/gen-finance-client.sh",
-      "seed": "finance main 676dee8480ec998302282c86592fe8ab8c020482",
-      "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE 676dee8480ec998302282c86592fe8ab8c020482。finance-api 从 handler 和类型导出 HTTP 契约，含 F16 期权流和恢复快照路径。"
+      "seed": "finance main e1c77c8abe12969247817a266c3bdbd3f3efcb87",
+      "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE e1c77c8abe12969247817a266c3bdbd3f3efcb87。finance-api 从 handler 和类型导出 HTTP 契约，含 F15 订阅需求和 F16 期权流与恢复快照路径。"
     },
     "openapi/finance.option-flow-stream-examples.json": {
       "sha256": "ccaa760e1b7f854a9a612df0053d4660f73592839bb5100241a84b3d77399450",
@@ -60,6 +60,18 @@
       "generator": "src/market_reads/tests/synthetic.rs",
       "seed": "固定合约 ID 201、UTC 时钟和精确数字文本",
       "source": "运行 cargo test --locked --offline --lib f10d_。测试代码以固定字面量在内存中构造观察、核验、预算和覆盖响应，使用随机回环端口上的替身验证转发。"
+    },
+    "tests/api/watchlists.rs": {
+      "sha256": "d449d5d1fefbcb98c9f0593245e8b5771f191acd1c9e2706e0e887520f85589d",
+      "generator": "tests/api/subscription_demand_fixture.rs",
+      "seed": "SYN-*.XTEST、UNREGISTERED.XTEST、固定深度槽位 2 和 1",
+      "source": "运行 cargo test --locked --offline --test api market_demand_，由随机回环端口的 F15 替身按测试请求生成接收或关闭状态。自选列表及测试凭据在临时目录或临时数据库生成。"
+    },
+    "src/finance.rs": {
+      "sha256": "6d37aa72a1e45b3ef60790eb8ee82a4b371415b9eb5d78f84da1ac1d1d64b018",
+      "generator": "tests/api/subscription_demand_fixture.rs",
+      "seed": "固定的合成错误包络和 HTTP 状态",
+      "source": "运行 cargo test --locked --offline --lib subscription_demand_errors。共享 F15 替身生成固定错误正文，测试验证状态映射和错误字段脱敏。"
     }
   }
 }

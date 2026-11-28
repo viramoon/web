@@ -1,8 +1,31 @@
 use finance_client::{
     apis::{configuration::Configuration, option_flow_stream_api},
-    models::{Accepted, BacktestSummary, ChartBars, Event, MarketStatus, Page, Window},
+    models::{
+        Accepted, BacktestSummary, ChartBars, Event, MarketStatus, Page, SubscriptionDemandRequest,
+        SubscriptionDemandState, SubscriptionDemandStatus, Window,
+    },
 };
 use serde_json::{Value, json};
+
+#[test]
+fn subscription_demand_models_keep_explicit_clear_and_disabled_state() {
+    let request = SubscriptionDemandRequest {
+        watchlist: Some(vec![]),
+        depth_focus: Some(None),
+    };
+    let demand = json!({"watchlist": [], "depth_focus": null});
+    assert_eq!(serde_json::to_value(request).unwrap(), demand);
+    let status: SubscriptionDemandStatus = serde_json::from_value(json!({
+        "state": "disabled",
+        "demand": demand,
+        "budget": null,
+        "depth_budget": {"pinned_slots": 2, "page_focus_slots": 1, "access": null}
+    }))
+    .unwrap();
+    assert_eq!(status.state, SubscriptionDemandState::Disabled);
+    assert!(status.demand.watchlist.is_empty());
+    assert!(status.demand.depth_focus.is_none());
+}
 
 #[test]
 fn option_flow_generated_requests_keep_cursor_and_last_event_id() {
