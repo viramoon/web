@@ -276,7 +276,7 @@ fn test_state(
         config: Arc::new(settings),
         db: Database::new(
             &format!(
-                "postgresql://localhost/web_w16?host={}",
+                "postgresql://web_test@localhost/web_w16?host={}&password=&sslmode=disable",
                 directory.display()
             ),
             Duration::from_secs(1),
