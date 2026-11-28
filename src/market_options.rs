@@ -92,7 +92,7 @@ impl ExposureQuery {
     }
 }
 
-enum OptionReadError {
+pub(crate) enum OptionReadError {
     InvalidQuery,
     ContractPending,
     FlowQueryUpgradeRequired,
@@ -130,20 +130,20 @@ impl From<Fault> for OptionReadError {
     }
 }
 
-fn parsed<T>(query: Result<Query<T>, QueryRejection>) -> Result<T, OptionReadError> {
+pub(crate) fn parsed<T>(query: Result<Query<T>, QueryRejection>) -> Result<T, OptionReadError> {
     query
         .map(|Query(query)| query)
         .map_err(|_| OptionReadError::InvalidQuery)
 }
 
-fn positive_id(id: i32) -> Result<u32, OptionReadError> {
+pub(crate) fn positive_id(id: i32) -> Result<u32, OptionReadError> {
     u32::try_from(id)
         .ok()
         .filter(|id| *id > 0)
         .ok_or(OptionReadError::InvalidQuery)
 }
 
-fn timestamp(time: DateTime<Utc>) -> String {
+pub(crate) fn timestamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
 
@@ -166,7 +166,10 @@ fn display(raw: Box<RawValue>, product: &str) -> Result<Json<Box<RawValue>>, Opt
     Ok(Json(raw))
 }
 
-fn require_display(access: &ProductPolicy, product: &str) -> Result<(), OptionReadError> {
+pub(crate) fn require_display(
+    access: &ProductPolicy,
+    product: &str,
+) -> Result<(), OptionReadError> {
     if access.source != "ibkr" || access.product != product || !valid_token(&access.license) {
         return Err(OptionReadError::Market(MarketReadError::InvalidResponse));
     }
@@ -354,6 +357,11 @@ pub(crate) fn register_openapi(spec: &mut Value, upstream: &Value) {
             flow::VERIFICATION,
             flow::VERIFICATION,
             "optionsFlowVerification",
+        ),
+        (
+            crate::option_flow_stream::SNAPSHOT,
+            crate::option_flow_stream::SNAPSHOT,
+            "optionsFlowSnapshot",
         ),
     ] {
         crate::market_reads::register_read_operation(spec, upstream, path, source, operation_id);

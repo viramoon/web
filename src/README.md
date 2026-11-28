@@ -12,4 +12,6 @@
 
 [market_reads.rs](market_reads.rs) 连接 F10a 只读契约，[market_options.rs](market_options.rs) 转发 F10c 期权、场所深度与券商线路读取，[market_options/flow.rs](market_options/flow.rs) 转发 F10d 期权流观察和历史核验，[watchlists.rs](watchlists.rs) 保存自选，[events.rs](events.rs) 处理运维 SSE，[market_stream.rs](market_stream.rs) 提供类型化行情回放及受保护的 WS 路径。
 
+W16 代理 F16 期权流 WS、SSE 和恢复快照。SSE 分帧在整帧校验后交付原始字节。[期权流网关](option_flow_stream.rs) · [SSE 分帧](option_flow_stream/sse.rs)
+
 [notifications](notifications.rs) 管理告警规则、事件入库与审计。独立的 [web-notifier](bin/web-notifier.rs) 消费 PostgreSQL outbox 并调用邮件渠道。部署配置见[运行手册](../RUNBOOK.md#告警与邮件进程)。

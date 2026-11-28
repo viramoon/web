@@ -10,6 +10,8 @@ W2a 提供管理员专用的 F10a 行情读取与 WAL 视图、PostgreSQL 自选
 
 W14 将 finance 契约来源前移至 `7b874d7`，包含 F14 回测可见性筛选与 FCI2 同步 Parquet 读取修复。重新导出的 HTTP 快照及读流产物与前一版本逐字节一致。[契约来源与下游升级顺序](docs/api.md#finance-契约版本)
 
+W16 在同一端口提供管理员专用的 F16 期权流 WebSocket、SSE 和恢复快照。客户端通过游标续传，收到 `reset_required` 时从快照恢复。重连重新鉴权，观察继续保留 finance 来源、许可、局部覆盖和精确数值。[期权流推送接口](docs/api.md#w16-期权流推送与续传) · [运行手册](RUNBOOK.md#w16-期权流推送)
+
 未设置 `WEB_PUBLIC_ORIGIN` 时，浏览器可通过带端口的 `http://127.0.0.1` 或 `http://localhost` 同源登录并访问 REST、SSE 和市场 WebSocket。远程 HTTPS 入口继续使用显式配置的 Origin。[会话配置](RUNBOOK.md#启用浏览器管理会话)
 
 W2b 提供管理员专用的 StrategyBundle 上传校验、编译预览、版本注册与选择、因子目录和报告。回测可以用上传文件或已登记版本提交，并可按原幂等键恢复作业。旧回测页面深链和完整的 `int64` 作业 ID 均可使用。匿名列表通过 finance F14 只分页读取公开作业，续页沿用上一页最后一个公开作业的整数 ID。[策略与研究](docs/api.md#策略与研究) · [回测分页](docs/api.md#作业与行情)

@@ -73,6 +73,24 @@ impl Fault {
         )
     }
 
+    pub(crate) fn stream_transport(error: reqwest::Error) -> Self {
+        Self::upstream(Error::<()>::Reqwest(error))
+    }
+
+    pub(crate) fn stream_status(status: StatusCode) -> Self {
+        match status {
+            StatusCode::BAD_REQUEST => Self::new(
+                status,
+                "finance_request_rejected",
+                "Finance rejected the stream request",
+                false,
+            ),
+            StatusCode::SERVICE_UNAVAILABLE => Self::unavailable(),
+            StatusCode::GATEWAY_TIMEOUT => Self::timeout(),
+            _ => Self::invalid_response(),
+        }
+    }
+
     fn upstream<E>(err: Error<E>) -> Self {
         match err {
             Error::Reqwest(e) if e.is_timeout() => Self::timeout(),
@@ -140,6 +158,7 @@ impl IntoResponse for Fault {
 #[derive(Clone)]
 pub struct Finance {
     connection: Arc<Configuration>,
+    stream_connection: Arc<Configuration>,
     probe_client: Option<reqwest::Client>,
     policy: FinanceConfig,
     circuit: Circuit,
@@ -147,14 +166,32 @@ pub struct Finance {
 
 impl Finance {
     pub fn new(config: &FinanceConfig) -> Result<Self, ConfigError> {
-        let builder = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
-            .timeout(Duration::from_millis(config.request_timeout_ms));
+        Self::build(config, |builder| builder)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_unix_socket(
+        config: &FinanceConfig,
+        path: &std::path::Path,
+    ) -> Result<Self, ConfigError> {
+        Self::build(config, |builder| builder.unix_socket(path))
+    }
+
+    fn build(
+        config: &FinanceConfig,
+        configure: impl Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
+    ) -> Result<Self, ConfigError> {
         let local = loopback_endpoint(&config.base_url);
-        let builder = if local { builder.no_proxy() } else { builder };
-        let client = builder.build()?;
+        let builder = || {
+            let builder = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .connect_timeout(Duration::from_millis(config.connect_timeout_ms));
+            configure(if local { builder.no_proxy() } else { builder })
+        };
+        let client = builder()
+            .timeout(Duration::from_millis(config.request_timeout_ms))
+            .build()?;
         let probe_client = local.then(|| client.clone());
         let connection = Configuration {
             base_path: config.base_url.trim_end_matches('/').into(),
@@ -165,8 +202,13 @@ impl Finance {
             bearer_access_token: None,
             api_key: None,
         };
+        let stream_connection = Configuration {
+            client: builder().build()?,
+            ..connection.clone()
+        };
         Ok(Self {
             connection: Arc::new(connection),
+            stream_connection: Arc::new(stream_connection),
             probe_client,
             policy: config.clone(),
             circuit: Circuit::new(
@@ -178,6 +220,20 @@ impl Finance {
 
     pub(crate) fn integration_probe_client(&self) -> Option<(&reqwest::Client, &str)> {
         Some((self.probe_client.as_ref()?, &self.connection.base_path))
+    }
+
+    /// Apply the finance request deadline to stream establishment only.
+    pub(crate) async fn open_stream<T>(
+        &self,
+        open: impl AsyncFnOnce(&Configuration) -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let permit = self.circuit.admit().ok_or_else(Fault::unavailable)?;
+        let deadline = Duration::from_millis(self.policy.request_timeout_ms);
+        let result = tokio::time::timeout(deadline, open(&self.stream_connection))
+            .await
+            .unwrap_or_else(|_| Err(Fault::timeout()));
+        permit.finish(!result.as_ref().is_err_and(|fault| fault.transient));
+        result
     }
 
     /// Idempotent reads may back off and retry. Mutations always make at most one attempt.

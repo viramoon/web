@@ -79,6 +79,15 @@ market_gateway:
     source: finance_committed_wal
     max_connections: 16
     max_command_bytes: 4096
+  option_flow_stream:
+    websocket: {path: /api/v1/options/flow/ws, event_schema: openapi/finance.option-flow-ws.schema.json}
+    sse: {path: /api/v1/options/flow/sse, event_schema: openapi/finance.option-flow-sse.schema.json, resume_header: Last-Event-ID}
+    snapshot: /api/v1/options/flow/snapshot
+    source: finance_f16_opra_observation_stream
+    max_connections: 16
+    max_frame_bytes: 262144
+    establishments: {max_requests: 120, window_seconds: 60, identity: single_admin}
+    interface: docs/api.md#w16-期权流推送与续传
   interface: docs/api.md
 strategy_research:
   finance_contract: openapi/finance.commit

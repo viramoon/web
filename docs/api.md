@@ -22,13 +22,13 @@ CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.opena
 
 ## finance 契约版本
 
-Web 从 finance main 的 `7b874d78501b861a9bde527a7df644f748fec2d1` 生成客户端。该提交包含 F14 的回测列表可见性筛选。FCI2 修复 finance 的 Python 投影器，使重放校验和最新事件查询同步读取 Parquet。与前一来源 `86dcc86` 的 finance HTTP 快照、三份读流导出物和生成客户端逐字节一致。[来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json)
+W16 的本地契约从 F16 提交 `e25d3e91dbe5328974f0199c9f598ea95b4db5ad` 导出。该提交基于 W14 使用的 `7b874d78501b861a9bde527a7df644f748fec2d1`，包含 F14 回测可见性筛选与 FCI2 同步 Parquet 读取修复。协调者在 F16 合入 finance main 后，从合并提交重新导出 HTTP 与读流快照、生成客户端并更新来源 SHA。[来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json)
 
 W8 接入 F10c 的期权和行情所有者读取，W9 接入 F10d 的期权流观察与核验。W2b 使用 F14 的可见性筛选，匿名回测列表将 `visibility=legacy` 传给 finance。浏览器的 bars 和指标沿用 W2a 的 WAL 视图。[W8 接口](#w8-期权场所深度与券商线路) · [W9 接口](#w9-期权流观察与历史核验)
 
 WAL 与投影 REST 保留 W6 的 1.0 与 2.0 `Event`、`Message` 和 `SchemaVersion`。上游返回 3.0 的 `option_history_trade` 或 `option_history_quote` 时，整条请求返回 `502 finance_invalid_response`，以保留原分页和旧客户端解码行为。原始记录仍须通过本机记录与显示许可检查。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制与大整数文本。市场 WebSocket 只发 1.0 数据帧。web 运维 SSE 使用下文的 `/events` 契约。
 
-同一 finance 提交导出的三个 1.0 读流产物与 W6 逐字节一致。[市场 WS schema](../openapi/finance.market-ws.schema.json) · [行情状态 SSE schema](../openapi/finance.market-status-sse.schema.json) · [合成回放样本](../openapi/finance.read-stream-examples.json)
+既有三个 1.0 读流产物与 W6 逐字节一致。F16 为期权观察新增独立的 1.0 流产物。[市场 WS schema](../openapi/finance.market-ws.schema.json) · [行情状态 SSE schema](../openapi/finance.market-status-sse.schema.json) · [原合成回放样本](../openapi/finance.read-stream-examples.json) · [W16 期权流契约](#w16-期权流推送与续传)
 
 W2b 使用 F10b 提供的策略校验、版本注册与选择、因子评价和回测接口。作业取消、worker 状态和决策信号保留在 finance 的内部契约中。
 
@@ -172,7 +172,23 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 
 web 校验对应的 `ibkr/opra` 或 `ibkr/opra-history` 展示许可。嵌套观察覆盖需要 OPRA 展示许可，历史证据水位需要 OPRA 历史本机记录许可。成功响应保留 finance 原始 JSON，包含许可标签、明确的 `null`、未知值、十进制价量、金额和大整数字符串。缺少快照或核验窗口时保留上游 404。已取得的空页与带无法回补原因的报告都可返回 200。上游来源未接入时返回 `503 finance_unavailable`，其它错误沿用 W8 的映射。请求读取已取得的结果，历史核验由行情所有者管理。[部署与排查](../RUNBOOK.md#w9-期权流)
 
-**仍待后续接入。** `/market/subscriptions` 的 `finance_lines` 保留 `finance_contract_pending` 兼容字段，需查券商预算时使用 `/market/subscriptions/budget`。仅带旧参数的期权链和未支持的敞口情景仍按 W8 返回 `finance_contract_pending`。向行情所有者提交订阅或深度 focus、期权流主动推送与续传、浏览器实时显示流和部署侧数据源接线仍待后续交付。web 的 WAL 与投影 REST 和 WS/SSE 继续使用现有版本，F10d 的逐笔核验与水位通过上述 REST 查询。
+**仍待后续接入。** `/market/subscriptions` 的 `finance_lines` 保留 `finance_contract_pending` 兼容字段，需查券商预算时使用 `/market/subscriptions/budget`。仅带旧参数的期权链和未支持的敞口情景仍按 W8 返回 `finance_contract_pending`。向行情所有者提交订阅或深度 focus、浏览器实时显示流和部署侧数据源接线仍待后续交付。F10d 的逐笔核验与水位通过上述 REST 查询。
+
+## W16 期权流推送与续传
+
+下列 GET 路径使用 `/api/v1` 前缀，均需 W1 管理员会话或 bearer，返回 `Cache-Control: no-store`。浏览器原生 WebSocket 与 EventSource 使用同源会话 Cookie，WS 要求显式同源 `Origin`。流建立、打开期间和每次重连均校验管理员身份。会话失效时关闭连接。web 只向受控的 finance 地址请求，管理员凭据保留在 web。
+
+| 路径 | 参数与输出 |
+| --- | --- |
+| `/options/flow/ws` | 输入已确认的正整数 `con_id` 及可选不透明 `cursor`，游标上限 512 字节。返回 101 后接收 F16 1.0 JSON 文本帧，客户端仅用 WebSocket 控制帧维持或关闭连接。 |
+| `/options/flow/sse` | 输入同样的查询参数，返回 `text/event-stream`。非空 `Last-Event-ID` 优先，其余使用可选查询游标。最多提供一个 `Last-Event-ID` 头，值上限 512 字节。每个 F16 事件的名称、ID 与 JSON 数据沿用上游格式。 |
+| `/options/flow/snapshot` | 输入同一 `con_id` 及 RFC 3339 半开窗口 `[start, end)`。返回 `{cursor, snapshot}`。快照包含上游缓冲区内符合窗口的观察，`next_offset` 为 `null`。快照和游标由 finance 在同一发布位置取得。 |
+
+新订阅从当前发布位置起步，`status` 为 `live` 时携带该位置的 ID。有效游标续传之后匹配同一合约的观察，再继续发送新数据。原样保存最后已应用的 ID，以该 ID 去重，并只接收当前连接的帧。发布序号是十进制字符串，可能因合约筛选不连续。接收时间可能与发布次序不同。web 核对观察和嵌套覆盖的 OPRA 展示许可，转发符合授权的原始 JSON，保留来源、许可标签、覆盖、精确十进制值和上游未知业务值。上游未装配发布器时发送 `status` 的 `disabled`。
+
+finance 维护同实例的 100 条观察保留窗，由所有合约共用。过期、跨实例、跨合约及其他无法续传的游标收到 `reset_required`，消息给出恢复快照路径。收到重置时关闭流（包括 EventSource 自动重连），读取同一合约和所需窗口的快照，替换本地视图并用快照游标重连。读者掉队时，finance 也可返回重置。web 逐帧转发，每帧上限 256 KiB，等待完整上游帧最多 45 秒，WS 单帧下行写入最多 1 秒。断线后优先携带最后已应用游标续传，由 finance 判断是否需要快照。
+
+WS 与 SSE 共享 16 条并发连接及每分钟 120 次建立请求的限额。快照使用既有行情 REST 的每分钟 120 次共享限额。无效请求返回 400，身份或同源校验失败返回 401 或 403，超额返回 429。快照缺少展示权限时返回 `403 market_display_denied`。打开流之后遇到无效帧或展示许可不通过时关闭连接。上游故障沿用 web 的 finance 错误结构。逐笔核验继续经 W9 REST 查询。[WS schema](../openapi/finance.option-flow-ws.schema.json) · [SSE schema](../openapi/finance.option-flow-sse.schema.json) · [合成回放样本](../openapi/finance.option-flow-stream-examples.json) · [运维配置](../RUNBOOK.md#w16-期权流推送)
 
 ## 集成配置
 

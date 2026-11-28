@@ -124,7 +124,7 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 网页出现 502、503、504 时，先查 /api/v1/system/status 中的 finance.ok、latency_ms、circuit，再查 finance 的监听和 ready。熔断打开后等待对应 profile 的 circuit_open_ms，下一次访问会试探，成功后自动恢复。若请求为写操作，超时后先查作业状态，重交时沿用同一幂等键。
 
-finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W9 使用 F10d 的期权流读取，W2b 的公开回测分页依赖 F14。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约版本](docs/api.md#finance-契约版本)
+finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W9 使用 F10d 的期权流读取，W16 使用 F16 的推送和恢复快照，W2b 的公开回测分页依赖 F14。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约版本](docs/api.md#finance-契约版本)
 
 策略版本、因子快照和幂等队列由 finance 管理。W2b 复用 web 现有配置、数据库、监听端口和进程。
 
@@ -173,7 +173,7 @@ curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 
 ## 行情网关与运维事件
 
-W14 联调使用 [finance 契约来源](openapi/finance.commit) 记录的提交。该版本包含 F14 公开回测筛选与 FCI2 的 Python 投影读取修复。确认 finance 版本后，沿用现有 `FINANCE_BASE_URL` 和 IBKR paper 只读配置。W14 无新增环境变量、迁移、端口、进程或数据目录。[兼容契约与升级顺序](docs/api.md#finance-契约版本)
+W14 引入的 finance 提交 `7b874d7` 包含 F14 公开回测筛选与 FCI2 的 Python 投影读取修复。联调使用当前记录的 finance 版本，沿用 `FINANCE_BASE_URL` 和 IBKR paper 只读配置。[finance 契约来源](openapi/finance.commit) · [兼容契约与升级顺序](docs/api.md#finance-契约版本)
 
 升级前按[迁移与回退流程](#含新增迁移的发布回退)保留快照，再执行 `web migrate` 或启用默认自动迁移。迁移 `20261127040000` 创建自选表，迁移后的备份应包含该表。只使用受控的 `FINANCE_BASE_URL` 及管理员会话或 bearer。浏览器通过已配置的 HTTPS 入口或本地回环地址同源访问。WAL 和投影事件正文须同时具备 finance 本机记录与显示许可。保留部署侧的 IBKR paper 只读配置，行情网关读取既有 finance 契约。
 
@@ -192,6 +192,14 @@ W14 联调使用 [finance 契约来源](openapi/finance.commit) 记录的提交�
 ## W9 期权流
 
 先切换至包含 F10d 的 finance，再切换 web。W9 沿用 `FINANCE_BASE_URL`、现有进程和端口，无需迁移、环境变量或数据目录。共享行情所有者需以 IBKR paper 只读模式分别装配 OPRA 观察快照和 OPRA 历史核验报告。独立 finance API 未装配数据源时返回 503。在已装配的实例上，先用管理员会话按合约 `con_id` 与已知窗口查询两条读取路径。404 时核对上游库存窗口和产品展示许可。核验中的局部覆盖和无法回补原因可能随成功响应返回。GET 仅查看已有结果，保持原有订阅和采集流程。[请求与错误语义](docs/api.md#w9-期权流观察与历史核验)
+
+## W16 期权流推送
+
+先部署含 F16 的 finance main，再升级 web 和 frontend。沿用 `FINANCE_BASE_URL`、web 进程及端口，新路径无需新增环境变量、迁移或数据目录。需展示观察时，由已授权的 IBKR paper 只读行情所有者向 finance 发布观察。独立 finance API 未装配发布器时会发送 `disabled` 状态并保持空闲，恢复快照返回 503。
+
+入口代理转发 WebSocket 升级头、同源 `Origin` 和 SSE 的 `Last-Event-ID`。SSE 关闭响应缓冲，空闲超时应容纳 finance 的 15 秒保活。请求、流及代理日志只记录必要的路由和状态元数据，勿采集行情正文、游标、查询参数和身份头。
+
+客户端断线时以当前有效会话或 bearer 重连，并携带最后一次应用的事件游标。若鉴权失败，更新会话后再试。遇到 429 时按 `Retry-After` 或在已有流关闭后重试。收到 `reset_required` 时主动关闭旧连接，按当前合约与窗口读取恢复快照，替换本地视图，再用快照游标建立新连接。finance 重启会使旧的续传游标失效。[W16 路径与恢复流程](docs/api.md#w16-期权流推送与续传)
 
 ## 集成配置及凭据
 
