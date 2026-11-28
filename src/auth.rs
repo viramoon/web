@@ -576,7 +576,7 @@ impl WriteAccess {
     }
 }
 
-fn consume_quota(
+pub(crate) fn consume_quota(
     accepted: &Mutex<VecDeque<Instant>>,
     limit: usize,
     window: Duration,

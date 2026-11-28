@@ -17,6 +17,7 @@ pub mod market_stream;
 mod market_types;
 pub mod notifications;
 mod ops;
+mod option_flow_stream;
 mod research;
 mod spa;
 pub mod telemetry;
@@ -292,20 +293,28 @@ fn is_market_rest(path: &str) -> bool {
             watchlists::WATCHLIST
                 | market_preferences::DEPTH_FOCUS
                 | market_preferences::SUBSCRIPTIONS
+                | option_flow_stream::SNAPSHOT
         )
 }
 
 fn is_stream(path: &str) -> bool {
-    matches!(path, market_stream::MARKET_STREAM | events::EVENTS)
+    matches!(
+        path,
+        market_stream::MARKET_STREAM
+            | events::EVENTS
+            | option_flow_stream::WS
+            | option_flow_stream::SSE
+    )
 }
 
 async fn check_access(State(s): State<AppState>, req: Request, next: Next) -> Response {
     let path = matched_path(&req).unwrap_or_default();
     let headers = req.headers();
     let access = match (req.method(), path) {
-        (&Method::GET | &Method::HEAD, path) if is_stream(path) => s
-            .write_access
-            .authorize_stream(headers, path == market_stream::MARKET_STREAM),
+        (&Method::GET | &Method::HEAD, path) if is_stream(path) => s.write_access.authorize_stream(
+            headers,
+            matches!(path, market_stream::MARKET_STREAM | option_flow_stream::WS),
+        ),
         (&Method::GET | &Method::HEAD, path) if is_market_rest(path) => {
             s.write_access.authorize_market_read(headers)
         }
@@ -504,6 +513,7 @@ fn router_with_market_preferences(
         .merge(market_preferences::routes())
         .merge(market_reads::routes())
         .merge(market_stream::routes())
+        .merge(option_flow_stream::routes())
         .merge(events::routes())
         .fallback(spa::serve)
         .layer(Extension(market_preferences));
@@ -597,6 +607,7 @@ pub fn openapi() -> serde_json::Value {
     spec.merge(market_options::MarketOptionsApi::openapi());
     spec.merge(market_preferences::MarketPreferencesApi::openapi());
     spec.merge(market_stream::MarketStreamApi::openapi());
+    spec.merge(option_flow_stream::OptionFlowStreamApi::openapi());
     spec.merge(events::EventsApi::openapi());
     // The repository has no declared license. OpenAPI requires a name if the object exists.
     if spec

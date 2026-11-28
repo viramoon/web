@@ -12,13 +12,20 @@ public final class FinanceNumbers extends OpenAPINormalizer {
         flattenMarketEvent(api);
         for (String path : Set.of("/api/v1/options/chain", "/api/v1/options/exposure",
                 "/api/v1/options/history", "/api/v1/options/flow/observations",
-                "/api/v1/options/flow/verification", "/api/v1/market/book",
+                "/api/v1/options/flow/verification", "/api/v1/options/flow/snapshot", "/api/v1/market/book",
                 "/api/v1/market/subscriptions", "/api/v1/market/subscriptions/coverage")) {
             // Keep the declared schema and let the gateway preserve the original JSON
             // for display reads, including future enum values and added fields.
             var item = api.getPaths().get(path);
             if (item != null) {
                 item.getGet().addExtension("x-finance-display-read", true);
+            }
+        }
+        for (String path : Set.of("/api/v1/options/flow/ws", "/api/v1/options/flow/sse")) {
+            var item = api.getPaths().get(path);
+            if (item != null) {
+                // The caller manages the streaming response and upgrade lifecycle.
+                item.getGet().addExtension("x-finance-stream-request", true);
             }
         }
     }

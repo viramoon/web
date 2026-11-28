@@ -13,10 +13,12 @@ use finance_client::{
         Error,
         configuration::Configuration,
         default_api::{self, ReadyError},
+        option_flow_stream_api::{self, SnapshotError},
     },
     models,
 };
 use serde::Serialize;
+use serde_json::value::RawValue;
 use std::{
     future::Future,
     sync::Arc,
@@ -71,6 +73,24 @@ impl Fault {
             "Invalid finance response",
             true,
         )
+    }
+
+    pub(crate) fn stream_transport(error: reqwest::Error) -> Self {
+        Self::upstream(Error::<()>::Reqwest(error))
+    }
+
+    pub(crate) fn stream_status(status: StatusCode) -> Self {
+        match status {
+            StatusCode::BAD_REQUEST => Self::new(
+                status,
+                "finance_request_rejected",
+                "Finance rejected the stream request",
+                false,
+            ),
+            StatusCode::SERVICE_UNAVAILABLE => Self::unavailable(),
+            StatusCode::GATEWAY_TIMEOUT => Self::timeout(),
+            _ => Self::invalid_response(),
+        }
     }
 
     fn upstream<E>(err: Error<E>) -> Self {
@@ -140,6 +160,7 @@ impl IntoResponse for Fault {
 #[derive(Clone)]
 pub struct Finance {
     connection: Arc<Configuration>,
+    stream_connection: Arc<Configuration>,
     probe_client: Option<reqwest::Client>,
     policy: FinanceConfig,
     circuit: Circuit,
@@ -147,14 +168,32 @@ pub struct Finance {
 
 impl Finance {
     pub fn new(config: &FinanceConfig) -> Result<Self, ConfigError> {
-        let builder = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
-            .timeout(Duration::from_millis(config.request_timeout_ms));
+        Self::build(config, |builder| builder)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_unix_socket(
+        config: &FinanceConfig,
+        path: &std::path::Path,
+    ) -> Result<Self, ConfigError> {
+        Self::build(config, |builder| builder.unix_socket(path))
+    }
+
+    fn build(
+        config: &FinanceConfig,
+        configure: impl Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
+    ) -> Result<Self, ConfigError> {
         let local = loopback_endpoint(&config.base_url);
-        let builder = if local { builder.no_proxy() } else { builder };
-        let client = builder.build()?;
+        let builder = || {
+            let builder = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .connect_timeout(Duration::from_millis(config.connect_timeout_ms));
+            configure(if local { builder.no_proxy() } else { builder })
+        };
+        let client = builder()
+            .timeout(Duration::from_millis(config.request_timeout_ms))
+            .build()?;
         let probe_client = local.then(|| client.clone());
         let connection = Configuration {
             base_path: config.base_url.trim_end_matches('/').into(),
@@ -165,8 +204,13 @@ impl Finance {
             bearer_access_token: None,
             api_key: None,
         };
+        let stream_connection = Configuration {
+            client: builder().build()?,
+            ..connection.clone()
+        };
         Ok(Self {
             connection: Arc::new(connection),
+            stream_connection: Arc::new(stream_connection),
             probe_client,
             policy: config.clone(),
             circuit: Circuit::new(
@@ -178,6 +222,20 @@ impl Finance {
 
     pub(crate) fn integration_probe_client(&self) -> Option<(&reqwest::Client, &str)> {
         Some((self.probe_client.as_ref()?, &self.connection.base_path))
+    }
+
+    /// Apply the finance request deadline to stream establishment only.
+    pub(crate) async fn open_stream<T>(
+        &self,
+        open: impl AsyncFnOnce(&Configuration) -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let permit = self.circuit.admit().ok_or_else(Fault::unavailable)?;
+        let deadline = Duration::from_millis(self.policy.request_timeout_ms);
+        let result = tokio::time::timeout(deadline, open(&self.stream_connection))
+            .await
+            .unwrap_or_else(|_| Err(Fault::timeout()));
+        permit.finish(!result.as_ref().is_err_and(|fault| fault.transient));
+        result
     }
 
     /// Idempotent reads may back off and retry. Mutations always make at most one attempt.
@@ -192,6 +250,25 @@ impl Finance {
             self.policy.request_timeout_ms,
         )
         .await
+    }
+
+    pub(crate) async fn option_flow_snapshot(
+        &self,
+        con_id: u32,
+        start: String,
+        end: String,
+    ) -> Result<Box<RawValue>, Fault> {
+        let snapshot = self
+            .read(|cfg| {
+                let (start, end) = (start.clone(), end.clone());
+                async move {
+                    classify_option_flow_snapshot(
+                        option_flow_stream_api::snapshot(&cfg, con_id, start, end).await,
+                    )
+                }
+            })
+            .await?;
+        snapshot.ok_or_else(Fault::unavailable)
     }
 
     pub async fn write<T, E, F, Fut>(&self, call: F) -> Result<T, Fault>
@@ -288,6 +365,22 @@ fn classify_readiness(
     }
 }
 
+fn classify_option_flow_snapshot<T>(
+    response: Result<T, Error<SnapshotError>>,
+) -> Result<Option<T>, Error<SnapshotError>> {
+    match response {
+        // A healthy finance instance may not have an F16 publisher configured.
+        Err(Error::ResponseError(r))
+            if r.status == StatusCode::SERVICE_UNAVAILABLE
+                && serde_json::from_str::<models::ErrorBody>(&r.content)
+                    .is_ok_and(|body| body.error.code == "market_read_source_unavailable") =>
+        {
+            Ok(None)
+        }
+        response => response.map(Some),
+    }
+}
+
 fn loopback_endpoint(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|url| {
         matches!(url.scheme(), "http" | "https")
@@ -309,6 +402,49 @@ mod tests {
     use axum::body::to_bytes;
     use finance_client::apis::ResponseContent;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn disabled_f16_snapshot_does_not_retry_or_trip_the_finance_circuit() {
+        let mut config = crate::config::Settings::load(std::path::Path::new("config"), |_| None)
+            .unwrap()
+            .finance;
+        config.circuit_failure_threshold = 2;
+        config.max_retries = 1;
+        config.backoff_ms = 1;
+        let finance = Finance::new(&config).unwrap();
+        let attempts = std::cell::Cell::new(0);
+        let snapshot_failure = |code| {
+            attempts.set(attempts.get() + 1);
+            std::future::ready(classify_option_flow_snapshot::<()>(Err(
+                Error::ResponseError(ResponseContent {
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    content: json!({"error": {"code": code, "message": "Synthetic failure"}})
+                        .to_string(),
+                    entity: None,
+                }),
+            )))
+        };
+
+        for _ in 0..3 {
+            let result = finance
+                .read(|_| snapshot_failure("market_read_source_unavailable"))
+                .await;
+            assert!(matches!(result, Ok(None)));
+        }
+        assert_eq!(attempts.get(), 3);
+        assert_eq!(finance.circuit_state(), "closed");
+
+        for _ in 0..2 {
+            let result = finance
+                .read(|_| snapshot_failure("service_unavailable"))
+                .await;
+            assert!(
+                matches!(result, Err(fault) if fault.status == StatusCode::SERVICE_UNAVAILABLE)
+            );
+        }
+        assert_eq!(attempts.get(), 7);
+        assert_eq!(finance.circuit_state(), "open");
+    }
 
     #[tokio::test]
     async fn loopback_finance_client_ignores_environment_proxy() {

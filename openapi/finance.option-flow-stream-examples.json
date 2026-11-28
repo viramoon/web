@@ -1,0 +1,549 @@
+{
+  "disabled": [
+    {
+      "data": {
+        "con_id": 42,
+        "schema_version": "1.0",
+        "state": "disabled"
+      },
+      "event": "status"
+    }
+  ],
+  "expired": [
+    {
+      "data": {
+        "con_id": 42,
+        "reason": "cursor_unavailable",
+        "schema_version": "1.0",
+        "snapshot": "/api/v1/options/flow/snapshot"
+      },
+      "event": "reset_required"
+    }
+  ],
+  "live": [
+    {
+      "data": {
+        "con_id": 42,
+        "schema_version": "1.0",
+        "state": "live"
+      },
+      "event": "status",
+      "id": "00000000000000000000000000000000.42.18446744073709551613"
+    },
+    {
+      "data": {
+        "access": {
+          "backup_personal_drive": false,
+          "derive_non_display": false,
+          "display_live": true,
+          "license": "fixture.synthetic",
+          "product": "opra",
+          "record_local": false,
+          "source": "ibkr"
+        },
+        "observation": {
+          "budget": {
+            "account_lines": 100,
+            "as_of": "2025-10-09T08:53:23Z",
+            "confirmed_options": 2,
+            "discovery_complete": false,
+            "hot_lines": 1,
+            "observed_options": 1,
+            "phase": "online",
+            "reserve_lines": 30,
+            "rotation_lines": 1,
+            "stock_lines": 9
+          },
+          "clue": {
+            "cohort": {
+              "expiry": "2025-10-09",
+              "session_segment": 3,
+              "underlying_con_id": 7
+            },
+            "con_id": 42,
+            "generation": "18446744073709551615",
+            "multiplier": "25",
+            "observation": {
+              "evidence": {
+                "comparison": {
+                  "baseline_samples": 3,
+                  "elapsed_millis": 3000,
+                  "elevated": true,
+                  "typical_rate": {
+                    "contracts": "9007199254740993",
+                    "elapsed_millis": 6000
+                  }
+                },
+                "delta_contracts": "9007199254740993",
+                "earlier_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:20Z",
+                  "value": "50"
+                },
+                "estimated_premium": null,
+                "later_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:23Z",
+                  "value": "9007199254741043"
+                },
+                "sampled_last_price": {
+                  "received_at": "2025-10-09T08:53:23Z",
+                  "value": "1.000000000000000001"
+                },
+                "sampled_last_size": {
+                  "received_at": "2025-10-09T08:53:23Z",
+                  "value": "2.1250"
+                }
+              },
+              "kind": "volume_increase"
+            },
+            "observed_at": "2025-10-09T08:53:23Z",
+            "rule_version": "ibkr_l1_observation_v2",
+            "status": "pending_verification"
+          },
+          "coverage": {
+            "access": {
+              "backup_personal_drive": false,
+              "derive_non_display": false,
+              "display_live": true,
+              "license": "fixture.synthetic",
+              "product": "opra",
+              "record_local": false,
+              "source": "ibkr"
+            },
+            "con_id": 42,
+            "covered": [],
+            "last_observed_at": "2025-10-09T08:53:23Z",
+            "uncovered": [
+              {
+                "end": "2025-10-09T08:53:23Z",
+                "start": "2025-10-09T08:53:20Z"
+              }
+            ],
+            "unknown": []
+          }
+        },
+        "schema_version": "1.0",
+        "seq": "18446744073709551614"
+      },
+      "event": "observation",
+      "id": "00000000000000000000000000000000.42.18446744073709551614"
+    },
+    {
+      "data": {
+        "access": {
+          "backup_personal_drive": false,
+          "derive_non_display": false,
+          "display_live": true,
+          "license": "fixture.synthetic",
+          "product": "opra",
+          "record_local": false,
+          "source": "ibkr"
+        },
+        "observation": {
+          "budget": {
+            "account_lines": 100,
+            "as_of": "2025-10-09T08:53:22Z",
+            "confirmed_options": 2,
+            "discovery_complete": false,
+            "hot_lines": 1,
+            "observed_options": 1,
+            "phase": "online",
+            "reserve_lines": 30,
+            "rotation_lines": 1,
+            "stock_lines": 9
+          },
+          "clue": {
+            "cohort": {
+              "expiry": "2025-10-09",
+              "session_segment": 3,
+              "underlying_con_id": 7
+            },
+            "con_id": 42,
+            "generation": "18446744073709551615",
+            "multiplier": "25",
+            "observation": {
+              "evidence": {
+                "comparison": {
+                  "baseline_samples": 3,
+                  "elapsed_millis": 2000,
+                  "elevated": true,
+                  "typical_rate": {
+                    "contracts": "9007199254740993",
+                    "elapsed_millis": 6000
+                  }
+                },
+                "delta_contracts": "9007199254740993",
+                "earlier_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:20Z",
+                  "value": "50"
+                },
+                "estimated_premium": null,
+                "later_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "9007199254741043"
+                },
+                "sampled_last_price": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "1.000000000000000001"
+                },
+                "sampled_last_size": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "2.1250"
+                }
+              },
+              "kind": "volume_increase"
+            },
+            "observed_at": "2025-10-09T08:53:22Z",
+            "rule_version": "ibkr_l1_observation_v2",
+            "status": "pending_verification"
+          },
+          "coverage": null
+        },
+        "schema_version": "1.0",
+        "seq": "18446744073709551615"
+      },
+      "event": "observation",
+      "id": "00000000000000000000000000000000.42.18446744073709551615"
+    }
+  ],
+  "out_of_order": [
+    {
+      "data": {
+        "access": {
+          "backup_personal_drive": false,
+          "derive_non_display": false,
+          "display_live": true,
+          "license": "fixture.synthetic",
+          "product": "opra",
+          "record_local": false,
+          "source": "ibkr"
+        },
+        "observation": {
+          "budget": {
+            "account_lines": 100,
+            "as_of": "2025-10-09T08:53:22Z",
+            "confirmed_options": 2,
+            "discovery_complete": false,
+            "hot_lines": 1,
+            "observed_options": 1,
+            "phase": "online",
+            "reserve_lines": 30,
+            "rotation_lines": 1,
+            "stock_lines": 9
+          },
+          "clue": {
+            "cohort": {
+              "expiry": "2025-10-09",
+              "session_segment": 3,
+              "underlying_con_id": 7
+            },
+            "con_id": 42,
+            "generation": "18446744073709551615",
+            "multiplier": "25",
+            "observation": {
+              "evidence": {
+                "comparison": {
+                  "baseline_samples": 3,
+                  "elapsed_millis": 2000,
+                  "elevated": true,
+                  "typical_rate": {
+                    "contracts": "9007199254740993",
+                    "elapsed_millis": 6000
+                  }
+                },
+                "delta_contracts": "9007199254740993",
+                "earlier_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:20Z",
+                  "value": "50"
+                },
+                "estimated_premium": null,
+                "later_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "9007199254741043"
+                },
+                "sampled_last_price": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "1.000000000000000001"
+                },
+                "sampled_last_size": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "2.1250"
+                }
+              },
+              "kind": "volume_increase"
+            },
+            "observed_at": "2025-10-09T08:53:22Z",
+            "rule_version": "ibkr_l1_observation_v2",
+            "status": "pending_verification"
+          },
+          "coverage": null
+        },
+        "schema_version": "1.0",
+        "seq": "18446744073709551615"
+      },
+      "event": "observation",
+      "id": "00000000000000000000000000000000.42.18446744073709551615"
+    },
+    {
+      "data": {
+        "access": {
+          "backup_personal_drive": false,
+          "derive_non_display": false,
+          "display_live": true,
+          "license": "fixture.synthetic",
+          "product": "opra",
+          "record_local": false,
+          "source": "ibkr"
+        },
+        "observation": {
+          "budget": {
+            "account_lines": 100,
+            "as_of": "2025-10-09T08:53:23Z",
+            "confirmed_options": 2,
+            "discovery_complete": false,
+            "hot_lines": 1,
+            "observed_options": 1,
+            "phase": "online",
+            "reserve_lines": 30,
+            "rotation_lines": 1,
+            "stock_lines": 9
+          },
+          "clue": {
+            "cohort": {
+              "expiry": "2025-10-09",
+              "session_segment": 3,
+              "underlying_con_id": 7
+            },
+            "con_id": 42,
+            "generation": "18446744073709551615",
+            "multiplier": "25",
+            "observation": {
+              "evidence": {
+                "comparison": {
+                  "baseline_samples": 3,
+                  "elapsed_millis": 3000,
+                  "elevated": true,
+                  "typical_rate": {
+                    "contracts": "9007199254740993",
+                    "elapsed_millis": 6000
+                  }
+                },
+                "delta_contracts": "9007199254740993",
+                "earlier_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:20Z",
+                  "value": "50"
+                },
+                "estimated_premium": null,
+                "later_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:23Z",
+                  "value": "9007199254741043"
+                },
+                "sampled_last_price": {
+                  "received_at": "2025-10-09T08:53:23Z",
+                  "value": "1.000000000000000001"
+                },
+                "sampled_last_size": {
+                  "received_at": "2025-10-09T08:53:23Z",
+                  "value": "2.1250"
+                }
+              },
+              "kind": "volume_increase"
+            },
+            "observed_at": "2025-10-09T08:53:23Z",
+            "rule_version": "ibkr_l1_observation_v2",
+            "status": "pending_verification"
+          },
+          "coverage": {
+            "access": {
+              "backup_personal_drive": false,
+              "derive_non_display": false,
+              "display_live": true,
+              "license": "fixture.synthetic",
+              "product": "opra",
+              "record_local": false,
+              "source": "ibkr"
+            },
+            "con_id": 42,
+            "covered": [],
+            "last_observed_at": "2025-10-09T08:53:23Z",
+            "uncovered": [
+              {
+                "end": "2025-10-09T08:53:23Z",
+                "start": "2025-10-09T08:53:20Z"
+              }
+            ],
+            "unknown": []
+          }
+        },
+        "schema_version": "1.0",
+        "seq": "18446744073709551614"
+      },
+      "event": "observation",
+      "id": "00000000000000000000000000000000.42.18446744073709551614"
+    },
+    {
+      "data": {
+        "access": {
+          "backup_personal_drive": false,
+          "derive_non_display": false,
+          "display_live": true,
+          "license": "fixture.synthetic",
+          "product": "opra",
+          "record_local": false,
+          "source": "ibkr"
+        },
+        "observation": {
+          "budget": {
+            "account_lines": 100,
+            "as_of": "2025-10-09T08:53:22Z",
+            "confirmed_options": 2,
+            "discovery_complete": false,
+            "hot_lines": 1,
+            "observed_options": 1,
+            "phase": "online",
+            "reserve_lines": 30,
+            "rotation_lines": 1,
+            "stock_lines": 9
+          },
+          "clue": {
+            "cohort": {
+              "expiry": "2025-10-09",
+              "session_segment": 3,
+              "underlying_con_id": 7
+            },
+            "con_id": 42,
+            "generation": "18446744073709551615",
+            "multiplier": "25",
+            "observation": {
+              "evidence": {
+                "comparison": {
+                  "baseline_samples": 3,
+                  "elapsed_millis": 2000,
+                  "elevated": true,
+                  "typical_rate": {
+                    "contracts": "9007199254740993",
+                    "elapsed_millis": 6000
+                  }
+                },
+                "delta_contracts": "9007199254740993",
+                "earlier_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:20Z",
+                  "value": "50"
+                },
+                "estimated_premium": null,
+                "later_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "9007199254741043"
+                },
+                "sampled_last_price": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "1.000000000000000001"
+                },
+                "sampled_last_size": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "2.1250"
+                }
+              },
+              "kind": "volume_increase"
+            },
+            "observed_at": "2025-10-09T08:53:22Z",
+            "rule_version": "ibkr_l1_observation_v2",
+            "status": "pending_verification"
+          },
+          "coverage": null
+        },
+        "schema_version": "1.0",
+        "seq": "18446744073709551615"
+      },
+      "event": "observation",
+      "id": "00000000000000000000000000000000.42.18446744073709551615"
+    }
+  ],
+  "replayed": [
+    {
+      "data": {
+        "con_id": 42,
+        "schema_version": "1.0",
+        "state": "live"
+      },
+      "event": "status",
+      "id": "00000000000000000000000000000000.42.18446744073709551614"
+    },
+    {
+      "data": {
+        "access": {
+          "backup_personal_drive": false,
+          "derive_non_display": false,
+          "display_live": true,
+          "license": "fixture.synthetic",
+          "product": "opra",
+          "record_local": false,
+          "source": "ibkr"
+        },
+        "observation": {
+          "budget": {
+            "account_lines": 100,
+            "as_of": "2025-10-09T08:53:22Z",
+            "confirmed_options": 2,
+            "discovery_complete": false,
+            "hot_lines": 1,
+            "observed_options": 1,
+            "phase": "online",
+            "reserve_lines": 30,
+            "rotation_lines": 1,
+            "stock_lines": 9
+          },
+          "clue": {
+            "cohort": {
+              "expiry": "2025-10-09",
+              "session_segment": 3,
+              "underlying_con_id": 7
+            },
+            "con_id": 42,
+            "generation": "18446744073709551615",
+            "multiplier": "25",
+            "observation": {
+              "evidence": {
+                "comparison": {
+                  "baseline_samples": 3,
+                  "elapsed_millis": 2000,
+                  "elevated": true,
+                  "typical_rate": {
+                    "contracts": "9007199254740993",
+                    "elapsed_millis": 6000
+                  }
+                },
+                "delta_contracts": "9007199254740993",
+                "earlier_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:20Z",
+                  "value": "50"
+                },
+                "estimated_premium": null,
+                "later_cumulative_volume": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "9007199254741043"
+                },
+                "sampled_last_price": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "1.000000000000000001"
+                },
+                "sampled_last_size": {
+                  "received_at": "2025-10-09T08:53:22Z",
+                  "value": "2.1250"
+                }
+              },
+              "kind": "volume_increase"
+            },
+            "observed_at": "2025-10-09T08:53:22Z",
+            "rule_version": "ibkr_l1_observation_v2",
+            "status": "pending_verification"
+          },
+          "coverage": null
+        },
+        "schema_version": "1.0",
+        "seq": "18446744073709551615"
+      },
+      "event": "observation",
+      "id": "00000000000000000000000000000000.42.18446744073709551615"
+    }
+  ]
+}

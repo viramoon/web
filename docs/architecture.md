@@ -28,7 +28,9 @@ W2a 使用从 [finance 来源提交](../openapi/finance.commit) 生成的客户�
 - F10a 的市场 WS 数据帧使用 finance 导出的 [1.0 schema](../openapi/finance.market-ws.schema.json)。浏览器订阅命令和 web 控制帧由网关契约定义。
 - F2 StrategyBundle v1，`apiVersion` 为 `fertile.finance/strategy/v1`。F6 在 Bundle schema 与组件注册表中补充了指标类型及参数规则。[锁定版本的策略 schema 和注册表](https://github.com/viramoon/finance/tree/fc5e153e9727181f5748659c0610b2fbc2b49769/strategies/schema)
 
-SSE 按需轮询已有 finance 作业、PostgreSQL 告警及备份状态，仅保留这三类的有限状态数据。局部回放在内存中，使用进程代际和事件序号。重连、回放和单帧发送均校验 W1 身份。自选使用 PostgreSQL revision 条件写入，focus 为进程内盘口选择。WAL 视图保留单页覆盖，盘口要求同一分区存在可用快照和连续增量。客户端经 Axum WebSocket 进入市场流会话，按单管理员分配订阅额度，再按 finance 产品许可回放已提交 WAL。finance 实时显示流仍待后续集成。W8 的 F10c 转发在 web 授权后检查上游显示许可，并透传原始 JSON。[W2a 接口](api.md#行情自选与推送)
+运维 SSE 按需轮询已有 finance 作业、PostgreSQL 告警及备份状态，仅保留这三类的有限状态数据。局部回放在内存中，使用进程代际和事件序号。重连、回放和单帧发送均校验 W1 身份。自选使用 PostgreSQL revision 条件写入，focus 为进程内盘口选择。WAL 视图保留单页覆盖，盘口要求同一分区存在可用快照和连续增量。客户端经 Axum WebSocket 进入市场流会话，按单管理员分配订阅额度，再按 finance 产品许可回放已提交 WAL。W8 的 F10c 转发在 web 授权后检查上游显示许可，并透传原始 JSON。[W2a 接口](api.md#行情自选与推送)
+
+W16 经生成客户端建立 finance 的 F16 WebSocket 和 SSE，恢复快照使用同一 finance 地址。web 在授权后以有界方式逐帧校验和转发，保留上游游标和数据正文。活跃连接定期复验 W1 身份，SSE 只转发可完整解析的上游帧。finance 管理保留窗和恢复位置，web 维护连接与速率额度。[W16 接口](api.md#w16-期权流推送与续传)
 
 ## 集成控制面
 
