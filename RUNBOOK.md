@@ -173,6 +173,8 @@ curl -fsS "http://127.0.0.1:8090/api/v1/backtests/$id"
 
 ## 行情网关与运维事件
 
+W14 联调使用 [finance 契约来源](openapi/finance.commit) 记录的提交。该版本包含 F14 公开回测筛选与 FCI2 的 Python 投影读取修复。确认 finance 版本后，沿用现有 `FINANCE_BASE_URL` 和 IBKR paper 只读配置。W14 无新增环境变量、迁移、端口、进程或数据目录。[兼容契约与升级顺序](docs/api.md#finance-契约版本)
+
 升级前按[迁移与回退流程](#含新增迁移的发布回退)保留快照，再执行 `web migrate` 或启用默认自动迁移。迁移 `20261127040000` 创建自选表，迁移后的备份应包含该表。只使用受控的 `FINANCE_BASE_URL` 及管理员会话或 bearer。浏览器通过已配置的 HTTPS 入口或本地回环地址同源访问。WAL 和投影事件正文须同时具备 finance 本机记录与显示许可。保留部署侧的 IBKR paper 只读配置，行情网关读取既有 finance 契约。
 
 `/api/v1/events` 使用现有 web 端口。入口代理应关闭 SSE 响应缓冲并允许 15 秒心跳，转发 `Last-Event-ID`。收到 `reset` 时从受保护的 REST 路径重取快照，断线后 EventSource 会携带最近游标重连。进程重启清空 SSE 回放，进程退出时主动关闭流。无效或过期的会话需重新登录。避免采集流正文、查询参数、身份头和付费数据。

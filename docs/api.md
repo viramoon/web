@@ -22,7 +22,9 @@ CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.opena
 
 ## finance 契约版本
 
-Web 从 finance main 的 `86dcc8604b6881d648418a25e6cd13c24d4a9b01` 生成客户端。W8 接入 F10c 的期权和行情所有者读取，W9 接入 F10d 的期权流观察与核验，W2b 使用 F14 的回测列表可见性筛选。浏览器的 bars 和指标沿用 W2a 的 WAL 视图。[来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json) · [W8 接口](#w8-期权场所深度与券商线路) · [W9 接口](#w9-期权流观察与历史核验)
+Web 从 finance main 的 `7b874d78501b861a9bde527a7df644f748fec2d1` 生成客户端。该提交包含 F14 的回测列表可见性筛选。FCI2 修复 finance 的 Python 投影器，使重放校验和最新事件查询同步读取 Parquet。与前一来源 `86dcc86` 的 finance HTTP 快照、三份读流导出物和生成客户端逐字节一致。[来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json)
+
+W8 接入 F10c 的期权和行情所有者读取，W9 接入 F10d 的期权流观察与核验。W2b 使用 F14 的可见性筛选，匿名回测列表将 `visibility=legacy` 传给 finance。浏览器的 bars 和指标沿用 W2a 的 WAL 视图。[W8 接口](#w8-期权场所深度与券商线路) · [W9 接口](#w9-期权流观察与历史核验)
 
 WAL 与投影 REST 保留 W6 的 1.0 与 2.0 `Event`、`Message` 和 `SchemaVersion`。上游返回 3.0 的 `option_history_trade` 或 `option_history_quote` 时，整条请求返回 `502 finance_invalid_response`，以保留原分页和旧客户端解码行为。原始记录仍须通过本机记录与显示许可检查。浏览器按每条事件的 `schema_version` 和 `kind` 解码，保留十进制与大整数文本。市场 WebSocket 只发 1.0 数据帧。web 运维 SSE 使用下文的 `/events` 契约。
 
