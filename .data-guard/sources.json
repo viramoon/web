@@ -44,10 +44,16 @@
       "source": "运行 cargo test --locked --offline --lib f10c_。期权、深度、敞口、历史、预算、覆盖和版本 3.0 的证据都在测试运行时构造。"
     },
     "openapi/finance.openapi.json": {
-      "sha256": "a4f855fb35f9883e0ea5de314eec7524459677bb8d9c0dd478ac0a718add69d0",
+      "sha256": "39276f25dedeed8ddbc22273051e441cdafb6dbd50d1ad8c4acb0747a0f659a2",
       "generator": "scripts/gen-finance-client.sh",
-      "seed": "finance main 86dcc8604b6881d648418a25e6cd13c24d4a9b01",
-      "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE 86dcc8604b6881d648418a25e6cd13c24d4a9b01。finance-api 从 handler 和类型导出 F14 的回测可见性筛选以及 F10c、F10d 的期权和期权流 schema，不含行情样本。"
+      "seed": "finance F16 e25d3e91dbe5328974f0199c9f598ea95b4db5ad",
+      "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE e25d3e91dbe5328974f0199c9f598ea95b4db5ad。finance-api 从 handler 和类型导出 HTTP 契约，含 F16 期权流和恢复快照路径。"
+    },
+    "openapi/finance.option-flow-stream-examples.json": {
+      "sha256": "ccaa760e1b7f854a9a612df0053d4660f73592839bb5100241a84b3d77399450",
+      "generator": "scripts/gen-finance-client.sh",
+      "seed": "finance F16 e25d3e91dbe5328974f0199c9f598ea95b4db5ad，固定虚构合约 42、UTC 偏移、许可和十进制字面量",
+      "source": "运行 scripts/gen-finance-client.sh from-finance LOCAL_FINANCE e25d3e91dbe5328974f0199c9f598ea95b4db5ad。finance-api export-read-stream 从 wire.rs 的固定输入生成续传、乱序、重复、游标过期、停用和 u64 边界样本。"
     },
     "src/market_reads/tests/flow.rs": {
       "sha256": "8cdb4c75f61b4cffc5e4acbf4ed1c1e735cd13be67571c61a813e5f469b4dd29",

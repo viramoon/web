@@ -1,7 +1,41 @@
-use finance_client::models::{
-    Accepted, BacktestSummary, ChartBars, Event, MarketStatus, Page, Window,
+use finance_client::{
+    apis::{configuration::Configuration, option_flow_stream_api},
+    models::{Accepted, BacktestSummary, ChartBars, Event, MarketStatus, Page, Window},
 };
 use serde_json::{Value, json};
+
+#[test]
+fn option_flow_generated_requests_keep_cursor_and_last_event_id() {
+    let config = Configuration {
+        base_path: "http://127.0.0.1:1".into(),
+        ..Configuration::new()
+    };
+    let cursor = "synthetic.cursor+/?=&";
+    let last_id = "synthetic.last-event";
+    let ws = option_flow_stream_api::ws(&config, 42, Some(cursor))
+        .build()
+        .unwrap();
+    let sse = option_flow_stream_api::sse(&config, 42, Some(cursor), Some(last_id))
+        .build()
+        .unwrap();
+
+    for (request, path) in [
+        (&ws, "/api/v1/options/flow/ws"),
+        (&sse, "/api/v1/options/flow/sse"),
+    ] {
+        assert_eq!(request.method(), reqwest::Method::GET);
+        assert_eq!(request.url().path(), path);
+        assert_eq!(
+            request.url().query_pairs().into_owned().collect::<Vec<_>>(),
+            [
+                ("con_id".to_owned(), "42".to_owned()),
+                ("cursor".to_owned(), cursor.to_owned())
+            ]
+        );
+    }
+    assert!(!ws.headers().contains_key("last-event-id"));
+    assert_eq!(sse.headers()["last-event-id"], last_id);
+}
 
 #[test]
 fn finance_read_stream_exports_replay_v1_frames_without_precision_loss() {

@@ -4364,6 +4364,22 @@
         ],
         "type": "object"
       },
+      "OptionFlowStreamSnapshot": {
+        "properties": {
+          "cursor": {
+            "description": "Resume after this snapshot using the same contract.",
+            "type": "string"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/OptionFlowObservationPage"
+          }
+        },
+        "required": [
+          "cursor",
+          "snapshot"
+        ],
+        "type": "object"
+      },
       "OptionFlowVerificationPage": {
         "properties": {
           "access": {
@@ -8453,6 +8469,135 @@
         ]
       }
     },
+    "/api/v1/options/flow/snapshot": {
+      "get": {
+        "operationId": "snapshot",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "con_id",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionFlowStreamSnapshot"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "option_flow_stream"
+        ]
+      }
+    },
+    "/api/v1/options/flow/sse": {
+      "get": {
+        "operationId": "sse",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "con_id",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor from the same contract's stream or recovery snapshot.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque resume cursor. Takes precedence over the query cursor when present and nonempty.",
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "Option-flow SSE 1.0. See option-flow-sse.schema.json."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "option_flow_stream"
+        ]
+      }
+    },
     "/api/v1/options/flow/verification": {
       "get": {
         "operationId": "verification",
@@ -8562,6 +8707,46 @@
         "summary": "Existing historical verification for one exact, whole-second trade window.",
         "tags": [
           "market_options::flow"
+        ]
+      }
+    },
+    "/api/v1/options/flow/ws": {
+      "get": {
+        "operationId": "ws",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "con_id",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor from the same contract's stream or recovery snapshot.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Option-flow WS 1.0. See option-flow-ws.schema.json."
+          },
+          "400": {
+            "description": "Invalid query or WebSocket handshake"
+          },
+          "426": {
+            "description": "HTTP upgrade required"
+          }
+        },
+        "tags": [
+          "option_flow_stream"
         ]
       }
     },

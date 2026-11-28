@@ -334,6 +334,8 @@ pub mod option_flow_observation;
 pub use self::option_flow_observation::OptionFlowObservation;
 pub mod option_flow_observation_page;
 pub use self::option_flow_observation_page::OptionFlowObservationPage;
+pub mod option_flow_stream_snapshot;
+pub use self::option_flow_stream_snapshot::OptionFlowStreamSnapshot;
 pub mod option_flow_verification_page;
 pub use self::option_flow_verification_page::OptionFlowVerificationPage;
 pub mod option_history_batch;

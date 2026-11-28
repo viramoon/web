@@ -54,19 +54,32 @@
 +}}{{^supportMultipleResponses}}{{#vendorExtensions.x-finance-display-read}}T{{/vendorExtensions.x-finance-display-read}}{{^vendorExtensions.x-finance-display-read}}{{^returnType}}(){{/returnType}}{{{returnType}}}{{/vendorExtensions.x-finance-display-read}}{{/supportMultipleResponses}}{{/isResponseFile}}{{!
 @@ -123 +123 @@
 -pub {{#supportAsync}}async {{/supportAsync}}fn {{{operationId}}}(configuration: &configuration::Configuration, {{#allParams}}{{{paramName}}}: {{!
-+pub {{#supportAsync}}async {{/supportAsync}}fn {{{operationId}}}{{#vendorExtensions.x-finance-display-read}}<T: serde::de::DeserializeOwned>{{/vendorExtensions.x-finance-display-read}}(configuration: &configuration::Configuration, {{#allParams}}{{{paramName}}}: {{!
++pub {{^vendorExtensions.x-finance-stream-request}}{{#supportAsync}}async {{/supportAsync}}{{/vendorExtensions.x-finance-stream-request}}fn {{{operationId}}}{{#vendorExtensions.x-finance-display-read}}<T: serde::de::DeserializeOwned>{{/vendorExtensions.x-finance-display-read}}(configuration: &configuration::Configuration, {{#allParams}}{{{paramName}}}: {{!
+@@ -137 +137 @@
+-}}) -> Result<{{!
++}}) -> {{#vendorExtensions.x-finance-stream-request}}reqwest::RequestBuilder{{/vendorExtensions.x-finance-stream-request}}{{^vendorExtensions.x-finance-stream-request}}Result<{{!
 @@ -145 +145 @@
 -}}{{^supportMultipleResponses}}{{^returnType}}(){{/returnType}}{{{returnType}}}{{/supportMultipleResponses}}{{/isResponseFile}}{{!
 +}}{{^supportMultipleResponses}}{{#vendorExtensions.x-finance-display-read}}T{{/vendorExtensions.x-finance-display-read}}{{^vendorExtensions.x-finance-display-read}}{{^returnType}}(){{/returnType}}{{{returnType}}}{{/vendorExtensions.x-finance-display-read}}{{/supportMultipleResponses}}{{/isResponseFile}}{{!
-@@ -622 +622 @@
+@@ -147 +147 @@
+-}}, Error<{{{operationIdCamelCase}}}Error>> {
++}}, Error<{{{operationIdCamelCase}}}Error>>{{/vendorExtensions.x-finance-stream-request}} {
+@@ -585,0 +586,4 @@
++    {{#vendorExtensions.x-finance-stream-request}}
++    req_builder
++    {{/vendorExtensions.x-finance-stream-request}}
++    {{^vendorExtensions.x-finance-stream-request}}
+@@ -622 +626 @@
 -            ContentType::Text => return Ok(content),
 +            ContentType::Text => Ok(content),
-@@ -625 +625 @@
+@@ -625 +629 @@
 -            ContentType::Text => return Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `{{returnType}}`"))),
 +            ContentType::Text => Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `{{returnType}}`"))),
-@@ -627 +627 @@
+@@ -627 +631 @@
 -            ContentType::Unsupported(unknown_type) => return Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `{{returnType}}`")))),
 +            ContentType::Unsupported(unknown_type) => Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `{{returnType}}`")))),
+@@ -646,0 +651 @@
++    {{/vendorExtensions.x-finance-stream-request}}
 --- a/reqwest/api_mod.mustache
 +++ b/reqwest/api_mod.mustache
 @@ -166 +166 @@

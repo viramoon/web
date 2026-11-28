@@ -5,7 +5,10 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 snapshot="$root/openapi/finance.openapi.json"
 provenance="$root/openapi/finance.commit"
 client="$root/crates/finance-client"
-stream_files=(market-ws.schema.json market-status-sse.schema.json read-stream-examples.json)
+stream_files=(
+    market-ws.schema.json market-status-sse.schema.json read-stream-examples.json
+    option-flow-ws.schema.json option-flow-sse.schema.json option-flow-stream-examples.json
+)
 version=7.27.0
 checksum=db9c4b738727698748746144394cb7ee96512fe50166555baaeeca9311ee1dba
 work=$(mktemp -d)
