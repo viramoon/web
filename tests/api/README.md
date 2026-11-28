@@ -22,7 +22,7 @@ W4 的 SMTP 集成测试使用进程内主、备槽位和临时 PostgreSQL 验�
 
 默认 Rust 测试也执行 rclone 本机加密往返，使用 `/usr/bin/rclone` 或由 `WEB_TEST_RCLONE` 指定的绝对路径。完整行情 HTTP 测试核对落库与读回的候选证据，随后显式启用。质量发布测试运行 Web CLI，使用固定种子的 F3 替身发布合成快照，再通过进程内管理员请求验证查询。
 
-`cargo test --locked --offline --test api market_demand_` 使用临时 PostgreSQL 和随机回环端口的 F15 替身。固定种子为 `SYN-*.XTEST`、`UNREGISTERED.XTEST` 与 2 个固定深度槽和 1 个页面槽，响应由 `subscription_demand_fixture.rs` 根据测试请求构造。测试覆盖自选去重、focus 设置和清除、跨路径串行写入、采集关闭、匿名拒绝和 finance 错误后的本地读回。
+`cargo test --locked --offline --test api market_demand_` 使用临时 PostgreSQL 和随机回环端口的 F15 替身。固定种子为 `SYN-*.XTEST`、`UNREGISTERED.XTEST` 与 2 个固定深度槽和 1 个页面槽，响应由 `subscription_demand_fixture.rs` 根据测试请求构造。测试覆盖自选去重、focus 设置和清除、跨路径串行写入、采集关闭、匿名拒绝和 finance 错误后的本地读回。上游附带合法成功正文的 `302` 和 `201` 均应返回 502，并保留本地选择。替身还验证重定向地址未收到请求。
 
 `cargo test --locked --offline --lib quality_gaps_response_matches_exported_watermarks_schema` 从导出的 200 响应 schema 解析缺口覆盖、水位和源观测的引用，校验进程内请求返回的实际字段、空值分支和精确计数。使用固定合成快照，无需启动 PostgreSQL 或监听 socket。
 

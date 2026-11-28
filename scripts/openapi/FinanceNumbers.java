@@ -28,6 +28,10 @@ public final class FinanceNumbers extends OpenAPINormalizer {
                 item.getGet().addExtension("x-finance-stream-request", true);
             }
         }
+        var demand = api.getPaths().get("/api/v1/market/subscriptions/demand");
+        if (demand != null && demand.getPut() != null) {
+            demand.getPut().addExtension("x-finance-require-ok", true);
+        }
     }
 
     /**

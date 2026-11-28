@@ -360,6 +360,80 @@ async fn read_watchlist(app: &Router, auth: &str) -> Value {
 }
 
 #[tokio::test]
+async fn market_demand_rejects_unexpected_status_with_a_valid_success_body() {
+    let (captured, mut requests) = mpsc::unbounded_channel();
+    let redirected = captured.clone();
+    let finance = DemandStub::start(
+        Router::new()
+            .route(
+                PATH,
+                put(move |Json(body): Json<Value>| async move {
+                    let status = match body["watchlist"][0].as_str() {
+                        Some("SYN-A.XTEST") => StatusCode::FOUND,
+                        Some("SYN-B.XTEST") => StatusCode::CREATED,
+                        _ => panic!("unexpected synthetic watchlist"),
+                    };
+                    captured.send(body.clone()).unwrap();
+                    (
+                        status,
+                        [(header::LOCATION, "/redirect-target")],
+                        Json(subscription_status(&body, "enabled")),
+                    )
+                }),
+            )
+            .fallback(move || async move {
+                redirected.send(json!({"redirect_followed": true})).unwrap();
+                StatusCode::NO_CONTENT
+            }),
+    )
+    .await;
+    let (mut state, auth, _cluster, _fixture) = gateway(&finance).await;
+    // Send all four unexpected responses before the circuit can open.
+    let config = Arc::make_mut(&mut state.config);
+    config.finance.circuit_failure_threshold = 5;
+    state.finance = Finance::new(&config.finance).unwrap();
+    let app = web::router(state);
+    let invalid_response = json!({"error": {"code": "finance_invalid_response",
+        "message": "Invalid finance response"}});
+    let mut previous_focus = Value::Null;
+
+    for (revision, instrument, focus) in [
+        (0, "SYN-A.XTEST", "SYN-C.XTEST"),
+        (1, "SYN-B.XTEST", "SYN-D.XTEST"),
+    ] {
+        let cases = [
+            (
+                DEFAULT,
+                json!({"revision": revision, "instrument_ids": [instrument]}),
+                json!({"watchlist": [instrument], "depth_focus": previous_focus}),
+                json!({"id": "default", "revision": revision + 1, "instrument_ids": [instrument]}),
+            ),
+            (
+                FOCUS,
+                json!({"action": "set", "instrument_id": focus}),
+                json!({"watchlist": [instrument], "depth_focus": focus}),
+                json!({"instrument_id": focus}),
+            ),
+        ];
+        for (path, change, demand, saved) in cases {
+            let (status, headers, error) =
+                market_request(&app, Some(&auth), Method::PUT, path, Some(change)).await;
+            assert_eq!(status, StatusCode::BAD_GATEWAY, "{path}");
+            assert_eq!(error, invalid_response);
+            assert!(!headers.contains_key(DEMAND_STATE));
+            assert!(!headers.contains_key(header::LOCATION));
+            assert_eq!(requests.try_recv().unwrap(), demand);
+            assert!(requests.try_recv().is_err());
+            let (status, _, actual) =
+                market_request(&app, Some(&auth), Method::GET, path, None).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(actual, saved);
+        }
+        previous_focus = json!(focus);
+    }
+}
+
+#[tokio::test]
 async fn market_demand_propagates_disabled_and_rejects_anonymous_writes() {
     let (captured, mut requests) = mpsc::unbounded_channel();
     let finance = DemandStub::start(Router::new().route(

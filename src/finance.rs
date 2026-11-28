@@ -148,7 +148,7 @@ impl Fault {
                     false,
                 )
             }
-            Error::ResponseError(response) if response.status.is_client_error() => {
+            Error::ResponseError(response) if !response.status.is_server_error() => {
                 Self::invalid_response()
             }
             error => Self::upstream(error),
@@ -456,6 +456,8 @@ mod tests {
     #[test]
     fn subscription_demand_errors_never_copy_finance_fields() {
         for (upstream, status, code, transient) in [
+            (201, 502, "finance_invalid_response", true),
+            (302, 502, "finance_invalid_response", true),
             (400, 400, "subscription_demand_invalid", false),
             (404, 502, "finance_invalid_response", true),
             (500, 502, "finance_upstream_error", true),
@@ -475,6 +477,7 @@ mod tests {
             assert_eq!(error.transient, transient);
         }
     }
+
     #[tokio::test]
     async fn disabled_f16_snapshot_does_not_retry_or_trip_the_finance_circuit() {
         let mut config = crate::config::Settings::load(std::path::Path::new("config"), |_| None)

@@ -62,13 +62,13 @@
       "source": "运行 cargo test --locked --offline --lib f10d_。测试代码以固定字面量在内存中构造观察、核验、预算和覆盖响应，使用随机回环端口上的替身验证转发。"
     },
     "tests/api/watchlists.rs": {
-      "sha256": "d449d5d1fefbcb98c9f0593245e8b5771f191acd1c9e2706e0e887520f85589d",
+      "sha256": "02a96276ab6e34c158fd452f4e25f026039f918a7958d8adeebc314b11753f13",
       "generator": "tests/api/subscription_demand_fixture.rs",
       "seed": "SYN-*.XTEST、UNREGISTERED.XTEST、固定深度槽位 2 和 1",
-      "source": "运行 cargo test --locked --offline --test api market_demand_，由随机回环端口的 F15 替身按测试请求生成接收或关闭状态。自选列表及测试凭据在临时目录或临时数据库生成。"
+      "source": "运行 cargo test --locked --offline --test api market_demand_，由随机回环端口的 F15 替身按测试请求生成接收或关闭状态。自选列表及测试凭据在临时目录或临时数据库生成。 替身也用合法的合成状态正文模拟 302 和 201。"
     },
     "src/finance.rs": {
-      "sha256": "6d37aa72a1e45b3ef60790eb8ee82a4b371415b9eb5d78f84da1ac1d1d64b018",
+      "sha256": "1de12c0eae87b38a6ffabbf98f3551091c25e84ff36814de197a0f4a7ba666fb",
       "generator": "tests/api/subscription_demand_fixture.rs",
       "seed": "固定的合成错误包络和 HTTP 状态",
       "source": "运行 cargo test --locked --offline --lib subscription_demand_errors。共享 F15 替身生成固定错误正文，测试验证状态映射和错误字段脱敏。"

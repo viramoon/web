@@ -69,6 +69,9 @@
 +    req_builder
 +    {{/vendorExtensions.x-finance-stream-request}}
 +    {{^vendorExtensions.x-finance-stream-request}}
+@@ -603 +607 @@
+-    if !status.is_client_error() && !status.is_server_error() {
++    if {{#vendorExtensions.x-finance-require-ok}}status == reqwest::StatusCode::OK{{/vendorExtensions.x-finance-require-ok}}{{^vendorExtensions.x-finance-require-ok}}!status.is_client_error() && !status.is_server_error(){{/vendorExtensions.x-finance-require-ok}} {
 @@ -622 +626 @@
 -            ContentType::Text => return Ok(content),
 +            ContentType::Text => Ok(content),

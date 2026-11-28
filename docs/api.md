@@ -147,7 +147,7 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 
 两个 PUT 的 200 响应沿用各自的 JSON，并新增 `X-Finance-Subscription-State`。`enabled` 表示 finance 行情所有者已接收需求，实际覆盖请查预算和深度。`disabled` 表示采集关闭，web 已保存选择，finance 未接纳需求。
 
-finance 拒绝快照时，web 返回固定的 `400 subscription_demand_invalid`。连接失败或熔断返回 503，超时返回 504，意外的上游响应返回 502。错误沿用 `error.code` 和 `error.message`，上游正文与浏览器凭据不外传。转发错误保留本地已保存的列表、revision 和 focus。客户端应先 GET 当前值，再用最新 revision 或已确认的 focus 重送。web 每次写入至多发送一次 finance PUT，finance 重启后的下一次管理员写入也会提交完整快照。[恢复操作](../RUNBOOK.md#w15-自选与深度订阅需求)
+finance 的 `200` 和合法的 F15 状态正文共同确认转发结果。上游重定向和其他 2xx 即使携带合法状态正文也返回 `502 finance_invalid_response`，转发只向原请求地址发出。finance 拒绝快照时，web 返回固定的 `400 subscription_demand_invalid`。连接失败或熔断返回 503，超时返回 504。错误沿用 `error.code` 和 `error.message`，上游正文与浏览器凭据不外传。转发错误保留本地已保存的列表、revision 和 focus。客户端应先 GET 当前值，再用最新 revision 或已确认的 focus 重送。web 每次写入至多发送一次 finance PUT，finance 重启后的下一次管理员写入也会提交完整快照。[恢复操作](../RUNBOOK.md#w15-自选与深度订阅需求)
 
 ## W8 期权、场所深度与券商线路
 
