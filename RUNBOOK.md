@@ -124,7 +124,7 @@ migrate 是显式的部署步骤，连接失败会以错误退出。serve 即使
 
 网页出现 502、503、504 时，先查 /api/v1/system/status 中的 finance.ok、latency_ms、circuit，再查 finance 的监听和 ready。熔断打开后等待对应 profile 的 circuit_open_ms，下一次访问会试探，成功后自动恢复。若请求为写操作，超时后先查作业状态，重交时沿用同一幂等键。
 
-finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W9 使用 F10d 的期权流读取，W16 使用 F16 的推送和恢复快照，W2b 的公开回测分页依赖 F14。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约版本](docs/api.md#finance-契约版本)
+finance 契约升级时，从同一锁定提交导出 HTTP 和读流快照并生成客户端。W9 使用 F10d 的期权流读取，W15 使用 F15 的订阅需求，W16 使用 F16 的推送和恢复快照，W2b 的公开回测分页依赖 F14。回测继续通过现有 HTTP 接口提交和查询，F13 的回测 worker 由 finance 部署管理。[生成客户端说明](src/finance_client/README.md) · [契约版本](docs/api.md#finance-契约版本)
 
 策略版本、因子快照和幂等队列由 finance 管理。W2b 复用 web 现有配置、数据库、监听端口和进程。
 
@@ -192,6 +192,12 @@ W14 引入的 finance 提交 `7b874d7` 包含 F14 公开回测筛选与 FCI2 的
 ## W9 期权流
 
 先切换至包含 F10d 的 finance，再切换 web。W9 沿用 `FINANCE_BASE_URL`、现有进程和端口，无需迁移、环境变量或数据目录。共享行情所有者需以 IBKR paper 只读模式分别装配 OPRA 观察快照和 OPRA 历史核验报告。独立 finance API 未装配数据源时返回 503。在已装配的实例上，先用管理员会话按合约 `con_id` 与已知窗口查询两条读取路径。404 时核对上游库存窗口和产品展示许可。核验中的局部覆盖和无法回补原因可能随成功响应返回。GET 仅查看已有结果，保持原有订阅和采集流程。[请求与错误语义](docs/api.md#w9-期权流观察与历史核验)
+
+## W15 自选与深度订阅需求
+
+先部署包含 F15 的 finance，再切换 web。使用现有 `FINANCE_BASE_URL`、进程、端口和自选表。finance 行情所有者默认关闭，合法写入会返回 `X-Finance-Subscription-State: disabled`。采集启用由 finance 部署负责，使用已授权的 IBKR paper 只读账户与产品配置。`enabled` 表示所有者已接收需求，实际行情覆盖通过预算和场所深度接口观察。[订阅需求接口](docs/api.md#w15-订阅需求转发)
+
+写入报错后先 GET 对应的 web 自选或 focus，确认已保存的选择与自选 revision。`400 subscription_demand_invalid` 时检查所有自选中的 F1 ID 和当前 focus 的 TotalView 资格。超时后，运维可在受控内网通过 finance 的 `GET /api/v1/market/subscriptions/demand` 核对所有者状态。恢复后用当前 revision 提交自选或重新设置 focus，即可发送完整需求。finance 重启或重新启用所有者后同样通过下一次管理员写入重送。web 重启后需重新选定进程内的 focus。[错误和重送语义](docs/api.md#w15-订阅需求转发)
 
 ## W16 期权流推送
 

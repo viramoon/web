@@ -22,7 +22,7 @@ CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.opena
 
 ## finance 契约版本
 
-W16 的 HTTP 契约、读流产物和客户端从包含 F16 的 finance main 提交 `676dee8480ec998302282c86592fe8ab8c020482` 导出和生成。该提交基于 W14 使用的 `7b874d78501b861a9bde527a7df644f748fec2d1`，包含 F14 回测可见性筛选与 FCI2 同步 Parquet 读取修复。[来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json)
+当前锁定包含 F15 订阅需求与 F16 期权流的 finance main 提交 `e1c77c8abe12969247817a266c3bdbd3f3efcb87`。W15 增加 finance 的订阅需求 GET 与 PUT，六份读流产物与 W16 的 `676dee8480ec998302282c86592fe8ab8c020482` 逐字节一致。W14 使用的 `7b874d78501b861a9bde527a7df644f748fec2d1` 已包含 F14 回测可见性筛选与 FCI2 同步 Parquet 读取修复。[来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json)
 
 W8 接入 F10c 的期权和行情所有者读取，W9 接入 F10d 的期权流观察与核验。W2b 使用 F14 的可见性筛选，匿名回测列表将 `visibility=legacy` 传给 finance。浏览器的 bars 和指标沿用 W2a 的 WAL 视图。[W8 接口](#w8-期权场所深度与券商线路) · [W9 接口](#w9-期权流观察与历史核验)
 
@@ -127,7 +127,7 @@ Cookie 使用 `HttpOnly; Secure; SameSite=Strict; Path=/`，作用域为当前�
 
 WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价还须指定 `channel`。视图每页最多扫描 128 条 WAL 记录，响应给出实际覆盖和继续游标。历史列表可用带时区的半开区间 `[from, until)` 筛选 bar 的开盘时间或事件的交易所时间，`as_of` 按首次可用时间筛选。盘口状态为 `observed`、`snapshot_required` 或 `unknown`，失同步后盘口及最佳档为空。报价为所选频道的观察。它的时效以观测时间与 WAL 覆盖为准。
 
-自选用 `GET /watchlists/{id}` 读取，用 `PUT /watchlists/{id}` 以 `{revision, instrument_ids}` 替换有序列表。未保存的自选返回 revision 0 和空列表。每次成功提交增加 revision，陈旧 revision 返回 409。接受最多 64 个不重复的 F1 标的 ID，ID 校验限规范语法。按完整注册表验证标的和向 finance 提交订阅需求需后续契约。
+自选用 `GET /watchlists/{id}` 读取，用 `PUT /watchlists/{id}` 以 `{revision, instrument_ids}` 替换有序列表。未保存的自选返回 revision 0 和空列表。每次保存增加 revision，陈旧 revision 返回 409。web 接受最多 64 个不重复的 F1 标的 ID 并校验语法，finance 注册表验证见 [W15](#w15-订阅需求转发)。
 
 `GET /market/depth-focus` 读取当前标的。`PUT /market/depth-focus` 接受 `action: set` 加 F1 标的 ID，或 `action: clear`，返回保存后的 `instrument_id`。盘口请求省略标的时使用该选择，清除后同一请求返回 `depth_focus_required`。自选和 focus 的 PUT 超过正文上限时返回 413 `body_too_large`。
 
@@ -140,6 +140,14 @@ WAL 视图使用 `source`、`product` 和 F1 `instrument_id`。盘口和报价�
 `GET /stream/market` 对有效的 WebSocket 升级返回 101。无效升级返回 400，身份或 Origin 校验失败返回 401 或 403，16 条连接已满时返回 429，finance 不可达时返回 503 `finance_unavailable`。finance 的就绪端点实际返回 HTTP 503 且正文符合健康检查契约时，web 将其视为可达但未就绪，仍允许客户端尝试订阅。升级完成后用文本帧发送 `subscribe`，选择源、产品、频道和标的，或显式设置 `use_depth_focus`。每条连接可持有一个订阅。八个共享槽位占满时，后续订阅收到 `subscription_quota_exceeded`。退订、断开、重置或授权失效均释放槽位。
 
 数据帧沿用 F10a 的 F1 v1.0 事件格式。web 控制帧使用 `type` 区分 `checkpoint`、`reset`、`error` 和 `unsubscribed`。仅对通过当前展示许可的 WAL 发送数据。重连重新鉴权，提交最后确认的同分区 WAL `after` 游标。缺少可验证的盘口基线时收到 `snapshot_required`，消费者掉队时收到 `consumer_lagged`。重置后清空旧盘口，再建立订阅。连接内的上游、订阅及许可错误通过控制帧报告。
+
+## W15 订阅需求转发
+
+管理员调用 `PUT /api/v1/watchlists/{id}` 或 `PUT /api/v1/market/depth-focus` 时，web 先保存选择，再用生成的客户端调用 finance `PUT /api/v1/market/subscriptions/demand`。同一个 web 进程串行处理两类写入。每次提交包含全部已保存自选列表的去重、排序并集 `watchlist`，以及进程内当前 `depth_focus`。清空最后一组自选时发送空数组，清除 focus 时发送 `null`。finance 用部署注册表校验完整快照。PUT 沿用管理员鉴权、浏览器同源与 CSRF 校验及 `Cache-Control: no-store`。
+
+两个 PUT 的 200 响应沿用各自的 JSON，并新增 `X-Finance-Subscription-State`。`enabled` 表示 finance 行情所有者已接收需求，实际覆盖请查预算和深度。`disabled` 表示采集关闭，web 已保存选择，finance 未接纳需求。
+
+finance 的 `200` 和合法的 F15 状态正文共同确认转发结果。上游重定向和其他 2xx 即使携带合法状态正文也返回 `502 finance_invalid_response`，转发只向原请求地址发出。finance 拒绝快照时，web 返回固定的 `400 subscription_demand_invalid`。连接失败或熔断返回 503，超时返回 504。错误沿用 `error.code` 和 `error.message`，上游正文与浏览器凭据不外传。转发错误保留本地已保存的列表、revision 和 focus。客户端应先 GET 当前值，再用最新 revision 或已确认的 focus 重送。web 每次写入至多发送一次 finance PUT，finance 重启后的下一次管理员写入也会提交完整快照。[恢复操作](../RUNBOOK.md#w15-自选与深度订阅需求)
 
 ## W8 期权、场所深度与券商线路
 

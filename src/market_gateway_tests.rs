@@ -1,6 +1,7 @@
 use crate::{
     AppState, auth::WriteAccess, config::Settings, database::Database, finance::Finance,
-    market_preferences::MarketPreferences, router_with_market_preferences,
+    market_preferences::MarketPreferences, router_with_market_preferences, test_postgres::Cluster,
+    test_subscription_demand::DemandStub,
 };
 use axum::{
     Router,
@@ -33,6 +34,35 @@ fn test_app_with_origin(
     tempfile::NamedTempFile,
     Arc<MarketPreferences>,
 ) {
+    build_test_app(public_origin, None, None)
+}
+
+async fn test_app_with_demand() -> (
+    Router,
+    HeaderValue,
+    (tempfile::NamedTempFile, Cluster, DemandStub),
+    Arc<MarketPreferences>,
+) {
+    let cluster = Cluster::create();
+    let timeout = Duration::from_secs(1);
+    let db = Database::new(&cluster.url(), timeout, timeout).unwrap();
+    db.migrate().await.unwrap();
+    let finance = DemandStub::enabled().await;
+    let (app, admin, fixture, preferences) =
+        build_test_app(Some(ORIGIN), Some(db), Some(&finance.url));
+    (app, admin, (fixture, cluster, finance), preferences)
+}
+
+fn build_test_app(
+    public_origin: Option<&str>,
+    db: Option<Database>,
+    finance_url: Option<&str>,
+) -> (
+    Router,
+    HeaderValue,
+    tempfile::NamedTempFile,
+    Arc<MarketPreferences>,
+) {
     let mut token_file = tempfile::NamedTempFile::new_in("/tmp").unwrap();
     let token = Uuid::new_v4();
     writeln!(token_file, "WEB_ADMIN_TOKEN={token}").unwrap();
@@ -43,9 +73,12 @@ fn test_app_with_origin(
         "postgresql://localhost/market_gateway_test?host={}",
         token_file.path().display()
     );
+    if let Some(finance_url) = finance_url {
+        config.finance.base_url = finance_url.into();
+    }
     let config = Arc::new(config);
     let state = AppState {
-        db: Database::new(&config.database.url, timeout, timeout).unwrap(),
+        db: db.unwrap_or_else(|| Database::new(&config.database.url, timeout, timeout).unwrap()),
         finance: Finance::new(&config.finance).unwrap(),
         write_access: WriteAccess::load(token_file.path(), 10, timeout)
             .unwrap()
@@ -132,7 +165,7 @@ async fn market_gateway_blocks_anonymous_routes_and_cache_bypass() {
 
 #[tokio::test]
 async fn market_gateway_checks_focus_contract_and_throttles_authorized_reads() {
-    let (app, admin, _fixture, _) = test_app();
+    let (app, admin, _fixture, _) = test_app_with_demand().await;
     let focus = |request| {
         Request::put("/api/v1/market/depth-focus")
             .header(header::AUTHORIZATION, admin.clone())
@@ -187,7 +220,7 @@ async fn market_gateway_checks_focus_contract_and_throttles_authorized_reads() {
 
 #[tokio::test]
 async fn market_gateway_checks_browser_origin_and_csrf_before_focus_and_watchlist_changes() {
-    let (app, admin, _fixture, _) = test_app();
+    let (app, admin, _fixture, _) = test_app_with_demand().await;
     let session = send(
         &app,
         Request::post("/api/v1/admin/session")
@@ -235,7 +268,7 @@ async fn market_gateway_checks_browser_origin_and_csrf_before_focus_and_watchlis
 
 #[tokio::test]
 async fn market_gateway_persists_focus_in_process_and_reports_shared_subscription_quota() {
-    let (app, admin, _fixture, preferences) = test_app();
+    let (app, admin, _fixture, preferences) = test_app_with_demand().await;
     let focus = "/api/v1/market/depth-focus";
     let read = |path| Request::get(path).header(header::AUTHORIZATION, admin.clone());
     let change = || {
@@ -308,6 +341,29 @@ async fn market_gateway_documents_and_returns_413_for_oversize_focus_and_watchli
                 ["$ref"],
             "#/components/schemas/ErrorBody"
         );
+    }
+}
+
+#[test]
+fn market_demand_openapi_documents_state_header_and_error_envelopes() {
+    let spec = crate::openapi();
+    for path in ["/api/v1/watchlists/{id}", "/api/v1/market/depth-focus"] {
+        let put = &spec["paths"][path]["put"];
+        assert_eq!(
+            put["security"],
+            json!([{"adminSession": []}, {"adminBearer": []}])
+        );
+        let responses = &put["responses"];
+        assert_eq!(
+            responses["200"]["headers"]["X-Finance-Subscription-State"]["schema"]["type"],
+            "string"
+        );
+        for status in ["400", "401", "502", "503", "504"] {
+            assert_eq!(
+                responses[status]["content"]["application/json"]["schema"]["$ref"],
+                "#/components/schemas/ErrorBody"
+            );
+        }
     }
 }
 

@@ -2,7 +2,8 @@ use super::fixture::{SEQ, delta, page, reset, snapshot};
 use super::*;
 use crate::{
     auth::WriteAccess, config::Settings, database::Database, finance::Finance,
-    market_preferences::MarketPreferences, router,
+    market_preferences::MarketPreferences, router, test_postgres::Cluster,
+    test_subscription_demand::DemandStub,
 };
 use axum::{
     Extension, Json,
@@ -436,7 +437,15 @@ async fn market_stream_application_reauthenticates_subscription_and_resume() {
 
 #[tokio::test]
 async fn market_stream_focused_selection_uses_http_preference_and_updates_quota() {
-    let fixture = StreamTestApp::new();
+    let mut fixture = StreamTestApp::new();
+    let cluster = Cluster::create();
+    let timeout = Duration::from_secs(2);
+    fixture.state.db = Database::new(&cluster.url(), timeout, timeout).unwrap();
+    fixture.state.db.migrate().await.unwrap();
+    let finance = DemandStub::enabled().await;
+    let config = Arc::make_mut(&mut fixture.state.config);
+    config.finance.base_url.clone_from(&finance.url);
+    fixture.state.finance = Finance::new(&config.finance).unwrap();
     let preferences = Arc::new(MarketPreferences::default());
     let app = crate::with_controls(
         crate::market_preferences::routes().layer(Extension(preferences.clone())),

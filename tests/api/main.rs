@@ -5,4 +5,5 @@ mod notifications_ingest;
 mod notifications_worker;
 mod notifier_startup;
 mod postgres;
+mod subscription_demand_fixture;
 mod watchlists;

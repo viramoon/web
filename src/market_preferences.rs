@@ -3,14 +3,18 @@
 use std::sync::{Arc, RwLock};
 
 use axum::{
-    Extension, Json, Router, extract::rejection::JsonRejection, http::StatusCode,
-    response::Response, routing::get,
+    Extension, Json, Router,
+    extract::{State, rejection::JsonRejection},
+    http::{HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
 };
+use finance_client::models::SubscriptionDemandState;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use utoipa::{OpenApi, ToSchema};
 
-use crate::{AppState, ErrorBody, api_error, market_types::InstrumentId};
+use crate::{AppState, ErrorBody, api_error, market_types::InstrumentId, watchlists};
 
 pub(crate) const DEPTH_FOCUS: &str = "/api/v1/market/depth-focus";
 pub(crate) const SUBSCRIPTIONS: &str = "/api/v1/market/subscriptions";
@@ -20,6 +24,8 @@ const SUBSCRIPTION_LIMIT: usize = 8;
 pub struct MarketPreferences {
     focus: RwLock<Option<InstrumentId>>,
     slots: Arc<Semaphore>,
+    // F15 replaces both fields. Serialize local mutations with their upstream PUTs.
+    pub(crate) demand_updates: Mutex<()>,
 }
 
 impl Default for MarketPreferences {
@@ -27,6 +33,7 @@ impl Default for MarketPreferences {
         Self {
             focus: RwLock::new(None),
             slots: Arc::new(Semaphore::new(SUBSCRIPTION_LIMIT)),
+            demand_updates: Mutex::new(()),
         }
     }
 }
@@ -55,6 +62,27 @@ impl MarketPreferences {
 
     pub(crate) fn acquire(&self) -> Option<OwnedSemaphorePermit> {
         Arc::clone(&self.slots).try_acquire_owned().ok()
+    }
+
+    pub(crate) async fn forward_demand(
+        &self,
+        state: &AppState,
+    ) -> Result<[(&'static str, HeaderValue); 1], Response> {
+        let watchlist = watchlists::demand_ids(&state.db).await?;
+        let focus = self.focus().map(|id| id.as_str().to_owned());
+        let state = state
+            .finance
+            .put_subscription_demand(watchlist, focus)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let value = match state {
+            SubscriptionDemandState::Enabled => "enabled",
+            SubscriptionDemandState::Disabled => "disabled",
+        };
+        Ok([(
+            "x-finance-subscription-state",
+            HeaderValue::from_static(value),
+        )])
     }
 
     fn quota(&self) -> SubscriptionQuota {
@@ -114,16 +142,21 @@ async fn get_focus(
 }
 
 #[utoipa::path(put, path = "/api/v1/market/depth-focus", operation_id = "setMarketDepthFocus",
+    description = "Saves the focus before submitting the complete subscription demand to finance. Forwarding errors leave the saved focus in place.",
     params(("X-CSRF-Token" = Option<String>, Header, description = "Required for browser sessions")),
     request_body = DepthFocus, security(("adminSession" = []), ("adminBearer" = [])),
-    responses((status = 200, body = FocusSelection), (status = 400, body = ErrorBody),
+    responses((status = 200, body = FocusSelection,
+        headers(("X-Finance-Subscription-State" = String, description = "Finance collection state: enabled or disabled"))),
+        (status = 400, body = ErrorBody),
         (status = 401, body = ErrorBody), (status = 403, body = ErrorBody),
         (status = 413, body = ErrorBody), (status = 429, body = ErrorBody),
+        (status = 502, body = ErrorBody), (status = 503, body = ErrorBody),
         (status = 504, body = ErrorBody)))]
 async fn put_focus(
+    State(state): State<AppState>,
     Extension(preferences): Extension<Arc<MarketPreferences>>,
     request: Result<Json<DepthFocus>, JsonRejection>,
-) -> Result<Json<FocusSelection>, Response> {
+) -> Result<impl IntoResponse, Response> {
     let Json(request) = request.map_err(|error| {
         if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
             api_error(
@@ -139,7 +172,10 @@ async fn put_focus(
             )
         }
     })?;
-    Ok(Json(preferences.update_focus(request)))
+    let _update = preferences.demand_updates.lock().await;
+    let selection = preferences.update_focus(request);
+    let headers = preferences.forward_demand(&state).await?;
+    Ok((headers, Json(selection)))
 }
 
 #[utoipa::path(get, path = "/api/v1/market/subscriptions", operation_id = "marketSubscriptions",
