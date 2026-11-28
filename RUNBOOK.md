@@ -195,7 +195,7 @@ W14 引入的 finance 提交 `7b874d7` 包含 F14 公开回测筛选与 FCI2 的
 
 ## W16 期权流推送
 
-先部署含 F16 的 finance main，再升级 web 和 frontend。沿用 `FINANCE_BASE_URL`、web 进程及端口，新路径无需新增环境变量、迁移或数据目录。需展示观察时，由已授权的 IBKR paper 只读行情所有者向 finance 发布观察。独立 finance API 未装配发布器时会发送 `disabled` 状态并保持空闲，恢复快照返回 503。
+先部署含 F16 的 finance main，再升级 web 和 frontend。沿用 `FINANCE_BASE_URL`、web 进程及端口，新路径无需新增环境变量、迁移或数据目录。需展示观察时，由已授权的 IBKR paper 只读行情所有者向 finance 发布观察。独立 finance API 未装配发布器时会发送 `disabled` 状态并保持空闲，恢复快照返回 `503 finance_unavailable`。收到明确的未装配响应时，web 将该结果视为 finance 可达，现有行情接口仍可正常访问。
 
 入口代理转发 WebSocket 升级头、同源 `Origin` 和 SSE 的 `Last-Event-ID`。SSE 关闭响应缓冲，空闲超时应容纳 finance 的 15 秒保活。请求、流及代理日志只记录必要的路由和状态元数据，勿采集行情正文、游标、查询参数和身份头。
 

@@ -143,11 +143,9 @@ async fn serve(mut peer: WebSocket, mut upstream: UpstreamSocket, mut access: Ac
         idle.as_mut().reset(Instant::now() + UPSTREAM_IDLE_TIMEOUT);
         let (message, reset) = match frame {
             Some(Ok(UpstreamMessage::Text(text))) => {
-                let checked = serde_json::from_str::<wire::Envelope>(text.as_str())
-                    .ok()
-                    .and_then(|frame| {
-                        wire::check(frame.event, frame.id, frame.data.get(), con_id).ok()
-                    });
+                let checked = wire::Envelope::parse(text.as_str()).ok().and_then(|frame| {
+                    wire::check(frame.event, frame.id, frame.data.get(), con_id).ok()
+                });
                 let Some(reset) = checked else {
                     break close_code::POLICY;
                 };

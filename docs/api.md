@@ -22,7 +22,7 @@ CI 对同一提交导出两次，并与仓库中的[快照](../openapi/web.opena
 
 ## finance 契约版本
 
-W16 的本地契约从 F16 提交 `e25d3e91dbe5328974f0199c9f598ea95b4db5ad` 导出。该提交基于 W14 使用的 `7b874d78501b861a9bde527a7df644f748fec2d1`，包含 F14 回测可见性筛选与 FCI2 同步 Parquet 读取修复。协调者在 F16 合入 finance main 后，从合并提交重新导出 HTTP 与读流快照、生成客户端并更新来源 SHA。[来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json)
+W16 的 HTTP 契约、读流产物和客户端从包含 F16 的 finance main 提交 `676dee8480ec998302282c86592fe8ab8c020482` 导出和生成。该提交基于 W14 使用的 `7b874d78501b861a9bde527a7df644f748fec2d1`，包含 F14 回测可见性筛选与 FCI2 同步 Parquet 读取修复。[来源提交](../openapi/finance.commit) · [finance OpenAPI](../openapi/finance.openapi.json)
 
 W8 接入 F10c 的期权和行情所有者读取，W9 接入 F10d 的期权流观察与核验。W2b 使用 F14 的可见性筛选，匿名回测列表将 `visibility=legacy` 传给 finance。浏览器的 bars 和指标沿用 W2a 的 WAL 视图。[W8 接口](#w8-期权场所深度与券商线路) · [W9 接口](#w9-期权流观察与历史核验)
 
@@ -188,7 +188,7 @@ web 校验对应的 `ibkr/opra` 或 `ibkr/opra-history` 展示许可。嵌套观
 
 finance 维护同实例的 100 条观察保留窗，由所有合约共用。过期、跨实例、跨合约及其他无法续传的游标收到 `reset_required`，消息给出恢复快照路径。收到重置时关闭流（包括 EventSource 自动重连），读取同一合约和所需窗口的快照，替换本地视图并用快照游标重连。读者掉队时，finance 也可返回重置。web 逐帧转发，每帧上限 256 KiB，等待完整上游帧最多 45 秒，WS 单帧下行写入最多 1 秒。断线后优先携带最后已应用游标续传，由 finance 判断是否需要快照。
 
-WS 与 SSE 共享 16 条并发连接及每分钟 120 次建立请求的限额。快照使用既有行情 REST 的每分钟 120 次共享限额。无效请求返回 400，身份或同源校验失败返回 401 或 403，超额返回 429。快照缺少展示权限时返回 `403 market_display_denied`。打开流之后遇到无效帧或展示许可不通过时关闭连接。上游故障沿用 web 的 finance 错误结构。逐笔核验继续经 W9 REST 查询。[WS schema](../openapi/finance.option-flow-ws.schema.json) · [SSE schema](../openapi/finance.option-flow-sse.schema.json) · [合成回放样本](../openapi/finance.option-flow-stream-examples.json) · [运维配置](../RUNBOOK.md#w16-期权流推送)
+WS 与 SSE 共享 16 条并发连接及每分钟 120 次建立请求的限额。快照使用既有行情 REST 的每分钟 120 次共享限额。无效请求返回 400，身份或同源校验失败返回 401 或 403，超额返回 429。快照缺少展示权限时返回 `403 market_display_denied`。快照收到 finance 的 `503 market_read_source_unavailable` 时，web 返回 `503 finance_unavailable`，并将该次调用视为 finance 可达。上游故障沿用 finance 错误映射和熔断策略。web 在发送前检查帧类型、版本、合约、游标、必填包装字段和展示许可。畸形帧或许可校验失败会关闭流。逐笔核验继续经 W9 REST 查询。[WS schema](../openapi/finance.option-flow-ws.schema.json) · [SSE schema](../openapi/finance.option-flow-sse.schema.json) · [合成回放样本](../openapi/finance.option-flow-stream-examples.json) · [运维配置](../RUNBOOK.md#w16-期权流推送)
 
 ## 集成配置
 

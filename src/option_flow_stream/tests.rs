@@ -39,6 +39,7 @@ use tower::ServiceExt as _;
 const WS_PATH: &str = "/api/v1/options/flow/ws";
 const SSE_PATH: &str = "/api/v1/options/flow/sse";
 const SNAPSHOT_PATH: &str = "/api/v1/options/flow/snapshot";
+const OBSERVATIONS_PATH: &str = "/api/v1/options/flow/observations";
 const SESSION_PATH: &str = "/api/v1/admin/session";
 const ORIGIN: &str = "https://web.example.test";
 const CONTRACT: i32 = 42;
@@ -55,7 +56,41 @@ enum Mode {
     DeniedAccess,
     DeniedCoverage,
     WrongContract,
+    Malformed {
+        field: RequiredField,
+        wrong_type: bool,
+    },
 }
+
+#[derive(Clone, Copy, Debug)]
+enum RequiredField {
+    ResetReason,
+    Budget,
+    Coverage,
+}
+
+impl RequiredField {
+    fn malformed(self, examples: &Value, wrong_type: bool) -> Value {
+        let (mut frame, parent, key) = match self {
+            Self::ResetReason => (examples["expired"][0].clone(), "/data", "reason"),
+            Self::Budget => (examples["live"][1].clone(), "/data/observation", "budget"),
+            Self::Coverage => (examples["live"][1].clone(), "/data/observation", "coverage"),
+        };
+        let object = frame.pointer_mut(parent).unwrap().as_object_mut().unwrap();
+        if wrong_type {
+            object.insert(key.into(), json!(42));
+        } else {
+            assert!(object.remove(key).is_some());
+        }
+        frame
+    }
+}
+
+const REQUIRED_FIELDS: [RequiredField; 3] = [
+    RequiredField::ResetReason,
+    RequiredField::Budget,
+    RequiredField::Coverage,
+];
 
 struct Replay {
     examples: Value,
@@ -83,7 +118,7 @@ impl Replay {
                 observation["coverage"]["access"]["display_live"] = json!(false)
             }
             Mode::WrongContract => observation["clue"]["con_id"] = json!(CONTRACT + 1),
-            Mode::Live | Mode::Disabled | Mode::Lagged => {}
+            Mode::Live | Mode::Disabled | Mode::Lagged | Mode::Malformed { .. } => {}
         }
         Self {
             examples,
@@ -111,16 +146,17 @@ impl Replay {
                 true,
             )
         } else if cursor.is_none() {
-            let lagged = matches!(self.mode, Mode::Lagged);
-            let next = if lagged {
-                self.examples["expired"][0].clone()
-            } else {
-                self.examples["live"][1].clone()
+            let (next, hold_open) = match self.mode {
+                Mode::Lagged => (self.examples["expired"][0].clone(), false),
+                Mode::Malformed { field, wrong_type } => {
+                    (field.malformed(&self.examples, wrong_type), true)
+                }
+                _ => (self.examples["live"][1].clone(), true),
             };
             (
                 vec![self.examples["live"][0].clone()],
                 Some((self.release.subscribe(), next)),
-                !lagged,
+                hold_open,
             )
         } else {
             (vec![self.examples["expired"][0].clone()], None, false)
@@ -217,11 +253,31 @@ async fn finance_snapshot(
     State(replay): State<Arc<Replay>>,
     headers: HeaderMap,
     Query(query): Query<Window>,
+) -> (StatusCode, Json<Value>) {
+    replay.receive(&headers, query.con_id);
+    assert_eq!(query.start, START);
+    assert_eq!(query.end, END);
+    if matches!(replay.mode, Mode::Disabled) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": {
+                "code": "market_read_source_unavailable",
+                "message": "Market read source is not connected"
+            }})),
+        );
+    }
+    (StatusCode::OK, Json(replay.snapshot()))
+}
+
+async fn finance_observations(
+    State(replay): State<Arc<Replay>>,
+    headers: HeaderMap,
+    Query(query): Query<Window>,
 ) -> Json<Value> {
     replay.receive(&headers, query.con_id);
     assert_eq!(query.start, START);
     assert_eq!(query.end, END);
-    Json(replay.snapshot())
+    Json(replay.snapshot()["snapshot"].clone())
 }
 
 struct Browser {
@@ -234,6 +290,7 @@ struct Fixture {
     web_socket: PathBuf,
     bearer: HeaderValue,
     client: reqwest::Client,
+    finance: Finance,
     replay: Arc<Replay>,
     tasks: [JoinHandle<()>; 2],
     stop: watch::Sender<bool>,
@@ -302,9 +359,17 @@ impl Fixture {
             .route(WS_PATH, get(finance_ws))
             .route(SSE_PATH, get(finance_sse))
             .route(SNAPSHOT_PATH, get(finance_snapshot))
+            .route(OBSERVATIONS_PATH, get(finance_observations))
+            .route(
+                "/healthz/ready",
+                get(|| async {
+                    Json(finance_client::models::Health::new(Vec::new(), "ok".into()))
+                }),
+            )
             .with_state(Arc::clone(&replay));
 
         let (state, bearer) = test_state(directory.path(), ttl, Some(&finance_socket));
+        let finance = state.finance.clone();
         let (stop, shutdown) = watch::channel(false);
         let gateway = crate::router_with_shutdown(state, shutdown);
         let tasks = [
@@ -320,6 +385,7 @@ impl Fixture {
             web_socket,
             bearer,
             client,
+            finance,
             replay,
             tasks,
             stop,
@@ -400,16 +466,17 @@ impl Fixture {
     }
 
     async fn snapshot(&self) -> reqwest::Response {
-        send(
-            self.request(Method::GET, SNAPSHOT_PATH)
-                .header(header::AUTHORIZATION, &self.bearer)
-                .query(&[
-                    ("con_id", CONTRACT.to_string()),
-                    ("start", START.into()),
-                    ("end", END.into()),
-                ]),
-        )
-        .await
+        send(self.window_request(SNAPSHOT_PATH)).await
+    }
+
+    fn window_request(&self, path: &str) -> reqwest::RequestBuilder {
+        self.request(Method::GET, path)
+            .header(header::AUTHORIZATION, &self.bearer)
+            .query(&[
+                ("con_id", CONTRACT.to_string()),
+                ("start", START.into()),
+                ("end", END.into()),
+            ])
     }
 
     fn bearer_auth(&self) -> HeaderMap {
@@ -615,6 +682,27 @@ async fn relays_upstream_lag_reset_during_an_active_subscription() {
 }
 
 #[tokio::test]
+async fn malformed_required_fields_close_both_transports_without_reaching_clients() {
+    for field in REQUIRED_FIELDS {
+        for wrong_type in [false, true] {
+            let fixture = Fixture::start(
+                Mode::Malformed { field, wrong_type },
+                Duration::from_secs(60),
+            );
+            let mut socket = fixture.websocket(fixture.bearer_auth(), None).await;
+            let mut sse = SseBody::open(fixture.sse_request(fixture.bearer_auth(), None)).await;
+            let initial = &fixture.replay.examples["live"][0];
+            assert_eq!(&ws_frame(&mut socket).await, initial);
+            assert_eq!(sse.next().await.as_ref(), Some(initial));
+
+            fixture.replay.release.send_replace(true);
+            ws_closed(&mut socket).await;
+            assert_eq!(sse.next().await, None, "{field:?}, wrong_type={wrong_type}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn reauthenticates_after_logout_and_closes_idle_sessions_for_both_transports() {
     let fixture = Fixture::start(Mode::Disabled, Duration::from_secs(60));
     let browser = fixture.login().await;
@@ -808,6 +896,41 @@ async fn refuses_non_displayable_and_mismatched_observations_and_snapshots() {
 }
 
 #[tokio::test]
+async fn disabled_snapshot_keeps_existing_w9_and_market_websocket_available() {
+    let fixture = Fixture::start(Mode::Disabled, Duration::from_secs(60));
+    // Exceed the configured finance failure threshold on both shipped profiles.
+    for _ in 0..6 {
+        let response = fixture.snapshot().await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["error"]["code"],
+            "finance_unavailable"
+        );
+    }
+    assert_eq!(fixture.calls(), 6);
+    assert_eq!(fixture.finance.circuit_state(), "closed");
+
+    let observed = send(fixture.window_request(OBSERVATIONS_PATH)).await;
+    assert_eq!(observed.status(), StatusCode::OK);
+    assert_eq!(
+        observed.json::<Value>().await.unwrap(),
+        fixture.replay.snapshot()["snapshot"]
+    );
+    assert_eq!(fixture.calls(), 7);
+
+    let mut request = format!(
+        "ws://web.example.test{}",
+        crate::market_stream::MARKET_STREAM
+    )
+    .into_client_request()
+    .unwrap();
+    request.headers_mut().extend(fixture.bearer_auth());
+    let (_socket, response) = fixture.ws_handshake(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+}
+
+#[tokio::test]
 async fn router_enforces_stream_authorization_before_parsing_queries() {
     let directory = tempfile::tempdir_in("/tmp").unwrap();
     let (state, bearer) = test_state(directory.path(), Duration::from_secs(60), None);
@@ -880,6 +1003,98 @@ fn f16_wire_gates_observation_access_and_preserves_exact_values_in_its_envelope(
             super::wire::check_snapshot(&replay.snapshot().to_string(), &query).unwrap_err();
         assert_eq!(error.into_response().status(), status);
     }
+}
+
+fn check_replay_frame(frame: &Value) -> Result<bool, super::OptionReadError> {
+    let json = frame.to_string();
+    let envelope = super::wire::Envelope::parse(&json).unwrap();
+    super::wire::check(envelope.event, envelope.id, envelope.data.get(), CONTRACT)
+}
+
+#[test]
+fn f16_wire_rejects_missing_and_wrongly_typed_required_fields() {
+    let replay = Replay::new(Mode::Live);
+    let query = super::SnapshotQuery {
+        con_id: CONTRACT,
+        start: START.parse().unwrap(),
+        end: END.parse().unwrap(),
+    };
+    for field in REQUIRED_FIELDS {
+        for wrong_type in [false, true] {
+            let frame = field.malformed(&replay.examples, wrong_type);
+            let error = check_replay_frame(&frame).unwrap_err();
+            assert_eq!(
+                error.into_response().status(),
+                StatusCode::BAD_GATEWAY,
+                "{field:?}, wrong_type={wrong_type}"
+            );
+            if !matches!(field, RequiredField::ResetReason) {
+                let mut snapshot = replay.snapshot();
+                snapshot["snapshot"]["items"][0] = frame["data"]["observation"].clone();
+                let error = super::wire::check_snapshot(&snapshot.to_string(), &query).unwrap_err();
+                assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
+            }
+        }
+    }
+}
+
+#[test]
+fn f16_wire_rejects_invalid_envelopes_and_recovery_snapshot_metadata() {
+    let replay = Replay::new(Mode::Live);
+    let status = &replay.examples["live"][0];
+    let mut null_id = replay.examples["disabled"][0].clone();
+    null_id["id"] = Value::Null;
+    for frame in [
+        Value::Null,
+        json!([status["event"], status["id"], status["data"]]),
+        null_id,
+    ] {
+        assert!(super::wire::Envelope::parse(&frame.to_string()).is_err());
+    }
+
+    let query = super::SnapshotQuery {
+        con_id: CONTRACT,
+        start: START.parse().unwrap(),
+        end: END.parse().unwrap(),
+    };
+    for field in ["next_offset", "as_of"] {
+        for replacement in [None, Some(json!(1))] {
+            let mut snapshot = replay.snapshot();
+            let page = snapshot["snapshot"].as_object_mut().unwrap();
+            if let Some(value) = replacement {
+                page.insert(field.into(), value);
+            } else {
+                assert!(page.remove(field).is_some());
+            }
+            let error = super::wire::check_snapshot(&snapshot.to_string(), &query).unwrap_err();
+            assert_eq!(
+                error.into_response().status(),
+                StatusCode::BAD_GATEWAY,
+                "{field}"
+            );
+        }
+    }
+}
+
+#[test]
+fn f16_wire_accepts_nullable_coverage_and_unknown_business_values() {
+    let replay = Replay::new(Mode::Live);
+    let mut reset = replay.examples["expired"][0].clone();
+    reset["data"]["reason"] = json!("synthetic_future_reason");
+    assert_eq!(check_replay_frame(&reset).ok(), Some(true));
+
+    let mut observation = replay.examples["replayed"][1].clone();
+    let data = &mut observation["data"]["observation"];
+    assert!(data["coverage"].is_null());
+    data["budget"]["phase"] = json!("synthetic_future_phase");
+    data["budget"]["fixture_extension"] = json!("future");
+    assert_eq!(check_replay_frame(&observation).ok(), Some(false));
+
+    let mut status = replay.examples["disabled"][0].clone();
+    status["data"]["state"] = json!("synthetic_future_state");
+    assert_eq!(check_replay_frame(&status).ok(), Some(false));
+    status["id"] = replay.examples["live"][0]["id"].clone();
+    assert_eq!(check_replay_frame(&status).ok(), Some(false));
 }
 
 #[test]

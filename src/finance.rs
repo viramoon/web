@@ -13,10 +13,12 @@ use finance_client::{
         Error,
         configuration::Configuration,
         default_api::{self, ReadyError},
+        option_flow_stream_api::{self, SnapshotError},
     },
     models,
 };
 use serde::Serialize;
+use serde_json::value::RawValue;
 use std::{
     future::Future,
     sync::Arc,
@@ -250,6 +252,25 @@ impl Finance {
         .await
     }
 
+    pub(crate) async fn option_flow_snapshot(
+        &self,
+        con_id: u32,
+        start: String,
+        end: String,
+    ) -> Result<Box<RawValue>, Fault> {
+        let snapshot = self
+            .read(|cfg| {
+                let (start, end) = (start.clone(), end.clone());
+                async move {
+                    classify_option_flow_snapshot(
+                        option_flow_stream_api::snapshot(&cfg, con_id, start, end).await,
+                    )
+                }
+            })
+            .await?;
+        snapshot.ok_or_else(Fault::unavailable)
+    }
+
     pub async fn write<T, E, F, Fut>(&self, call: F) -> Result<T, Fault>
     where
         F: Fn(Arc<Configuration>) -> Fut,
@@ -344,6 +365,22 @@ fn classify_readiness(
     }
 }
 
+fn classify_option_flow_snapshot<T>(
+    response: Result<T, Error<SnapshotError>>,
+) -> Result<Option<T>, Error<SnapshotError>> {
+    match response {
+        // A healthy finance instance may not have an F16 publisher configured.
+        Err(Error::ResponseError(r))
+            if r.status == StatusCode::SERVICE_UNAVAILABLE
+                && serde_json::from_str::<models::ErrorBody>(&r.content)
+                    .is_ok_and(|body| body.error.code == "market_read_source_unavailable") =>
+        {
+            Ok(None)
+        }
+        response => response.map(Some),
+    }
+}
+
 fn loopback_endpoint(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|url| {
         matches!(url.scheme(), "http" | "https")
@@ -365,6 +402,49 @@ mod tests {
     use axum::body::to_bytes;
     use finance_client::apis::ResponseContent;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn disabled_f16_snapshot_does_not_retry_or_trip_the_finance_circuit() {
+        let mut config = crate::config::Settings::load(std::path::Path::new("config"), |_| None)
+            .unwrap()
+            .finance;
+        config.circuit_failure_threshold = 2;
+        config.max_retries = 1;
+        config.backoff_ms = 1;
+        let finance = Finance::new(&config).unwrap();
+        let attempts = std::cell::Cell::new(0);
+        let snapshot_failure = |code| {
+            attempts.set(attempts.get() + 1);
+            std::future::ready(classify_option_flow_snapshot::<()>(Err(
+                Error::ResponseError(ResponseContent {
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    content: json!({"error": {"code": code, "message": "Synthetic failure"}})
+                        .to_string(),
+                    entity: None,
+                }),
+            )))
+        };
+
+        for _ in 0..3 {
+            let result = finance
+                .read(|_| snapshot_failure("market_read_source_unavailable"))
+                .await;
+            assert!(matches!(result, Ok(None)));
+        }
+        assert_eq!(attempts.get(), 3);
+        assert_eq!(finance.circuit_state(), "closed");
+
+        for _ in 0..2 {
+            let result = finance
+                .read(|_| snapshot_failure("service_unavailable"))
+                .await;
+            assert!(
+                matches!(result, Err(fault) if fault.status == StatusCode::SERVICE_UNAVAILABLE)
+            );
+        }
+        assert_eq!(attempts.get(), 7);
+        assert_eq!(finance.circuit_state(), "open");
+    }
 
     #[tokio::test]
     async fn loopback_finance_client_ignores_environment_proxy() {

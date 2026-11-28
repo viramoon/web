@@ -302,9 +302,7 @@ async fn snapshot(
     }
     let raw: Box<RawValue> = state
         .finance
-        .read(|cfg| async move {
-            upstream::snapshot(&cfg, con_id, timestamp(query.start), timestamp(query.end)).await
-        })
+        .option_flow_snapshot(con_id, timestamp(query.start), timestamp(query.end))
         .await
         .map_err(IntoResponse::into_response)?;
     state
